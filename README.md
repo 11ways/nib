@@ -76,11 +76,14 @@ REM
 | `PUT <N:` / `PUT >N:` | Insert the `+` rows before / after line `N`. |
 | `PUT >$:` | Append at the end of the file; needs no line anchor, so it also applies under a stale tag (with a warning). |
 | `CUT N.=M` | Delete lines `N..M`. |
+| `PUT N*:` / `CUT N*` | Replace / delete the block that starts at line `N`. |
+| `PUT >N*:` | Insert the `+` rows after the block that starts at line `N`. |
 | `REM` | Delete the file; must be the only operation in its section, and needs a current tag. |
 | `MV DEST` | After the section's edits, write the file to `DEST` (missing parents are created) and delete the source. Refuses an existing destination. |
 | `*** Add File: PATH` | Create a file from the `+` rows that follow; refuses an existing path. |
 
 - Line numbers refer to the tagged output and are never shifted by earlier hunks. Hunks are sorted by position and must not overlap. At a shared gap, `PUT >N:` content lands before `PUT <N+1:` content.
+- Blocks: `N` in a block hunk is the block's first line: a leading comment or decorator run, or the opener itself. nib resolves the end by indentation, like its outline: the opener's deeper body, branch lines at the opener's depth that continue it (`} else {`, a lone `{`, `):`, `else:`, `except:`), and a closing line at that depth (`}`, `)`, `]`, `end`). Python-style blocks end at their last deeper line. A line that opens no multi-line block is refused, and the resolved range then follows the same seen-line, overlap and stale-tag rules as `PUT N.=M:`. oh-my-pi resolves blocks with tree-sitter instead.
 - Sections repeating a path with the same tag are merged; a different tag for the same path is rejected. Paths may be quoted. Blank lines between hunks are ignored. A Codex-style `*** Begin Patch`/`*** End Patch` envelope is accepted but not needed (the tool description no longer shows it, since it only costs tokens).
 - Body rows are final content: `+` followed by the exact line. Forms borrowed from other edit languages (`-` rows, `@@` headers, `*** Update File:`, `N:` rows, `PUT N-M:`, `PUT N:`) are rejected with a hint naming the correct form.
 - All sections are parsed, read and checked before anything is written; files are then written one at a time, each atomically, so a write failure after the first file reports which files already changed.
@@ -93,7 +96,7 @@ The server keeps an in-memory snapshot store for its process (one per client con
 
 - **Seen lines.** An edit anchored on lines that version never showed in full (outside a read range, a truncated line, rows elided from an edit response) is rejected with the actual content of up to 40 such lines, which are then marked seen, so an unchanged retry succeeds. After an edit, only lines that kept both number and content stay editable, plus the rows shown in the response. A replacement on a moved line is still accepted when the new content carries that line's current text (at least 8 characters, unique in the file), a port of oh-my-pi's shifted-anchor rescue. A file with no snapshot (for example after a restart) is not restricted.
 - **Stale tags.** When the file no longer matches the tag, the edit is rebased only if every anchored line maps to an unchanged current line through one uniform offset with a neighbor that moved with it; rebased edits carry a warning. Otherwise the edit is rejected with the current tag and the current content around the requested lines. Tags never issued for the file are rejected, naming the file they were issued for. A 4-hex tag can collide: if a retained version with that tag has different text than the current file, the file is treated as changed.
-- **Not ported from oh-my-pi:** tree-sitter block operations (`PUT N*:`), cut/paste registers, the syntax-tree check on rebases, the repeated no-op guard, and tree-sitter read summaries (nib's outline is indentation-based instead).
+- **Not ported from oh-my-pi:** cut/paste registers, the syntax-tree check on rebases, the repeated no-op guard, and tree-sitter read summaries (nib's outline is indentation-based instead).
 
 ### Writes outside the workspace
 

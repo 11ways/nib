@@ -4,8 +4,8 @@ import { diffArrays } from "diff"
 export type View = { key: string; lines: string[]; tag: string }
 /** A retained version; `seen` is undefined when edits may anchor anywhere. */
 export type Version = View & { seen?: Set<number> }
-/** One edit in 1-based line coordinates; a `tail` edge appends after whatever the last line is when applied. */
-export type LineEdit = { start: number; end: number; operation: "replace" | "before" | "after"; content: string[]; edge?: "tail" }
+/** One edit in 1-based line coordinates; a `tail` edge appends after whatever the last line is when applied. A `block` edit names only the block's first line until the engine resolves its end. */
+export type LineEdit = { start: number; end: number; operation: "replace" | "before" | "after"; content: string[]; edge?: "tail"; block?: true }
 
 const MAX_PATHS = 256
 const MAX_VERSIONS = 4

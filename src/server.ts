@@ -13,10 +13,13 @@ export const EDIT_DESCRIPTION = `Apply a hashline patch to one or more files. Nu
 
 [PATH#TAG]
 PUT N.=M:   replace lines N..M (N.=N for one) with the + rows below
+PUT N*:     replace the whole block starting at N (doc comment, decorators, body, closing line)
 PUT <N:     insert + rows before line N
 PUT >N:     insert + rows after line N
+PUT >N*:    insert + rows after the block starting at N
 PUT >$:     append + rows at end of file
 CUT N.=M    delete lines N..M
+CUT N*      delete the block starting at N
 REM         delete the file (only op in its section)
 MV DEST     move the file, after the section's edits
 *** Add File: PATH
@@ -25,6 +28,7 @@ MV DEST     move the file, after the section's edits
 Rules:
 - Copy [PATH#TAG] exactly; one section per file. Body rows are + then the exact line, indent included; a lone + is a blank line. Never write - rows, context rows or LINE: prefixes.
 - Every number in a section refers to that same output, never shifted by earlier hunks. Hunks must not overlap. Keep ranges tight; split distant changes into separate hunks.
+- For a whole function, class or statement block use N* at its first line instead of counting to its closing line.
 - Only anchor lines that output showed in full (grep context rows count). Otherwise the edit is rejected with their content and an unchanged retry succeeds.
 - The response has a new [PATH#TAG] and numbered rows around each change: use them for follow-ups. A stale tag is rebased when provably safe (with a warning), otherwise rejected with current content.
 - All files are validated before any is written; each is written atomically.

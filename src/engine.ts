@@ -434,11 +434,16 @@ async function stageEdit(ctx: Context, store: SnapshotStore, handle: Handle<Edit
     if (!matches) throw mismatchError(store, ctx.session, target, live, request.tag, tagged.length > 0, [])
     return { kind: "remove", handle, current }
   }
-  const anchors = request.edits.flatMap(anchorLines)
+  const basis = matches ? live.lines : tagged[0]?.lines
+  const requested = basis ? resolveBlocks(request.edits, basis) : request.edits
+  try { validateEdits(requested) } catch (error) {
+    throw new Error(`[${request.filePath}#${request.tag}]: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const anchors = requested.flatMap(anchorLines)
   const warnings: string[] = []
   let edits: LineEdit[]
   if (matches) {
-    edits = resolveEdges(request.edits, live.lines.length)
+    edits = resolveEdges(requested, live.lines.length)
     const end = Math.max(0, ...anchors)
     if (end > live.lines.length) throw new Error(`Line ${end} does not exist in ${target.display} (file has ${live.lines.length} lines)`)
     const prior = versions.find((version) => version.key === live.key)
@@ -451,8 +456,8 @@ async function stageEdit(ctx: Context, store: SnapshotStore, handle: Handle<Edit
   } else {
     // Like oh-my-pi, edits without line anchors only depend on where the file ends, so any tag drift is tolerable.
     const remapped = !anchors.length && !request.move
-      ? { offset: 0, edits: resolveEdges(request.edits, live.lines.length) }
-      : tagged.length && anchors.length ? remapEdits(tagged[0]!, live.lines, request.edits) : undefined
+      ? { offset: 0, edits: resolveEdges(requested, live.lines.length) }
+      : tagged.length && anchors.length ? remapEdits(tagged[0]!, live.lines, requested) : undefined
     if (!remapped) throw mismatchError(store, ctx.session, target, live, request.tag, tagged.length > 0, anchors)
     edits = remapped.edits
     warnings.push(!anchors.length ? TAIL_DRIFT : remapped.offset !== 0 ? RECOVERY_REMAPPED : tagged[0] === versions[0] ? RECOVERY_EXTERNAL : RECOVERY_CHAIN)
@@ -655,6 +660,63 @@ function insideStrings(lines: string[]) {
       else if (open === match[0]) open = undefined
     }
     return inside
+  })
+}
+
+const DECORATOR = /^\s*(@|#\[)/
+const BLOCK_CLOSER = /^([)\]}]|end\b)/
+// A line at the opener's depth that still belongs to it: a lone or trailing opener, or the next branch of the statement.
+const BLOCK_CONTINUATION = /^([)\]}]|[{([]\s*$|(else|elif|except|finally|catch)\b)/
+
+/**
+ * The lines of the block that starts at `line`, by indentation like `outline`: leading comments and decorators, the opener,
+ * its deeper body, and a closing line at the opener's depth.
+ * @throws Error when `line` does not start a multi-line block
+ */
+function blockRange(lines: string[], line: number) {
+  if (line > lines.length) throw new Error(`Line ${line} does not exist (file has ${lines.length} lines)`)
+  const indent = (content: string) => content.length - content.trimStart().length
+  const quoted = insideStrings(lines)
+  const code = (index: number) => lines[index]!.trim() !== "" && !quoted[index] && !COMMENT.test(lines[index]!)
+  const refuse = () => new Error(`Line ${line} does not start a multi-line block; use PUT N.=M: or CUT N.=M instead`)
+  let opener = line - 1
+  while (opener < lines.length && lines[opener]!.trim() !== "" && !code(opener)) opener++
+  while (opener < lines.length && DECORATOR.test(lines[opener]!)) opener++
+  if (opener >= lines.length || !code(opener) || indent(lines[opener]!) !== indent(lines[line - 1]!)) throw refuse()
+  const depth = indent(lines[opener]!)
+  const nextCode = (from: number) => { for (let index = from + 1; index < lines.length; index++) if (code(index)) return index }
+  let last = opener
+  let body = false
+  for (let index = opener + 1; index < lines.length; index++) {
+    const content = lines[index]!
+    if (!content.trim()) continue
+    // A deeper comment belongs to the body only after deeper code, so a following doc comment never counts as one.
+    if (quoted[index] || indent(content) > depth && (body || code(index))) {
+      body = true
+      last = index
+      continue
+    }
+    if (!code(index)) continue
+    const trimmed = content.trimStart()
+    const next = nextCode(index)
+    if (indent(content) === depth && BLOCK_CONTINUATION.test(trimmed) && next !== undefined && indent(lines[next]!) > depth) {
+      last = index
+      continue
+    }
+    if (indent(content) === depth && BLOCK_CLOSER.test(trimmed)) last = index
+    break
+  }
+  if (!body) throw refuse()
+  return last + 1
+}
+
+/** Gives block edits their resolved end: a block replace or cut spans the whole block, a block insert goes after it. */
+function resolveBlocks(edits: LineEdit[], lines: string[]) {
+  return edits.map((edit) => {
+    if (!edit.block) return edit
+    const end = blockRange(lines, edit.start)
+    const { block, ...rest } = edit
+    return edit.operation === "after" ? { ...rest, start: end, end } : { ...rest, end }
   })
 }
 
@@ -943,9 +1005,6 @@ export class Engine {
       if (section.kind === "create") {
         text(Buffer.from(section.content))
         return { kind: "create", filePath: section.path, content: section.content }
-      }
-      try { validateEdits(section.edits) } catch (error) {
-        throw new Error(`[${section.path}#${section.tag}]: ${error instanceof Error ? error.message : String(error)}`)
       }
       return { kind: "edit", filePath: section.path, tag: section.tag, edits: section.edits, remove: section.remove, move: section.move } satisfies EditRequest & Pick<EditSection, "remove" | "move">
     })

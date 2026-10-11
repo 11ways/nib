@@ -23,6 +23,15 @@ async function fixture(files: Record<string, string>) {
 }
 
 describe("parsePatch", () => {
+  test("block hunks name only the block's first line", () => {
+    const [section] = parsePatch("[a.ts#3C4D]\nPUT >2*:\n+x\nPUT 5*:\n+y\nCUT 9*")
+    expect(section).toMatchObject({ kind: "edit", edits: [
+      { start: 2, end: 2, operation: "after", content: ["x"], block: true },
+      { start: 5, end: 5, operation: "replace", content: ["y"], block: true },
+      { start: 9, end: 9, operation: "replace", content: [], block: true },
+    ] })
+  })
+
   test("parses sections, sorts hunks by original position and builds created file content", () => {
     const sections = parsePatch([
       "*** Begin Patch",

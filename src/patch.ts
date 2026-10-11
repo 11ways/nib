@@ -10,6 +10,8 @@ const RANGE_PUT = /^PUT ([1-9][0-9]*)\.=([1-9][0-9]*):$/
 const GAP_PUT = /^PUT ([<>])([1-9][0-9]*):$/
 const TAIL_PUT = /^PUT >\$:$/
 const CUT = /^CUT ([1-9][0-9]*)\.=([1-9][0-9]*)$/
+const BLOCK_PUT = /^PUT (>?)([1-9][0-9]*)\*:$/
+const BLOCK_CUT = /^CUT ([1-9][0-9]*)\*$/
 const MV = /^MV (.+)$/
 // Forms models borrow from other edit languages; named so the error can say what to write instead.
 const CONTAMINATION: [RegExp, string][] = [
@@ -90,13 +92,18 @@ export function parsePatch(input: string): PatchSection[] {
     const range = RANGE_PUT.exec(line)
     const gap = GAP_PUT.exec(line)
     const cut = CUT.exec(line)
+    const block = BLOCK_PUT.exec(line)
+    const blockCut = BLOCK_CUT.exec(line)
     const move = MV.exec(line)
     let edit: Omit<LineEdit, "content">
     if (range) edit = { start: Number(range[1]), end: Number(range[2]), operation: "replace" }
     else if (gap) edit = { start: Number(gap[2]), end: Number(gap[2]), operation: gap[1] === "<" ? "before" : "after" }
     else if (TAIL_PUT.test(line)) edit = { start: Number.MAX_SAFE_INTEGER, end: Number.MAX_SAFE_INTEGER, operation: "after", edge: "tail" }
-    else if (cut) {
-      section.edits.push({ start: Number(cut[1]), end: Number(cut[2]), operation: "replace", content: [] })
+    else if (block) edit = { start: Number(block[2]), end: Number(block[2]), operation: block[1] ? "after" : "replace", block: true }
+    else if (cut || blockCut) {
+      section.edits.push(cut
+        ? { start: Number(cut[1]), end: Number(cut[2]), operation: "replace", content: [] }
+        : { start: Number(blockCut![1]), end: Number(blockCut![1]), operation: "replace", content: [], block: true })
       continue
     } else if (line.trim() === "REM") {
       if (section.edits.length) fail(at, "REM deletes the file and cannot be combined with PUT or CUT")
@@ -107,7 +114,7 @@ export function parsePatch(input: string): PatchSection[] {
       continue
     } else {
       const hint = CONTAMINATION.find(([pattern]) => pattern.test(line))?.[1]
-      return fail(at, hint ?? "expected PUT N.=M:, PUT <N:, PUT >N:, PUT >$:, CUT N.=M, REM, MV DEST, or a new section header")
+      return fail(at, hint ?? "expected PUT N.=M:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N*, REM, MV DEST, or a new section header")
     }
     const content = body()
     if (!content.length) fail(at, "PUT needs at least one + row (use CUT to delete lines)")

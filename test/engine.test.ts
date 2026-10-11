@@ -716,3 +716,94 @@ describe("snapshots", () => {
     expect(store.origins("s", fileTag("three"), "b")).toEqual(["a"])
   })
 })
+
+describe("block edits", () => {
+  const java = [
+    "class A {",
+    "    int a() {",
+    "        return 1;",
+    "    }",
+    "",
+    "    /**",
+    "     * Doc.",
+    "     */",
+    "    @Override",
+    "    public int b(int x,",
+    "                 int y) {",
+    "        if (x > y) {",
+    "            return x;",
+    "        } else {",
+    "            return y;",
+    "        }",
+    "    }",
+    "",
+    "    int c() {",
+    "        return 3;",
+    "    }",
+    "}",
+    "",
+  ].join("\n")
+
+  test("a block replace, cut or insert resolves the block's end, closing line included", async () => {
+    const f = await fixture(java)
+    const { tag } = await f.read()
+    const result = await f.patch(`[file.txt#${tag}]\nPUT >2*:\n+\n+    int a2() { return 2; }\nPUT 6*:\n+    int b() { return 0; }\nCUT 19*`)
+    expect(result.text).not.toContain("rejected")
+    expect(await readFile(f.filePath, "utf8")).toBe([
+      "class A {",
+      "    int a() {",
+      "        return 1;",
+      "    }",
+      "",
+      "    int a2() { return 2; }",
+      "",
+      "    int b() { return 0; }",
+      "",
+      "}",
+      "",
+    ].join("\n"))
+  })
+
+  test("a statement block keeps its else branch; a python block ends before the next sibling", async () => {
+    const f = await fixture(java)
+    const { tag } = await f.read()
+    await f.patch(`[file.txt#${tag}]\nPUT 12*:\n+        return Math.max(x, y);`)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(9, 14)).toEqual([
+      "    public int b(int x,",
+      "                 int y) {",
+      "        return Math.max(x, y);",
+      "    }",
+      "",
+    ])
+    const py = await fixture("@cache\ndef f(a):\n    if a:\n        return 1\n    return 2\n\n# helpers\ndef g():\n    pass\n")
+    const read = await py.read()
+    await py.patch(`[file.txt#${read.tag}]\nPUT 1*:\n+def f(a):\n+    return 3`)
+    expect(await readFile(py.filePath, "utf8")).toBe("def f(a):\n    return 3\n\n# helpers\ndef g():\n    pass\n")
+  })
+
+  test("lines that start no multi-line block are refused, and a block overlapping another hunk is rejected", async () => {
+    const f = await fixture(java)
+    const { tag } = await f.read()
+    await expect(f.patch(`[file.txt#${tag}]\nPUT 3*:\n+x`)).rejects.toThrow("Line 3 does not start a multi-line block")
+    await expect(f.patch(`[file.txt#${tag}]\nCUT 4*`)).rejects.toThrow("Line 4 does not start a multi-line block")
+    await expect(f.patch(`[file.txt#${tag}]\nPUT 5*:\n+x`)).rejects.toThrow("Line 5 does not start a multi-line block")
+    await expect(f.patch(`[file.txt#${tag}]\nPUT 2*:\n+x\nPUT 3.=3:\n+y`)).rejects.toThrow("overlap")
+    expect(await readFile(f.filePath, "utf8")).toBe(java)
+  })
+
+  test("a block must have been seen in full, and a stale tag rebases the resolved block", async () => {
+    const f = await fixture(java)
+    const { tag } = await f.read(":19-19")
+    const unseen = await f.patch(`[file.txt#${tag}]\nCUT 19*`).catch((error: Error) => error.message)
+    expect(unseen).toContain("20:        return 3;")
+    await f.patch(`[file.txt#${tag}]\nCUT 19*`)
+    expect(await readFile(f.filePath, "utf8")).not.toContain("int c()")
+
+    const g = await fixture(java)
+    const stale = await g.read()
+    await writeFile(g.filePath, "// header\n" + java)
+    const result = await g.patch(`[file.txt#${stale.tag}]\nCUT 19*`)
+    expect(result.text).toContain("Recovered by remapping stale line numbers")
+    expect(await readFile(g.filePath, "utf8")).toBe("// header\n" + java.split("\n").filter((_, index) => index < 18 || index > 20).join("\n"))
+  })
+})
