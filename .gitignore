@@ -1,0 +1,4 @@
+node_modules/
+bench/results-*.json
+bun.lock
+bun.lockb
