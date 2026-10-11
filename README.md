@@ -27,7 +27,7 @@ bun typecheck
 2:export const name = "example";
 ```
 
-`TAG` is four uppercase hex digits: xxHash32 of the BOM-free text with trailing spaces, tabs and CRs stripped from each line, masked to 16 bits, identical to oh-my-pi's `file_hash`. Each `paths` entry may end in a selector: `path:A-B`, `path:A+COUNT`, `path:A` (from A on), `path:-N` (last N lines) or `path:A-B,C-D` (gaps print as `...`). An existing file whose name looks like a selector is read literally. An open selector such as `path:1-` returns up to 2000 lines. One call's 40 KiB output budget (kept near common MCP client output limits) is split fairly: each file asks for what it needs, small requests are served in full, and the largest share the rest equally, so a big file cannot starve the others. Cut output ends with `[... continue with path:N-]`, and partial selections end with `[N lines total]`.
+`TAG` is four uppercase hex digits: xxHash32 of the BOM-free text with trailing spaces, tabs and CRs stripped from each line, masked to 16 bits, identical to oh-my-pi's `file_hash`. Each `paths` entry may end in a selector: `path:A` (that one line), `path:A-B`, `path:A+COUNT`, `path:A-` (from A on), `path:-N` (last N lines) or `path:A-B,C-D` (gaps print as `...`). An existing file whose name looks like a selector is read literally. An open selector such as `path:1-` returns up to 2000 lines. One call's 40 KiB output budget (kept near common MCP client output limits) is split fairly: each file asks for what it needs, small requests are served in full, and the largest share the rest equally, so a big file cannot starve the others. Cut output ends with `[... continue with path:N-]`, and partial selections end with `[N lines total]`.
 
 #### Large-read safeguards
 
@@ -52,7 +52,7 @@ Headers show paths relative to the server's working directory when inside it, ab
  6:  const token = session.create(user)
 ```
 
-`*` marks matches; other rows are context (1 before and 3 after by default). Every fully shown row counts as seen, so an edit can anchor on it without a read. Pages hold 20 files (continue with `skip`), with 20 matches per file, or 200 when only one file matches. Matched lines over 512 characters are truncated and not anchorable. The search uses `rg --hidden --no-require-git` without `.git/`; `.gitignore` applies even outside a git repository, but, as in ripgrep, a `glob` include re-includes files ignored by name (never files inside ignored directories).
+`*` marks matches; other rows are context (1 before and 3 after by default). Every fully shown row counts as seen, so an edit can anchor on it without a read. Pages hold 20 files (continue with `skip`), with 20 matches per file, or 200 when only one file matches. Matched lines over 512 characters are truncated and not anchorable. The search uses `rg --hidden` without `.git/`. Inside a git repository it follows git's ignore rules, so a parent repository's `.gitignore` never hides a nested repository; outside one, `.gitignore` still applies (`--no-require-git`). As in ripgrep, a `glob` include re-includes files ignored by name (never files inside ignored directories).
 
 ### edit
 

@@ -52,7 +52,8 @@ describe("read", () => {
     const tag = fileTag("one\r\ntwo\r\nthree")
     expect((await f.read()).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n3:three`)
     expect((await f.read(":2-2")).text).toBe(`[file.txt#${tag}]\n2:two\n[3 lines total]`)
-    expect((await f.read(":2")).text).toBe(`[file.txt#${tag}]\n2:two\n3:three\n[3 lines total]`)
+    expect((await f.read(":2")).text).toBe(`[file.txt#${tag}]\n2:two\n[3 lines total]`)
+    expect((await f.read(":2-")).text).toBe(`[file.txt#${tag}]\n2:two\n3:three\n[3 lines total]`)
     expect((await f.read(":1+2")).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n[3 lines total]`)
     expect((await f.read(":-1")).text).toBe(`[file.txt#${tag}]\n3:three\n[3 lines total]`)
     expect((await f.read(":1,3")).text).toBe(`[file.txt#${tag}]\n1:one\n...\n3:three\n[3 lines total]`)
@@ -79,7 +80,11 @@ describe("read", () => {
     const first = await f.read(":1-")
     expect(first.anchors).toHaveLength(2000)
     expect(first.text).toEndWith("[2500 lines total; continue with file.txt:2001-]")
-    expect((await f.read(":2001")).anchors).toHaveLength(500)
+    expect((await f.read(":2001-")).anchors).toHaveLength(500)
+    // A bare line number reads that line only, however long the file: models write path:N the way grep prints a hit.
+    const single = await f.read(":2001")
+    expect(single.anchors).toEqual([2001])
+    expect(single.text).toEndWith("[2500 lines total]")
   })
 
   test("binary rejection, images attached, PDFs deferred to the built-in Read, size limit", async () => {
@@ -655,6 +660,22 @@ describe("grep", () => {
     await f.patch(`[file.txt#${tag}]\nPUT 5.=6:\n+five\n+six\nPUT >9:\n+after nine`)
     expect((await readFile(f.filePath, "utf8")).split("\n").slice(4, 10)).toEqual(["five", "six", "line 7", "line 8", "line 9", "after nine"])
     await expect(f.patch(`[file.txt#${fileTag(await readFile(f.filePath, "utf8"))}]\nPUT 1.=1:\n+x`)).rejects.toThrow("never displayed")
+  })
+
+  test("a parent repository's whitelist .gitignore does not hide a nested repository", async () => {
+    const f = await fixture()
+    await mkdir(path.join(f.directory, ".git"))
+    await writeFile(path.join(f.directory, ".gitignore"), "*\n!.gitignore\n")
+    await mkdir(path.join(f.directory, "sub/.git"), { recursive: true })
+    await mkdir(path.join(f.directory, "sub/src"))
+    await writeFile(path.join(f.directory, "sub/.gitignore"), "build/\n")
+    await writeFile(path.join(f.directory, "sub/src/A.java"), "needle\n")
+    await mkdir(path.join(f.directory, "sub/build"))
+    await writeFile(path.join(f.directory, "sub/build/B.java"), "needle\n")
+    const nested = await f.engine.grep(f.ctx, { pattern: "needle", paths: ["sub/src"] })
+    expect(nested.text).toStartWith("1 matches in 1 files")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["sub"] })).text).toContain("[sub/src/A.java#")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["sub"] })).text).not.toContain("build")
   })
 
   test("paths, globs, literal and case options; .gitignore is respected", async () => {

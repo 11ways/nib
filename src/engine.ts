@@ -586,7 +586,8 @@ async function splitSelector(entry: string, ctx: Context): Promise<{ file: strin
     const [, start, operator, value] = /^(\d+)(?:([-+])(\d*))?$/.exec(part)!
     if (operator === "+") return { start: Number(start), end: Number(start) + Number(value) - 1 }
     if (operator === "-") return { start: Number(start), end: value ? Number(value) : undefined }
-    return { start: Number(start), end: spec.includes(",") ? Number(start) : undefined }
+    // A bare number is that one line: models write path:N the way grep prints a hit, so reading onward needs N-.
+    return { start: Number(start), end: Number(start) }
   })
   for (const range of parsed) if (range.end !== undefined && range.end < range.start) throw new Error(`Range ${range.start}-${range.end} in ${entry} is reversed`)
   return { file: match[1]!, selection: { ranges: parsed } }
@@ -766,6 +767,14 @@ function outline(display: string, lines: string[]): { rows: OutlineRow[]; candid
   return { rows, candidates: candidates.length }
 }
 
+/** True when `location` lies in a git work tree (a `.git` directory or file in it or an ancestor). */
+async function insideGit(location: string) {
+  for (let directory = location; ; directory = path.dirname(directory)) {
+    if (await lstat(path.join(directory, ".git")).then(() => true, () => false)) return true
+    if (path.dirname(directory) === directory) return false
+  }
+}
+
 /** Splits `budget` across demands so small entries get everything and large ones share the rest equally. */
 function allocate(demands: number[], budget: number) {
   const shares = demands.map(() => 0)
@@ -908,15 +917,27 @@ export class Engine {
 
   async grep(ctx: Context, args: { pattern: string; paths?: string[]; glob?: string; ignoreCase?: boolean; literal?: boolean; before?: number; after?: number; skip?: number }): Promise<Result> {
     const roots = (args.paths?.length ? args.paths : ["."]).map((entry) => path.resolve(ctx.directory, expandHome(entry)))
-    const command = ["rg", "--json", "--no-config", "--no-require-git", "--hidden", "--glob", "!.git", "--max-columns", "0"]
+    const command = ["rg", "--json", "--no-config", "--hidden", "--glob", "!.git", "--max-columns", "0"]
     if (args.ignoreCase) command.push("--ignore-case")
     if (args.literal) command.push("--fixed-strings")
     if (args.pattern.includes("\n") || args.pattern.includes("\\n")) command.push("--multiline")
     if (args.glob) command.push("--glob", args.glob)
-    command.push("--regexp", args.pattern, "--", ...roots)
-    const child = Bun.spawn(command, { cwd: ctx.directory, stdout: "pipe", stderr: "pipe", signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(GREP_TIMEOUT)]) })
-    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-    if (exit === 2 && !stdout) throw new Error(`rg failed: ${stderr.trim()}`)
+    const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(GREP_TIMEOUT)])
+    const search = async (group: string[], flags: string[]) => {
+      const child = Bun.spawn([...command, ...flags, "--regexp", args.pattern, "--", ...group], { cwd: ctx.directory, stdout: "pipe", stderr: "pipe", signal })
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+      if (exit === 2 && !stdout) throw new Error(`rg failed: ${stderr.trim()}`)
+      return { stdout, stderr }
+    }
+    // Inside a repository ripgrep follows git, which stops a parent repository's .gitignore at a nested one;
+    // --no-require-git would let it hide that nested repository, so only roots outside git get it.
+    const tracked = await Promise.all(roots.map(insideGit))
+    const runs = await Promise.all([
+      roots.filter((_, index) => tracked[index]),
+      roots.filter((_, index) => !tracked[index]),
+    ].map((group, index) => group.length ? search(group, index ? ["--no-require-git"] : []) : undefined))
+    const stdout = runs.map((run) => run?.stdout ?? "").join("")
+    const stderr = runs.map((run) => run?.stderr ?? "").join("")
     const files = new Map<string, Set<number>>()
     for (const line of stdout.split("\n")) {
       if (!line.startsWith('{"type":"match"')) continue
