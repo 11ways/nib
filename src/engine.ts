@@ -15,6 +15,7 @@ export const LINE_LIMIT = 2000
 export const READ_LINES = 2000
 const PREVIEW_CONTEXT = 2
 const REVEAL_LINES = 40
+const TRUSTED_CREATE_LINES = 10
 const REVEAL_COLUMNS = 512
 const GREP_COLUMNS = 512
 const GREP_FILES = 20
@@ -552,8 +553,8 @@ async function commit(ctx: Context, store: SnapshotStore, staged: Staged[]) {
     if (item.kind === "noop") return `[${display}#${item.live.tag}]\nNo changes: the edit reproduces the current content; this tag is still current.`
     if (item.kind === "remove") return `Deleted ${display}`
     if (item.kind === "create") {
-      // The model authored every line, so like oh-my-pi the version is recorded without a seen-line restriction.
-      store.record(ctx.session, canonical, item.created)
+      // The model authored every line but never saw their numbers: a small file is trusted whole, a larger one must show the lines an edit anchors on.
+      store.record(ctx.session, canonical, item.created, item.created.lines.length < TRUSTED_CREATE_LINES ? item.created.lines.map((_, index) => index + 1) : [])
       return `${item.replace ? "Overwrote" : "Created"} [${display}#${item.created.tag}] (${item.created.lines.length} lines)`
     }
     // Like oh-my-pi, only lines that kept both number and content stay anchorable, plus the rows shown below.

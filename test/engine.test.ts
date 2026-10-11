@@ -738,6 +738,25 @@ describe("snapshots", () => {
   })
 })
 
+describe("created files", () => {
+  test("a small created file is editable at once; a larger one shows the anchored lines first; a full overwrite needs no lines", async () => {
+    const f = await fixture()
+    const small = await f.engine.write(f.ctx, { path: "small.txt", content: "a\nb\nc\n" })
+    const smallTag = /#([0-9A-F]{4})\]/.exec(small.text)![1]!
+    expect((await f.patch(`[small.txt#${smallTag}]\nPUT 2.=2:\n+B`)).text).toContain("2:B")
+    const content = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n"
+    const large = await f.engine.write(f.ctx, { path: "large.txt", content })
+    const largeTag = /#([0-9A-F]{4})\]/.exec(large.text)![1]!
+    const refused = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`).catch((error: Error) => error.message)
+    expect(refused).toContain("5:line 5")
+    expect(await readFile(path.join(f.directory, "large.txt"), "utf8")).toBe(content)
+    const retried = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`)
+    expect(retried.text).toContain("5:five")
+    const overwritten = await f.engine.write(f.ctx, { path: "large.txt", content: "x\n", tag: retried.tag })
+    expect(overwritten.text).toStartWith("Overwrote [large.txt#")
+  })
+})
+
 describe("block edits", () => {
   const java = [
     "class A {",
