@@ -2,10 +2,26 @@ import { diffArrays } from "diff"
 
 /** Text identity of one file version: LF-normalized BOM-free body, its line contents, and its tag. */
 export type View = { key: string; lines: string[]; tag: string }
-/** A retained version; `seen` is undefined when edits may anchor anywhere. */
-export type Version = View & { seen?: Set<number> }
-/** One edit in 1-based line coordinates; a `tail` edge appends after whatever the last line is when applied. A `block` edit names only the block's first line until the engine resolves its end. */
-export type LineEdit = { start: number; end: number; operation: "replace" | "before" | "after"; content: string[]; edge?: "tail"; block?: true }
+/** A retained version; `seen` is undefined when edits may anchor anywhere, `known` holds lines whose content the agent wrote or saw before they moved. */
+export type Version = View & { seen?: Set<number>; known?: Set<number> }
+/**
+ * One edit in 1-based line coordinates; a `tail` edge appends after whatever the last line is when applied. A `block` edit names only the block's first line until the engine resolves its end.
+ * `checks` are the ~ rows for the named first and last line, `confirmed` the lines they matched; `sub` is SUB's old text until the engine resolves it into a `quoted` replace,
+ * which is `opaque` when the agent never saw the whole line, so its result is not known content.
+ */
+export type LineEdit = {
+  start: number
+  end: number
+  operation: "replace" | "before" | "after"
+  content: string[]
+  edge?: "tail"
+  block?: true
+  checks?: string[]
+  confirmed?: number[]
+  sub?: string
+  quoted?: true
+  opaque?: true
+}
 
 const MAX_PATHS = 256
 const MAX_VERSIONS = 4
@@ -33,8 +49,8 @@ export class SnapshotStore {
 
   constructor(private readonly limits = { paths: MAX_PATHS, versions: MAX_VERSIONS, units: MAX_UNITS }) {}
 
-  /** Records a version as most recent and unions `seen` into its displayed lines. */
-  record(session: string, path: string, view: View, seen?: Iterable<number>): Version {
+  /** Records a version as most recent and unions `seen` and `known` into its line sets. */
+  record(session: string, path: string, view: View, seen?: Iterable<number>, known?: Iterable<number>): Version {
     const id = `${session}\0${path}`
     const history = this.#histories.get(id) ?? { versions: [], units: 0 }
     this.#histories.delete(id)
@@ -44,6 +60,10 @@ export class SnapshotStore {
     if (seen) {
       version.seen ??= new Set()
       for (const line of seen) version.seen.add(line)
+    }
+    if (known) {
+      version.known ??= new Set()
+      for (const line of known) version.known.add(line)
     }
     history.versions.unshift(version)
     history.versions.length = Math.min(history.versions.length, this.limits.versions)
@@ -77,9 +97,14 @@ export class SnapshotStore {
   }
 }
 
+/** The line diff from `previous` to `current`; undefined when it times out. */
+export function lineChanges(previous: string[], current: string[]) {
+  return diffArrays(previous, current, { timeout: DIFF_TIMEOUT })
+}
+
 /** Maps 1-based previous line numbers to current ones across unchanged runs; undefined when the diff times out. */
 export function lineMap(previous: string[], current: string[]) {
-  const changes = diffArrays(previous, current, { timeout: DIFF_TIMEOUT })
+  const changes = lineChanges(previous, current)
   if (!changes) return
   const map = new Map<number, number>()
   let before = 1
@@ -102,6 +127,30 @@ export function anchorLines(edit: LineEdit) {
   if (edit.edge) return []
   if (edit.operation !== "replace") return [edit.start]
   return Array.from({ length: edit.end - edit.start + 1 }, (_, index) => edit.start + index)
+}
+
+/**
+ * Anchor lines `version` does not let these edits use. A displayed line always counts; an insert may also rest on a line a ~ check confirmed,
+ * and a replace may span lines the agent knows when each end that was not displayed is confirmed. SUB edits quote what they replace.
+ */
+export function unverified(version: Version, edits: LineEdit[]) {
+  const seen = version.seen
+  if (!seen) return []
+  const lines = new Set<number>()
+  for (const edit of edits) {
+    if (edit.edge || edit.quoted) continue
+    const confirmed = new Set(edit.confirmed)
+    if (edit.operation !== "replace") {
+      if (!seen.has(edit.start) && !confirmed.has(edit.start)) lines.add(edit.start)
+      continue
+    }
+    for (let line = edit.start; line <= edit.end; line++) {
+      if (seen.has(line)) continue
+      const end = line === edit.start || line === edit.end
+      if (!version.known?.has(line) || (end && !confirmed.has(line))) lines.add(line)
+    }
+  }
+  return [...lines].sort((a, b) => a - b)
 }
 
 function duplicates(lines: string[]) {
@@ -144,11 +193,10 @@ export function resolveEdges(edits: LineEdit[], length: number) {
   return edits.map((edit) => edit.edge ? { ...edit, start: length, end: length } : edit)
 }
 
-/** Rebases edits authored against `previous` onto `current` when every anchor moved by one uniform offset. */
+/** Rebases edits authored against `previous` onto `current` when every anchor moved by one uniform offset; whether the anchors were displayed is checked by the caller. */
 export function remapEdits(previous: Version, current: string[], edits: LineEdit[]) {
   const anchors = edits.flatMap(anchorLines)
   if (!anchors.length) return { offset: 0, edits: resolveEdges(edits, current.length) }
-  if (previous.seen && anchors.some((line) => !previous.seen!.has(line))) return
   const map = lineMap(previous.lines, current)
   if (!map || !contextHolds(previous.lines, current, map, anchors)) return
   const offsets = new Set(anchors.map((line) => (map.get(line) ?? Number.NaN) - line))

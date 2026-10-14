@@ -76,6 +76,58 @@ describe("parsePatch", () => {
     ])
   })
 
+  test("parses SUB, ~ check rows and tagless append sections", () => {
+    const sections = parsePatch([
+      "[a.md#3c4d]",
+      "PUT 19.=22:",
+      "~what produced",
+      "~the end",
+      "+new",
+      "SUB 30: old \"text\" -> here",
+      "+new text",
+      "+second line",
+      "CUT 40.=40",
+      "~",
+      "PUT >5:",
+      "~## Do",
+      "+- item",
+      "[log.txt]",
+      "PUT >$:",
+      "+entry",
+    ].join("\n"))
+    expect(sections).toEqual([
+      { kind: "edit", path: "a.md", tag: "3C4D", line: 1, edits: [
+        { start: 5, end: 5, operation: "after", content: ["- item"], checks: ["## Do"] },
+        { start: 19, end: 22, operation: "replace", content: ["new"], checks: ["what produced", "the end"] },
+        { start: 30, end: 30, operation: "replace", content: ["new text", "second line"], sub: "old \"text\" -> here" },
+        { start: 40, end: 40, operation: "replace", content: [], checks: [""] },
+      ] },
+      { kind: "edit", path: "log.txt", tag: undefined, line: 14, edits: [
+        { start: Number.MAX_SAFE_INTEGER, end: Number.MAX_SAFE_INTEGER, operation: "after", content: ["entry"], edge: "tail" },
+      ] },
+    ])
+  })
+
+  test("SUB old text may hold a lone CR or a Unicode line separator, as whole lines quoted by grep replace do", () => {
+    const separator = String.fromCharCode(0x2028)
+    const [section] = parsePatch(`[a.txt#ABCD]\nSUB 2: one\rtwo${separator}three\n+fixed`)
+    expect(section).toMatchObject({ edits: [{ start: 2, end: 2, operation: "replace", content: ["fixed"], sub: `one\rtwo${separator}three` }] })
+  })
+
+  test("reports every malformed line at once, skipping the rows that belong to it", () => {
+    const message = (() => {
+      try {
+        parsePatch("[a.ts#ABCD]\nPUT 1-2:\n+x\nPUT 3.=3:\n+y\n[b.ts#ABCD]\n-old\n+new\nPUT 3:\n+z\nSUB 4: q")
+      } catch (error) { return (error as Error).message }
+    })()
+    expect(message!.split("\n")).toEqual([
+      "Patch line 2: ranges are written N.=M; got \"PUT 1-2:\"",
+      "Patch line 7: - rows are not accepted; PUT replaces the range with + rows, CUT deletes; got \"-old\"",
+      "Patch line 9: a single-line replace is written PUT N.=N:; got \"PUT 3:\"",
+      "Patch line 11: SUB needs + rows with the new text (a lone + deletes the old text); got \"SUB 4: q\"",
+    ])
+  })
+
   test.each([
     ["*** Begin Patch\nPUT 1.=1:\n+x\n*** End Patch", "Patch line 2: expected a [PATH#TAG] header"],
     ["*** Begin Patch\n[a.ts#ABCD]\nPUT 1.=1:\n*** End Patch", "Patch line 3: PUT needs at least one + row"],
@@ -85,11 +137,24 @@ describe("parsePatch", () => {
     ["[a.ts#ABCD]\n12:old", "LINE:TEXT rows are read output"],
     ["[a.ts#ABCD]\nPUT 3:\n+x", "a single-line replace is written PUT N.=N:"],
     ["[a.ts#ABCD]\nPUT 1..3:\n+x", "ranges are written N.=M"],
-    ["[a.ts#ABCD]\nREM\nCUT 1.=1", "nothing may follow REM or MV"],
-    ["[a.ts#ABCD]\nMV b.ts\n[a.ts#ABCD]\nCUT 1.=1", "a.ts already ends with REM or MV"],
+    ["[a.ts#ABCD]\nREM\nCUT 1.=1", "nothing may follow REM, MV or CP"],
+    ["[a.ts#ABCD]\nMV b.ts\n[a.ts#ABCD]\nCUT 1.=1", "a.ts already ends with REM, MV or CP"],
+    ["[a.ts#ABCD]\nCP b.ts\nCUT 1.=1", "nothing may follow REM, MV or CP"],
+    ["[a.ts]\nCP b.ts", "may only append with PUT >$:, not CP"],
     ["*** Begin Patch\n*** Add File: a.ts\n+x\nPUT 1.=1:\n+y\n*** End Patch", "Patch line 4: an Add File section takes only + rows"],
-    ["*** Begin Patch\n[a.ts#ABCD]\n*** End Patch", "Section [a.ts#ABCD] has no PUT, CUT, REM or MV"],
+    ["*** Begin Patch\n[a.ts#ABCD]\n*** End Patch", "Section [a.ts#ABCD] has no PUT, CUT, SUB, REM, MV or CP"],
     ["*** Begin Patch\n*** End Patch", "Patch contains no sections"],
+    ["[a.ts#ABCD]\nSUB 3:\n+x", "SUB N: is followed on the same line by the exact old text"],
+    ["[a.ts#ABCD]\nPUT 3.=3:\n~a\n~b\n+x", "this hunk takes at most 1 ~ check row"],
+    ["[a.ts#ABCD]\nCUT 3.=5\n~a\n~b\n~c", "this hunk takes at most 2 ~ check rows"],
+    ["[a.ts#ABCD]\nPUT >$:\n~a\n+x", "this hunk takes no ~ check rows"],
+    ["[a.ts#ABCD]\nSUB 2: a\n~a\n+x", "this hunk takes no ~ check rows"],
+    ["[a.ts#ABCD]\nPUT 3.=3:\n+x\n~a", "~ check rows go right after a PUT or CUT line"],
+    ["[a.ts#ABCD]\n12~old", "N~TEXT rows are row-map output"],
+    ["[a.ts]\nPUT 1.=1:\n+x", "a [PATH] section without a tag may only append with PUT >$:, not PUT"],
+    ["[a.ts]\nREM", "may only append with PUT >$:, not REM"],
+    ["[a.ts#ABC]\nPUT >$:\n+x", "a tag is 4 hex digits"],
+    ["[a.ts]\nPUT >$:\n+x\n[a.ts#ABCD]\nCUT 1.=1", "a.ts already has a section without a tag"],
   ])("rejects malformed patches: %j", (input, message) => {
     expect(() => parsePatch(input)).toThrow(message)
   })

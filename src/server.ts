@@ -5,32 +5,34 @@ import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { Engine, LINE_LIMIT, READ_LINES, TEXT_LIMIT, type Context, type Result } from "./engine"
 
-export const INSTRUCTIONS = `Hashline file tools; use them to read, search, edit and write text files, instead of the built-in Read, Grep, Edit and Write and instead of cat, head, sed, grep, find or heredocs in the shell (built-in Read stays for PDFs and notebooks).
+export const INSTRUCTIONS = `Hashline file tools; use them to list, read, search, edit and write text files, instead of the built-in Read, Grep, Glob, Edit and Write and instead of cat, head, sed, grep, find, ls, wc, cp or heredocs in the shell (built-in Read stays for PDFs and notebooks).
 read and grep print a [PATH#TAG] header (TAG: 4-hex snapshot of the whole file) and LINE:TEXT rows. edit addresses those line numbers, so never repeat old text.
-Save calls: read several files and ranges in one read; edit straight from grep rows; put every change, across files, into one edit call; after an edit, use the new tag and rows from its response instead of re-reading.`
+Save calls: read several files and ranges in one read; edit straight from grep rows; put every change, across files, into one edit call; after an edit or write, use the new tag and rows from its response instead of re-reading.`
 
-export const EDIT_DESCRIPTION = `Apply a hashline patch to one or more files. Numbers refer to the [PATH#TAG] output of your latest read, grep or edit of that file. Write the sections directly, with no envelope lines.
+export const EDIT_DESCRIPTION = `Apply a hashline patch to one or more files. Numbers refer to the [PATH#TAG] output of your latest read, grep, write or edit of that file.
 
 [PATH#TAG]
 PUT N.=M:   replace lines N..M (N.=N for one) with the + rows below
-PUT N*:     replace the whole block starting at N (doc comment, decorators, body, closing line)
+PUT N*:     replace the block starting at N (doc comment, decorators, body, closing line)
 PUT <N:     insert + rows before line N
 PUT >N:     insert + rows after line N
 PUT >N*:    insert + rows after the block starting at N
-PUT >$:     append + rows at end of file
+PUT >$:     append + rows at end of file ([PATH] with no #TAG allows only this)
 CUT N.=M    delete lines N..M
 CUT N*      delete the block starting at N
+SUB N: OLD  replace text OLD (once on line N) with the + rows; a lone + deletes it
 REM         delete the file (only op in its section)
 MV DEST     move the file, after the section's edits
+CP DEST     like MV, but the file itself stays as it was
 *** Add File: PATH
 +content    new file; missing parents are created
 
 Rules:
 - Copy [PATH#TAG] exactly; one section per file. Body rows are + then the exact line, indent included; a lone + is a blank line. Never write - rows, context rows or LINE: prefixes.
 - Every number in a section refers to that same output, never shifted by earlier hunks. Hunks must not overlap. Keep ranges tight; split distant changes into separate hunks.
-- For a whole function, class or statement block use N* at its first line instead of counting to its closing line.
-- Only anchor lines that output showed in full (grep context rows count). Otherwise the edit is rejected with their content and an unchanged retry succeeds.
-- The response has a new [PATH#TAG] and numbered rows around each change: use them for follow-ups. A stale tag is rebased when provably safe (with a warning), otherwise rejected with current content.
+- For a whole function, class or statement block use N* at its first line instead of counting to its end.
+- Anchor lines shown as N:TEXT (grep context too) or N~TEXT. A ~TEXT row under PUT or CUT checks that line N starts with TEXT (a second ~ checks line M); checked, inserts may use any line and replaces any line you wrote or saw.
+- The response has a new [PATH#TAG], rows around each change and N~ rows for moved lines: use them for follow-ups. A stale tag is rebased when provably safe (with a warning), otherwise rejected with current content.
 - All files are validated before any is written; each is written atomically.
 
 Example, for [src/a.ts#3C4D] showing 1:const a = 1 2:const b = 2 3:export { a }:
@@ -40,11 +42,13 @@ PUT 2.=2:
 PUT >3:
 +export { b }`
 
-const READ_DESCRIPTION = `Read text files as a [PATH#TAG] header plus LINE:TEXT rows, list directories, or view PNG/JPEG/GIF/WebP images. Pass every file you need in one call. Each entry may end in a line selector: path:A (that one line), path:A-B, path:A+COUNT, path:A- (from A on), path:-N (last N), or path:A-B,C-D. Without one: whole files up to 500 lines and 20 KiB; larger files return an outline (top-level declarations and class members with their line numbers, markdown headings) or, for flat data, the first 100 lines; lockfiles, minified files and files under node_modules/ or dist/ are skipped. Outline rows are editable; read the ranges you need, or path:1- for up to ${READ_LINES} lines. One call splits a 40 KiB output budget fairly across its files and ends with a continuation hint when cut. Lines over ${LINE_LIMIT} characters are truncated and cannot be edited until read alone as path:N with a larger maxLineLength.`
+const READ_DESCRIPTION = `Read text files as a [PATH#TAG] header plus LINE:TEXT rows, list directories, or view PNG/JPEG/GIF/WebP images. Pass every file you need in one call. Each entry may end in a line selector: path:A (that one line), path:A-B, path:A+COUNT, path:A- (from A on), path:-N (last N), or path:A-B,C-D. path#TAG, with a tag from an earlier read or edit, shows only what changed since: +N: added rows, -| removed ones, numbered as the file is now. Without one: whole files up to 500 lines and 20 KiB; larger files return an outline (top-level declarations and class members with their line numbers, markdown headings) or, for flat data, the first 100 lines; lockfiles, minified files and files under node_modules/ or dist/ are skipped. Outline rows are editable; read the ranges you need, or path:1- for up to ${READ_LINES} lines. One call splits a 40 KiB output budget fairly across its files and ends with a continuation hint when cut. Lines over maxLineLength (default ${LINE_LIMIT}) and lines with color codes show as bracketed rows that cannot be anchored; edit them with SUB. For logs and other files you only look at, plain: true drops line numbers and tags, strips color codes, shortens long lines with ..., collapses repeats (lines or blocks, numbers ignored; collapse: false keeps every line), and reads files of any size, even while they are being written. info: true gives one line of facts per file instead: tag, lines, size, tokens, longest line, line endings, color codes, minified, age.`
 
-const GREP_DESCRIPTION = `Search file contents with ripgrep (Rust regex, .gitignore respected, hidden files included). Results are grouped per file under [PATH#TAG] headers with *LINE:TEXT match rows and  LINE:TEXT context rows; they are valid edit anchors, so edit straight from them. 20 files per page (continue with skip), 20 matches per file (200 when one file matches).`
+const GREP_DESCRIPTION = `Search file contents with ripgrep (Rust regex, .gitignore respected, hidden files included). Results are grouped per file under [PATH#TAG] headers with *LINE:TEXT match rows and  LINE:TEXT context rows; they are valid edit anchors, so edit straight from them. 20 files per page (continue with skip), 20 matches per file (200 when one file matches). A path may carry a read selector (app.log:1100-1250, app.log:-500) to search only those lines. mode "files" lists the matching files and "count" their match counts, 200 per page, without rows. noIgnore also searches ignored files. Files over 2 MiB or still being written get numbered N|TEXT rows from ripgrep, which are not anchors. replace (ripgrep syntax: $1, \${name}) previews each matched line as it would become, in a >N| row under it, and ends with a token: edit with REAPPLY TOKEN applies exactly those changes; nothing is written before that.`
 
-const WRITE_DESCRIPTION = `Write a whole file. Creates it (and missing parent directories) when absent; overwriting an existing file requires the tag of its latest read or edit. Content is literal text. Prefer edit for partial changes.`
+const FIND_DESCRIPTION = `List files recursively, like find or fd: .gitignore respected, hidden files included, .git skipped. Each row gives the path with its line count (text files up to 2 MiB), size and age, like src/app.ts (120 lines, 3.4 KiB, 2h ago); images and binary files say so. glob narrows by name or path (*.ts, src/**/test_*.py, !*.min.js, or a list). minSize ("100k", "2M") and newer ("30m", "2h", "3d") filter; sort is path (default), size (largest first) or modified (newest first). 200 rows per page; continue with skip. noIgnore also lists ignored files.`
+
+const WRITE_DESCRIPTION = `Write a whole file. Creates it (and missing parent directories) when absent; overwriting an existing file requires the tag of its latest read or edit. Content is literal text. Prefer edit for partial changes. The response maps the new file with N~TEXT rows (line number and how the line starts); edit can anchor on them at once, and on other lines with a ~TEXT check.`
 
 const ALWAYS_LOAD = { "anthropic/alwaysLoad": true }
 
@@ -117,8 +121,11 @@ export function createServer(options: ServerOptions) {
   server.registerTool("read", {
     description: READ_DESCRIPTION,
     inputSchema: {
-      paths: z.array(z.string().min(1)).min(1).describe("Files or directories, absolute or relative to the project, each optionally with a :selector"),
-      maxLineLength: z.number().int().min(1).max(TEXT_LIMIT).optional().describe(`Default ${LINE_LIMIT}; larger values need a single path:N entry`),
+      paths: z.array(z.string().min(1)).min(1).describe("Files or directories, absolute or relative to the project, each optionally with a :selector, or path#TAG for what changed since that tag"),
+      maxLineLength: z.number().int().min(1).max(TEXT_LIMIT).optional().describe(`Default ${LINE_LIMIT}; larger values share the 40 KiB output budget, except one path:N entry, which may be up to 2 MiB`),
+      plain: z.boolean().optional().describe("For logs and other files you will not edit: no line numbers or tags, color codes stripped, long lines shortened, repeated lines collapsed; any file size"),
+      collapse: z.boolean().optional().describe("Plain reads only: false shows every line instead of collapsing repeats"),
+      info: z.boolean().optional().describe("One line of facts per file instead of its content; directories give their entry count"),
     },
     annotations: { readOnlyHint: true },
     _meta: ALWAYS_LOAD,
@@ -128,21 +135,40 @@ export function createServer(options: ServerOptions) {
     description: GREP_DESCRIPTION,
     inputSchema: {
       pattern: z.string().min(1).describe("Regex; with literal:true a plain string"),
-      paths: z.array(z.string().min(1)).optional().describe("Files or directories to search; default the project"),
-      glob: z.string().optional().describe("Include glob like *.ts or !*.test.ts"),
+      paths: z.array(z.string().min(1)).optional().describe("Files or directories to search, a file optionally with a read selector like log.txt:100-250; default the project"),
+      glob: z.union([z.string(), z.array(z.string())]).optional().describe("Include glob like *.ts or !*.test.ts, or a list of them"),
       ignoreCase: z.boolean().optional(),
       literal: z.boolean().optional(),
       before: z.number().int().min(0).max(20).optional().describe("Context lines before each match; default 1"),
       after: z.number().int().min(0).max(20).optional().describe("Context lines after each match; default 3"),
+      mode: z.enum(["matches", "files", "count"]).optional().describe("matches (default) prints rows; files lists matching files; count gives matches per file"),
+      noIgnore: z.boolean().optional().describe("Also search files that .gitignore and similar rules hide; .git is still skipped"),
+      maxLineLength: z.number().int().min(1).max(LINE_LIMIT).optional().describe("Rows longer than this are cut; default 512"),
       skip: z.number().int().min(0).optional().describe("Matching files to skip, for the next page"),
+      replace: z.string().optional().describe("Replacement for each match, with $1 or ${name} for groups; previews the result and returns a token for edit to apply it"),
     },
     annotations: { readOnlyHint: true },
     _meta: ALWAYS_LOAD,
   }, (args, extra) => run(extra.signal, (ctx) => engine.grep(ctx, args)))
 
+  server.registerTool("find", {
+    description: FIND_DESCRIPTION,
+    inputSchema: {
+      paths: z.array(z.string().min(1)).optional().describe("Directories or files to list; default the project"),
+      glob: z.union([z.string(), z.array(z.string())]).optional().describe("Include glob like *.ts or !*.test.ts, or a list of them"),
+      minSize: z.string().optional().describe("Only files at least this big, like 100k or 2M"),
+      newer: z.string().optional().describe("Only files modified within this long, like 30m, 2h or 3d"),
+      sort: z.enum(["path", "size", "modified"]).optional().describe("path (default), size (largest first) or modified (newest first)"),
+      noIgnore: z.boolean().optional().describe("Also list files that .gitignore and similar rules hide; .git is still skipped"),
+      skip: z.number().int().min(0).optional().describe("Files to skip, for the next page"),
+    },
+    annotations: { readOnlyHint: true },
+    _meta: ALWAYS_LOAD,
+  }, (args, extra) => run(extra.signal, (ctx) => engine.find(ctx, args)))
+
   server.registerTool("edit", {
     description: EDIT_DESCRIPTION,
-    inputSchema: { input: z.string().min(1).describe("The complete hashline patch") },
+    inputSchema: { input: z.string().min(1).describe("The complete hashline patch, or REAPPLY TOKEN from a refusal or a grep replace") },
     annotations: { destructiveHint: true },
     _meta: ALWAYS_LOAD,
   }, (args, extra) => run(extra.signal, (ctx) => engine.patch(ctx, args.input)))

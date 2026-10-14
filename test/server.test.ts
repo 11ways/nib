@@ -42,15 +42,15 @@ async function connect(directory: string, options: Options = {}) {
 const tagOf = (text: string) => /#([0-9A-F]{4})\]/.exec(text)![1]!
 
 describe("MCP server", () => {
-  test("lists four always-loaded tools within Claude Code's description limit", async () => {
+  test("lists five always-loaded tools within Claude Code's description limit", async () => {
     const { client } = await connect(await workspace())
     const { tools } = await client.listTools()
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "grep", "read", "write"])
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "read", "write"])
     for (const tool of tools) {
       expect(tool._meta).toEqual({ "anthropic/alwaysLoad": true })
       expect(tool.description!.length).toBeLessThanOrEqual(2048)
     }
-    expect(tools.find((tool) => tool.name === "read")!.annotations?.readOnlyHint).toBe(true)
+    for (const name of ["read", "grep", "find"]) expect(tools.find((tool) => tool.name === name)!.annotations?.readOnlyHint).toBe(true)
     expect(EDIT_DESCRIPTION.length).toBeLessThanOrEqual(2048)
     expect(EDIT_DESCRIPTION).not.toContain("*** Begin Patch")
     expect(EDIT_DESCRIPTION).not.toContain("*** End Patch")
@@ -73,6 +73,40 @@ describe("MCP server", () => {
     expect(stale.text).toContain("is stale")
     expect((await call("write", { path: "b.txt", content: "bee\n" })).text).toStartWith("Created [b.txt#")
     expect((await call("grep", { pattern: "bee" })).text).toContain("*1:bee")
+  })
+
+  test("new options travel through MCP: grep modes and reapply tokens", async () => {
+    const directory = await workspace()
+    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 30 }, (_, index) => `row ${index + 1}`).join("\n") + "\n")
+    const { call } = await connect(directory)
+    expect((await call("grep", { pattern: "row 1", mode: "count", glob: ["*.txt"] })).text).toBe("11 matches in 1 files\n\n11 a.txt")
+    expect((await call("grep", { pattern: "row", paths: ["a.txt:5-6"], before: 0, after: 0 })).text).toContain("*5:row 5\n*6:row 6")
+    expect((await call("read", { paths: ["a.txt:1-2"], plain: true })).text).toBe("[a.txt] lines 1-2 of 30, plain\nrow 1\nrow 2")
+    const read = await call("read", { paths: ["a.txt:1-2"] })
+    const refused = await call("edit", { input: `[a.txt#${tagOf(read.text)}]\nPUT 20.=20:\n+TWENTY` })
+    expect(refused.isError).toBe(true)
+    const applied = await call("edit", { input: `REAPPLY ${/REAPPLY ([a-z0-9]{6})$/.exec(refused.text)![1]}` })
+    expect(applied.isError).toBeFalsy()
+    expect(applied.text).toContain("20:TWENTY")
+  })
+
+  test("find, read info, read since, grep replace and CP travel through MCP", async () => {
+    const directory = await workspace()
+    await writeFile(path.join(directory, "a.txt"), "one\ntwo\nthree\n")
+    const { call } = await connect(directory)
+    expect((await call("find", { glob: "*.txt" })).text).toMatch(/^1 file\n\na\.txt \(3 lines, 14 bytes, \d+s ago\)$/)
+    const info = await call("read", { paths: ["a.txt"], info: true })
+    expect(info.text).toMatch(/^\[a\.txt#[0-9A-F]{4}\] 3 lines, 14 bytes, about 4 tokens; longest line 5 chars \(line 3\); LF; modified \d+s ago$/)
+    const preview = await call("grep", { pattern: "t(\\w+)", replace: "T$1" })
+    expect(preview.text).toContain("*2:two\n>2|Two\n*3:three\n>3|Three")
+    const applied = await call("edit", { input: `REAPPLY ${/REAPPLY ([a-z0-9]{6})$/.exec(preview.text)![1]}` })
+    expect(applied.isError).toBeFalsy()
+    expect(await readFile(path.join(directory, "a.txt"), "utf8")).toBe("one\nTwo\nThree\n")
+    const since = await call("read", { paths: [`a.txt#${tagOf(info.text)}`] })
+    expect(since.text).toBe(`[a.txt#${tagOf(applied.text)}] changed since #${tagOf(info.text)}: 2 lines added, 2 removed\n 1:one\n-|two\n-|three\n+2:Two\n+3:Three`)
+    const copied = await call("edit", { input: `[a.txt#${tagOf(applied.text)}]\nCP b.txt` })
+    expect(copied.text).toStartWith(`Copied a.txt to [b.txt#${tagOf(applied.text)}]`)
+    expect(await readFile(path.join(directory, "b.txt"), "utf8")).toBe("one\nTwo\nThree\n")
   })
 
   test("by default, writes outside the roots proceed without asking", async () => {
