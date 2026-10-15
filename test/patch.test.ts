@@ -122,21 +122,43 @@ describe("parsePatch", () => {
     })()
     expect(message!.split("\n")).toEqual([
       "Patch line 2: ranges are written N.=M; got \"PUT 1-2:\"",
-      "Patch line 7: - rows are not accepted; PUT replaces the range with + rows, CUT deletes; got \"-old\"",
-      "Patch line 9: a single-line replace is written PUT N.=N:; got \"PUT 3:\"",
+      "Patch line 7: - rows only go under a PUT N.=M: or CUT N.=M line; PUT replaces the range with + rows, CUT deletes; got \"-old\"",
       "Patch line 11: SUB needs + rows with the new text (a lone + deletes the old text); got \"SUB 4: q\"",
     ])
+  })
+
+  test("PUT N: and CUT N are one-line hunks, and - rows under PUT and CUT hunks are kept for the engine to check", () => {
+    const [section] = parsePatch("[a.ts#ABCD]\nPUT 3:\n~old\n-old three\n+new three\nPUT 5.=6:\n-five\n+FIVE\n-six\n+SIX\nCUT 8.=8\n-eight\nCUT 10\n~ten\nCUT 12\n-twelve")
+    expect(section).toMatchObject({ edits: [
+      { start: 3, end: 3, operation: "replace", content: ["new three"], checks: ["old"], old: ["old three"] },
+      { start: 5, end: 6, operation: "replace", content: ["FIVE", "SIX"], old: ["five", "six"] },
+      { start: 8, end: 8, operation: "replace", content: [], old: ["eight"] },
+      { start: 10, end: 10, operation: "replace", content: [], checks: ["ten"] },
+      { start: 12, end: 12, operation: "replace", content: [], old: ["twelve"] },
+    ] })
+  })
+
+  test("PUT N:=M:, a range with a colon for its dot, reads as PUT N.=M: and keeps the header as written for a note", () => {
+    const [section] = parsePatch("[a.ts#ABCD]\nPUT 3:=5:\n+x")
+    expect(section).toMatchObject({ edits: [{ start: 3, end: 5, operation: "replace", content: ["x"], written: "PUT 3:=5:" }] })
   })
 
   test.each([
     ["*** Begin Patch\nPUT 1.=1:\n+x\n*** End Patch", "Patch line 2: expected a [PATH#TAG] header"],
     ["*** Begin Patch\n[a.ts#ABCD]\nPUT 1.=1:\n*** End Patch", "Patch line 3: PUT needs at least one + row"],
-    ["*** Begin Patch\n[a.ts#ABCD]\n-old\n+new\n*** End Patch", "Patch line 3: - rows are not accepted"],
+    ["*** Begin Patch\n[a.ts#ABCD]\n-old\n+new\n*** End Patch", "Patch line 3: - rows only go under a PUT N.=M: or CUT N.=M line"],
     ["[a.ts#ABCD]\n@@ -1,2 +1,2 @@", "unified-diff hunk headers are not hashline"],
     ["*** Update File: a.ts\n+x", "apply_patch file headers are not hashline"],
     ["[a.ts#ABCD]\n12:old", "LINE:TEXT rows are read output"],
-    ["[a.ts#ABCD]\nPUT 3:\n+x", "a single-line replace is written PUT N.=N:"],
+    ["[a.ts#ABCD]\nPUT >3:\n-old\n+x", "- rows only go under PUT N.=M:, PUT N:, CUT N.=M or CUT N"],
+    ["[a.ts#ABCD]\nSUB 3: a\n-a\n+b", "- rows only go under PUT N.=M:, PUT N:, CUT N.=M or CUT N"],
     ["[a.ts#ABCD]\nPUT 1..3:\n+x", "ranges are written N.=M"],
+    ["[a.ts#ABCD]\nPUT 1237:.1\n-old\n+new", "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT 1237:.1\""],
+    ["[a.ts#ABCD]\nPUT 1237:  return old\n+  return new", "a PUT line ends at its colon"],
+    ["[a.ts#ABCD]\nPUT 3.=4: old\n+x", "a PUT line ends at its colon"],
+    ["[a.ts#ABCD]\nPUT >3: x", "a PUT line ends at its colon"],
+    ["[a.ts#ABCD]\nPUT 3*: x", "a PUT line ends at its colon"],
+    ["[a.ts#ABCD]\nPUT >$: x", "a PUT line ends at its colon"],
     ["[a.ts#ABCD]\nREM\nCUT 1.=1", "nothing may follow REM, MV or CP"],
     ["[a.ts#ABCD]\nMV b.ts\n[a.ts#ABCD]\nCUT 1.=1", "a.ts already ends with REM, MV or CP"],
     ["[a.ts#ABCD]\nCP b.ts\nCUT 1.=1", "nothing may follow REM, MV or CP"],

@@ -9,9 +9,12 @@ const HEADER = /^\[(.+)#([0-9A-Fa-f]{4})\]$/
 const TAGLESS = /^\[(.+)\]$/
 const ADD = /^\*\*\* Add File: (.+)$/
 const RANGE_PUT = /^PUT ([1-9][0-9]*)\.=([1-9][0-9]*):$/
+const SINGLE_PUT = /^PUT ([1-9][0-9]*):$/
+// A range with a colon where the dot goes; it can mean nothing else, so it is read as PUT N.=M: with a note.
+const COLON_RANGE_PUT = /^PUT ([1-9][0-9]*):=([1-9][0-9]*):$/
 const GAP_PUT = /^PUT ([<>])([1-9][0-9]*):$/
 const TAIL_PUT = /^PUT >\$:$/
-const CUT = /^CUT ([1-9][0-9]*)\.=([1-9][0-9]*)$/
+const CUT = /^CUT ([1-9][0-9]*)(?:\.=([1-9][0-9]*))?$/
 const BLOCK_PUT = /^PUT (>?)([1-9][0-9]*)\*:$/
 const BLOCK_CUT = /^CUT ([1-9][0-9]*)\*$/
 // `[^]` rather than `.`, so old text holding a lone CR or a Unicode line separator still parses.
@@ -22,13 +25,13 @@ const CP = /^CP (.+)$/
 const CONTAMINATION: [RegExp, string][] = [
   [/^[-+ ]?@@/, "unified-diff hunk headers are not hashline; use PUT/CUT with line numbers"],
   [/^\*\*\* (Update|Delete) File:/, "apply_patch file headers are not hashline; use a [PATH#TAG] section (REM deletes)"],
-  [/^-/, "- rows are not accepted; PUT replaces the range with + rows, CUT deletes"],
+  [/^-/, "- rows only go under a PUT N.=M: or CUT N.=M line; PUT replaces the range with + rows, CUT deletes"],
   [/^\d+:/, "LINE:TEXT rows are read output; body rows are + followed by the new text"],
   [/^\d+~/, "N~TEXT rows are row-map output; anchor with PUT or CUT, and check a line with a ~TEXT row under that line"],
   [/^~/, "~ check rows go right after a PUT or CUT line, before its + rows"],
   [/^SUB [1-9][0-9]*:\s*$/, "SUB N: is followed on the same line by the exact old text"],
   [/^PUT ([1-9][0-9]*)(-|\.\.)([1-9][0-9]*):$/, "ranges are written N.=M"],
-  [/^PUT ([1-9][0-9]*):$/, "a single-line replace is written PUT N.=N:"],
+  [/^PUT ([1-9][0-9]*(\.=[1-9][0-9]*)?|[<>][1-9][0-9]*|>?[1-9][0-9]*\*|>\$):\s*\S/, "a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it"],
 ]
 
 // At a shared gap, "PUT >N:" content lands before "PUT <N+1:" content; a tail append always sorts last.
@@ -111,6 +114,8 @@ export function parsePatch(input: string): PatchSection[] {
       const section = current as EditSection
       if (section.remove || section.move || section.copy) fail(at, "nothing may follow REM, MV or CP in a section")
       const range = RANGE_PUT.exec(line)
+      const single = SINGLE_PUT.exec(line)
+      const colon = COLON_RANGE_PUT.exec(line)
       const gap = GAP_PUT.exec(line)
       const cut = CUT.exec(line)
       const block = BLOCK_PUT.exec(line)
@@ -132,21 +137,27 @@ export function parsePatch(input: string): PatchSection[] {
         continue
       }
       // `checks` is how many ~ rows the hunk accepts: its named first line, plus the last line of a multi-line range.
+      // `quotes` marks the hunks that accept diff-style - rows, which must then match the lines they replace.
       let edit: Omit<LineEdit, "content">
       let checks = 1
       let body = true
-      if (range) {
-        edit = { start: Number(range[1]), end: Number(range[2]), operation: "replace" }
+      let quotes = false
+      if (range || single || colon) {
+        edit = range ? { start: Number(range[1]), end: Number(range[2]), operation: "replace" }
+          : colon ? { start: Number(colon[1]), end: Number(colon[2]), operation: "replace", written: line }
+          : { start: Number(single![1]), end: Number(single![1]), operation: "replace" }
         checks = edit.start < edit.end ? 2 : 1
+        quotes = true
       } else if (gap) edit = { start: Number(gap[2]), end: Number(gap[2]), operation: gap[1] === "<" ? "before" : "after" }
       else if (TAIL_PUT.test(line)) {
         edit = { start: Number.MAX_SAFE_INTEGER, end: Number.MAX_SAFE_INTEGER, operation: "after", edge: "tail" }
         checks = 0
       } else if (block) edit = { start: Number(block[2]), end: Number(block[2]), operation: block[1] ? "after" : "replace", block: true }
       else if (cut) {
-        edit = { start: Number(cut[1]), end: Number(cut[2]), operation: "replace" }
+        edit = { start: Number(cut[1]), end: Number(cut[2] ?? cut[1]), operation: "replace" }
         checks = edit.start < edit.end ? 2 : 1
         body = false
+        quotes = true
       } else if (blockCut) {
         edit = { start: Number(blockCut[1]), end: Number(blockCut[1]), operation: "replace", block: true }
         body = false
@@ -155,18 +166,26 @@ export function parsePatch(input: string): PatchSection[] {
         checks = 0
       } else {
         const hint = CONTAMINATION.find(([pattern]) => pattern.test(line))?.[1]
-        return fail(at, hint ?? "expected PUT N.=M:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header")
+        return fail(at, hint ?? "expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header")
       }
       if (section.tag === undefined && !edit.edge) untagged(line.split(" ")[0]!)
       const found = rows("~")
       if (found.length > checks) fail(at, checks ? `this hunk takes at most ${checks} ~ check row${checks > 1 ? "s" : ""}` : "this hunk takes no ~ check rows")
-      const content = body ? rows("+") : []
+      // Diff-style - rows may mix with the + rows; a CUT takes only - rows.
+      const content: string[] = []
+      const old: string[] = []
+      while (index < last && (lines[index]!.startsWith("-") || (body && lines[index]!.startsWith("+")))) {
+        const row = lines[index++]!
+        if (row.startsWith("+")) content.push(row.slice(1))
+        else old.push(row.slice(1))
+      }
+      if (old.length && !quotes) fail(at, "- rows only go under PUT N.=M:, PUT N:, CUT N.=M or CUT N, where they must match the lines being replaced")
       if (body && !content.length) fail(at, sub ? "SUB needs + rows with the new text (a lone + deletes the old text)" : "PUT needs at least one + row (use CUT to delete lines)")
-      section.edits.push({ ...edit, content, ...found.length && { checks: found } })
+      section.edits.push({ ...edit, content, ...found.length && { checks: found }, ...old.length && { old } })
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error))
       if (current) failed.add(current)
-      while (index < last && /^[+~]/.test(lines[index]!)) index++
+      while (index < last && /^[-+~]/.test(lines[index]!)) index++
     }
   }
   for (const section of sections) {

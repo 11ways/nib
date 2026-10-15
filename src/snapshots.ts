@@ -7,7 +7,8 @@ export type Version = View & { seen?: Set<number>; known?: Set<number> }
 /**
  * One edit in 1-based line coordinates; a `tail` edge appends after whatever the last line is when applied. A `block` edit names only the block's first line until the engine resolves its end.
  * `checks` are the ~ rows for the named first and last line, `confirmed` the lines they matched; `sub` is SUB's old text until the engine resolves it into a `quoted` replace,
- * which is `opaque` when the agent never saw the whole line, so its result is not known content.
+ * which is `opaque` when the agent never saw the whole line, so its result is not known content. `old` holds diff-style - rows, which the engine checks against the replaced lines;
+ * `written` is a header as the agent wrote it, when the parser read another tool's form, such as PUT N:=M:, as nib's own.
  */
 export type LineEdit = {
   start: number
@@ -21,6 +22,8 @@ export type LineEdit = {
   sub?: string
   quoted?: true
   opaque?: true
+  old?: string[]
+  written?: string
 }
 
 const MAX_PATHS = 256

@@ -51,13 +51,15 @@ describe("read", () => {
   test("tagged header, relative display path, selectors and continuation hints", async () => {
     const f = await fixture("one\r\ntwo\r\nthree")
     const tag = fileTag("one\r\ntwo\r\nthree")
-    expect((await f.read()).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n3:three`)
+    // The file has no final newline, so every read that shows its last line says so.
+    const ending = "[no final newline; PUT >$: with a lone + row adds one]"
+    expect((await f.read()).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n3:three\n${ending}`)
     expect((await f.read(":2-2")).text).toBe(`[file.txt#${tag}]\n2:two\n[3 lines total]`)
     expect((await f.read(":2")).text).toBe(`[file.txt#${tag}]\n2:two\n[3 lines total]`)
-    expect((await f.read(":2-")).text).toBe(`[file.txt#${tag}]\n2:two\n3:three\n[3 lines total]`)
+    expect((await f.read(":2-")).text).toBe(`[file.txt#${tag}]\n2:two\n3:three\n${ending}\n[3 lines total]`)
     expect((await f.read(":1+2")).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n[3 lines total]`)
-    expect((await f.read(":-1")).text).toBe(`[file.txt#${tag}]\n3:three\n[3 lines total]`)
-    expect((await f.read(":1,3")).text).toBe(`[file.txt#${tag}]\n1:one\n...\n3:three\n[3 lines total]`)
+    expect((await f.read(":-1")).text).toBe(`[file.txt#${tag}]\n3:three\n${ending}\n[3 lines total]`)
+    expect((await f.read(":1,3")).text).toBe(`[file.txt#${tag}]\n1:one\n...\n3:three\n${ending}\n[3 lines total]`)
     await expect(f.read(":4")).rejects.toThrow("beyond the end")
     await expect(f.read(":3-1")).rejects.toThrow("reversed")
   })
@@ -205,6 +207,60 @@ describe("large reads", () => {
     expect(pythonRows).toEqual(["2:LIMIT = 3", "3:TEMPLATE = \"\"\"", "6:def run(", "609:class Thing:", "610:    def method(self):", "612:def extra0():"])
   })
 
+  test("outlines fold runs of one-line declarations, and quote marks in one-line strings, regex literals and comments hide nothing", async () => {
+    const f = await fixture()
+    const ts = [
+      'import { a } from "a"',
+      ...Array.from({ length: 40 }, (_, index) => `const LIMIT_${index} = ${index}`),
+      "const QUOTES = /\"\"\"|'''|`/g",
+      'const TICK = "`"',
+      "// a lone ` in a comment",
+      "export function first() {",
+      ...Array.from({ length: 600 }, (_, index) => `  const value${index} = ${index}`),
+      "}",
+      "const TEMPLATE = `",
+      "export function hidden() {",
+      "`",
+      "export class Store {",
+      "  size = 1",
+      "  limit = 2",
+      "  count = 3",
+      "  add(item: string) {",
+      "    return item",
+      "  }",
+      "}",
+      "export function last() {",
+      "  return TICK",
+      "}",
+    ]
+    await writeFile(path.join(f.directory, "big.ts"), ts.join("\n") + "\n")
+    const at = (text: string) => ts.indexOf(text) + 1
+    expect((await f.read("", { file: path.join(f.directory, "big.ts") })).text.split("\n").slice(1)).toEqual([
+      '1:import { a } from "a"',
+      "2:const LIMIT_0 = 0",
+      "[lines 3-43: 41 more one-line declarations]",
+      `${at("export function first() {")}:export function first() {`,
+      `${at("const TEMPLATE = `")}:const TEMPLATE = \``,
+      `${at("export class Store {")}:export class Store {`,
+      `${at("  size = 1")}:  size = 1`,
+      `[lines ${at("  limit = 2")}-${at("  count = 3")}: 2 more one-line declarations]`,
+      `${at("  add(item: string) {")}:  add(item: string) {`,
+      `${at("export function last() {")}:export function last() {`,
+    ])
+    // The cap counts rows after folding, so a class's fields no longer crowd out its methods.
+    const many = [
+      "export class Big {",
+      ...Array.from({ length: 200 }, (_, index) => `  field${index} = ${index}`),
+      ...Array.from({ length: 120 }, (_, index) => `  method${index}() {\n    const a = 1\n    const b = 2\n    const c = 3\n    return ${index}\n  }`),
+      "}",
+    ]
+    await writeFile(path.join(f.directory, "many.ts"), many.join("\n") + "\n")
+    const rows = (await f.read("", { file: path.join(f.directory, "many.ts") })).text.split("\n").slice(1)
+    expect(rows.slice(0, 4)).toEqual(["1:export class Big {", "2:  field0 = 0", "[lines 3-201: 199 more one-line declarations]", "202:  method0() {"])
+    expect(rows).toHaveLength(123)
+    expect(rows.at(-1)).toBe("916:  method119() {")
+  })
+
   test("small files and explicit ranges are never outlined", async () => {
     const f = await fixture(source(20))
     expect((await f.read()).anchors).toHaveLength(source(20).split("\n").length - 1)
@@ -309,10 +365,10 @@ describe("edit", () => {
   test("rejects overlap, reversed ranges and malformed hunks without writing", async () => {
     const f = await fixture()
     const r = await f.read()
-    for (const body of ["PUT 1.=2:\n+x\nPUT 2.=2:\n+y", "PUT 3.=1:\n+x", "PUT 1.=1:", "-one\n+ONE", "@@ -1 +1 @@", "PUT 1-2:\n+x", "PUT 1:\n+x", "1:one"]) {
+    for (const body of ["PUT 1.=2:\n+x\nPUT 2.=2:\n+y", "PUT 3.=1:\n+x", "PUT 1.=1:", "-one\n+ONE", "@@ -1 +1 @@", "PUT 1-2:\n+x", "1:one"]) {
       await expect(f.patch(`[file.txt#${r.tag}]\n${body}`)).rejects.toThrow()
     }
-    await expect(f.patch(`[file.txt#${r.tag}]\n-one`)).rejects.toThrow("- rows are not accepted")
+    await expect(f.patch(`[file.txt#${r.tag}]\n-one`)).rejects.toThrow("- rows only go under a PUT N.=M: or CUT N.=M line")
     await expect(f.patch(`[file.txt#${r.tag}]\nPUT 1-2:\n+x`)).rejects.toThrow("ranges are written N.=M")
     expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\n")
   })
@@ -322,6 +378,7 @@ describe("edit", () => {
       ["PUT 2.=2:\n+TWO\nPUT >2:\n+after", "one\nTWO\nafter\nthree\n"],
       ["PUT <2:\n+before\nPUT 2.=2:\n+TWO", "one\nbefore\nTWO\nthree\n"],
       ["CUT 2.=2\nPUT >2:\n+instead", "one\ninstead\nthree\n"],
+      ["CUT 2\nPUT >2:\n+instead", "one\ninstead\nthree\n"],
       ["PUT <2:\n+b\nPUT >2:\n+a", "one\nb\ntwo\na\nthree\n"],
       ["SUB 2: tw\n+TW\nPUT >2:\n+x", "one\nTWo\nx\nthree\n"],
       ["PUT >1:\n+x\nPUT <2:\n+y", "one\nx\ny\ntwo\nthree\n"],
@@ -366,7 +423,7 @@ describe("edit", () => {
     const shifted = await h.edit(t.tag, [{ start: 2, content: "TWO", operation: "replace" }])
     expect(await readFile(h.filePath, "utf8")).toBe("zero\none\nTWO\nthree\n")
     expect(shifted.text).toContain("Recovered by remapping stale line numbers")
-    expect(shifted.text).toStartWith(`[file.txt#${fileTag("zero\none\nTWO\nthree\n")}]\n1:zero\n2:one\n3:TWO\n4:three`)
+    expect(shifted.text).toStartWith(`[file.txt#${fileTag("zero\none\nTWO\nthree\n")}]\n2:one\n3:TWO\n4:three`)
     const d = await fixture()
     const u = await d.read()
     await writeFile(d.filePath, "one\ntwo\nthree\none\n")
@@ -445,13 +502,13 @@ describe("edit", () => {
     const f = await fixture(Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n") + "\n")
     const r = await f.read()
     const first = await f.edit(r.tag, [{ start: 10, content: "inserted a\ninserted b", operation: "after" }])
-    // The two inserted lines moved 11-20 down; the map shows the last line of that stretch beyond the rows around the change.
-    expect(first.text).toBe(`[file.txt#${first.tag}]\n9:line 9\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n14:line 12\n22~line 20`)
+    // The two inserted lines come back whole between the kept rows around them, and the lines they moved down as one note.
+    expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]`)
     expect(first.tag).toBe(fileTag(await readFile(f.filePath, "utf8")))
     const second = await f.edit(first.tag, [{ start: 2, content: "LINE 2", operation: "replace" }, { start: 12, content: "INSERTED B", operation: "replace" }])
-    expect(second.text).toContain("2:LINE 2\n3:line 3\n4:line 4\n...\n10:line 10\n11:inserted a\n12:INSERTED B\n13:line 11")
+    expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n2:LINE 2\n3:line 3\n...\n11:inserted a\n12:INSERTED B\n13:line 11`)
     const long = await f.edit(second.tag, [{ start: 1, content: Array.from({ length: 10 }, (_, index) => `new ${index}`).join("\n"), operation: "before" }])
-    expect(long.text).toBe(`[file.txt#${long.tag}]\n1:new 0\n2:new 1\n...\n9:new 8\n10:new 9\n11:line 1\n12:LINE 2\n22~INSERTED B\n32~line 20`)
+    expect(long.text).toBe(`[file.txt#${long.tag}]\n1:new 0\n...\n10:new 9\n11:line 1\n[lines 12-32 are old lines 2-22, moved down by 10]`)
   })
 
   test("lines outside the tagged output are rejected with their content, then a straight retry succeeds", async () => {
@@ -495,14 +552,20 @@ describe("edit", () => {
     expect(await readFile(f.filePath, "utf8")).toBe(collision)
   })
 
-  test("no-op edits do not rewrite the file", async () => {
+  test("no-op edits do not rewrite the file, and show the lines whole", async () => {
     const f = await fixture()
     const r = await f.read()
     const inode = (await stat(f.filePath)).ino
     const result = await f.edit(r.tag, [{ start: 2, content: "two", operation: "replace" }])
-    expect(result.text).toBe(`[file.txt#${r.tag}]\nNo changes: the edit reproduces the current content; this tag is still current.`)
+    expect(result.text).toBe(`[file.txt#${r.tag}]\nNo changes: these lines already read as the edit writes them; this tag is still current.\n1:one\n2:two\n3:three`)
     expect(result.tag).toBe(r.tag)
     expect((await stat(f.filePath)).ino).toBe(inode)
+    // The rows it showed are seen, so the line next to the resent one is editable without a read.
+    const g = await fixture(numbered(30))
+    const s = await g.read(":20-20")
+    await g.edit(s.tag, [{ start: 20, content: "line 20", operation: "replace" }])
+    await g.patch(`[file.txt#${s.tag}]\nPUT 21.=21:\n+LINE 21`)
+    expect((await readFile(g.filePath, "utf8")).split("\n")[20]).toBe("LINE 21")
   })
 
   test("seen-line restrictions are per session; a session without snapshots is unrestricted", async () => {
@@ -710,6 +773,92 @@ describe("workspace roots", () => {
   })
 })
 
+describe("sandbox", () => {
+  /** A workspace and a directory outside it, reachable through a file link and a directory link inside the workspace. */
+  async function sandboxed() {
+    const f = await fixture()
+    const outside = await workspace()
+    await writeFile(path.join(outside, "secret.txt"), "secret answer\n")
+    await mkdir(path.join(outside, "dir"))
+    await writeFile(path.join(outside, "dir/inner.txt"), "secret inner\n")
+    await symlink(path.join(outside, "secret.txt"), path.join(f.directory, "file-link.txt"))
+    await symlink(path.join(outside, "dir"), path.join(f.directory, "dir-link"))
+    const boxed: Context = { ...f.ctx, sandbox: true }
+    return { ...f, outside, boxed }
+  }
+
+  test("reads outside the roots, directly, through a link or under ~, are noted in place while the other paths are read", async () => {
+    const s = await sandboxed()
+    const result = await s.engine.read(s.boxed, { paths: ["file.txt", path.join(s.outside, "secret.txt"), "file-link.txt", "dir-link/inner.txt", "~/nib-missing"] })
+    expect(result.text).toStartWith(`[file.txt#${fileTag("one\ntwo\nthree\n")}]\n1:one`)
+    for (const refused of [path.join(s.outside, "secret.txt"), "file-link.txt", "dir-link/inner.txt", "~/nib-missing"]) expect(result.text).toContain(`[${refused} is outside the sandbox, which allows only `)
+    expect(result.text).not.toContain("secret answer")
+    expect(result.text).not.toContain("secret inner")
+    await expect(s.engine.read(s.boxed, { paths: ["file-link.txt"] })).rejects.toThrow("file-link.txt is outside the sandbox")
+    expect((await s.engine.read(s.ctx, { paths: ["file-link.txt"] })).text).toContain("secret answer")
+  })
+
+  test("grep and find refuse paths outside the roots, search the rest, and do not follow links out of the tree", async () => {
+    const s = await sandboxed()
+    const grep = await s.engine.grep(s.boxed, { pattern: "secret|one", paths: ["/", ".", s.outside] })
+    expect(grep.text).toStartWith("[/ is outside the sandbox, which allows only ")
+    expect(grep.text).toContain(`; ${s.outside} is outside the sandbox`)
+    expect(grep.text).toContain("; searched the other paths]")
+    expect(grep.text).toContain("*1:one")
+    expect(grep.text).not.toContain("secret answer")
+    expect(grep.text).not.toContain("secret inner")
+    await expect(s.engine.grep(s.boxed, { pattern: "secret", paths: ["/"] })).rejects.toThrow("/ is outside the sandbox")
+    await expect(s.engine.grep(s.boxed, { pattern: "secret", paths: ["dir-link"] })).rejects.toThrow("dir-link is outside the sandbox")
+    const find = await s.engine.find(s.boxed, { paths: [".", s.outside] })
+    expect(find.text).toStartWith(`[${s.outside} is outside the sandbox`)
+    expect(find.text).toContain("; listed the other paths]")
+    expect(find.text).toContain("file.txt")
+    expect(find.text).not.toContain("inner.txt")
+    await expect(s.engine.find(s.boxed, { paths: ["dir-link"] })).rejects.toThrow("dir-link is outside the sandbox")
+  })
+
+  test("edits and writes outside the roots fail before anything is created, through links and move targets too", async () => {
+    const s = await sandboxed()
+    await expect(s.engine.write(s.boxed, { path: path.join(s.outside, "new/deep.txt"), content: "x" })).rejects.toThrow("is outside the sandbox")
+    await expect(stat(path.join(s.outside, "new"))).rejects.toThrow()
+    await expect(s.engine.write(s.boxed, { path: "dir-link/made/x.txt", content: "x" })).rejects.toThrow("dir-link/made/x.txt is outside the sandbox")
+    await expect(stat(path.join(s.outside, "dir/made"))).rejects.toThrow()
+    const tag = fileTag("one\ntwo\nthree\n")
+    await s.engine.read(s.boxed, { paths: ["file.txt"] })
+    await expect(s.engine.patch(s.boxed, `[file.txt#${tag}]\nPUT 1.=1:\n+ONE\nMV ${path.join(s.outside, "moved.txt")}`)).rejects.toThrow("moved.txt is outside the sandbox")
+    await expect(s.engine.patch(s.boxed, `[file.txt#${tag}]\nPUT 1.=1:\n+ONE\n[file-link.txt#${fileTag("secret answer\n")}]\nPUT 1.=1:\n+leaked`)).rejects.toThrow("file-link.txt is outside the sandbox")
+    expect(await readFile(s.filePath, "utf8")).toBe("one\ntwo\nthree\n")
+    expect(await readFile(path.join(s.outside, "secret.txt"), "utf8")).toBe("secret answer\n")
+    await expect(stat(path.join(s.outside, "moved.txt"))).rejects.toThrow()
+    await s.engine.patch(s.boxed, `[file.txt#${tag}]\nPUT 1.=1:\n+ONE`)
+    expect(await readFile(s.filePath, "utf8")).toBe("ONE\ntwo\nthree\n")
+  })
+
+  test("a patch is judged whole before any parent directory is created for it", async () => {
+    const s = await sandboxed()
+    await expect(s.engine.patch(s.boxed, `*** Add File: new/deep/a.txt\n+a\n*** Add File: ${path.join(s.outside, "b.txt")}\n+b`)).rejects.toThrow("b.txt is outside the sandbox")
+    await expect(stat(path.join(s.directory, "new"))).rejects.toThrow()
+  })
+
+  test("the sandbox judges the canonical path an operation uses, not only the path it was asked for", async () => {
+    const s = await sandboxed()
+    await mkdir(path.join(s.directory, "src"))
+    await writeFile(path.join(s.directory, "src/a.txt"), "inside\n")
+    // The roots answer differently the second time, as a link that changes between two resolutions would make them disagree.
+    let asked = 0
+    const shifting: Context = { ...s.boxed, roots: async () => asked++ === 0 ? [s.directory] : [path.join(s.directory, "src")] }
+    await expect(s.engine.read(shifting, { paths: ["file.txt"] })).rejects.toThrow("file.txt resolves outside the sandbox")
+  })
+
+  test("client roots widen the sandbox", async () => {
+    const s = await sandboxed()
+    const rooted: Context = { ...s.boxed, roots: async () => [s.directory, s.outside] }
+    expect((await s.engine.read(rooted, { paths: ["file-link.txt"] })).text).toContain("secret answer")
+    await s.engine.write(rooted, { path: path.join(s.outside, "free.txt"), content: "ok" })
+    expect(await readFile(path.join(s.outside, "free.txt"), "utf8")).toBe("ok")
+  })
+})
+
 describe("grep", () => {
   test("anchored match and context rows, editable without a read", async () => {
     const f = await fixture(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n")
@@ -740,6 +889,103 @@ describe("grep", () => {
     expect(nested.text).toStartWith("1 matches in 1 files")
     expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["sub"] })).text).toContain("[sub/src/A.java#")
     expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["sub"] })).text).not.toContain("build")
+  })
+
+  /** Runs git with an identity, failing the test when git does. */
+  const git = (...args: string[]) => expect(Bun.spawnSync(["git", "-c", "user.name=nib", "-c", "user.email=nib@example.com", ...args]).exitCode).toBe(0)
+
+  /** A module repository holding a match in src/ and one in its ignored build/. */
+  async function module(directory: string) {
+    git("init", "-q", directory)
+    await mkdir(path.join(directory, "src"), { recursive: true })
+    await mkdir(path.join(directory, "build"))
+    await writeFile(path.join(directory, ".gitignore"), "build/\ncopy/\n")
+    await writeFile(path.join(directory, "src/A.java"), "needle\n")
+    await writeFile(path.join(directory, "build/B.java"), "needle\n")
+  }
+
+  test("a workspace that ignores the repositories it holds still has them searched, each by its own rules", async () => {
+    const f = await fixture()
+    git("init", "-q", f.directory)
+    await writeFile(path.join(f.directory, ".gitignore"), "*\n!.gitignore\n!apps/\napps/*\n")
+    await module(path.join(f.directory, "mod"))
+    await module(path.join(f.directory, "apps/app"))
+    // A worktree of a repository inside it repeats that repository's files, so it stays hidden.
+    git("-C", path.join(f.directory, "mod"), "commit", "-q", "--allow-empty", "-m", "start")
+    git("-C", path.join(f.directory, "mod"), "worktree", "add", "-q", path.join(f.directory, "mod/copy"))
+    await writeFile(path.join(f.directory, "mod/copy/C.java"), "needle\n")
+    const found = (await f.engine.grep(f.ctx, { pattern: "needle" })).text
+    expect(found).toStartWith("2 matches in 2 files\n\n[apps/app/src/A.java#")
+    expect(found).toContain("\n\n[mod/src/A.java#")
+    expect(found).not.toContain("build")
+    expect(found).not.toContain("copy")
+    const listed = (await f.engine.find(f.ctx, {})).text
+    expect(listed).toContain("\napps/app/src/A.java (1 line")
+    expect(listed).toContain("\nmod/src/A.java (1 line")
+    expect(listed).not.toContain("build/")
+    // An .ignore that already lets ripgrep into a repository changes nothing.
+    await writeFile(path.join(f.directory, ".ignore"), "!/mod/\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle" })).text).toBe(found)
+    // A search inside the workspace still reaches the repositories under its path, and noIgnore searches everything.
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["apps"], mode: "files" })).text).toBe("1 matches in 1 files\n\napps/app/src/A.java")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", noIgnore: true, mode: "count" })).text).toStartWith("5 matches in 5 files")
+  })
+
+  test("outside git, .gitignore does not apply, and a workspace below has its repositories searched", async () => {
+    const f = await fixture()
+    await writeFile(path.join(f.directory, ".gitignore"), "loose.txt\n")
+    await writeFile(path.join(f.directory, "loose.txt"), "needle\n")
+    const workspace = path.join(f.directory, "lane/ws")
+    await mkdir(workspace, { recursive: true })
+    git("init", "-q", workspace)
+    await writeFile(path.join(workspace, ".gitignore"), "*\n!.gitignore\n")
+    await module(path.join(workspace, "mod"))
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", mode: "files" })).text).toBe("2 matches in 2 files\n\nlane/ws/mod/src/A.java\nloose.txt")
+  })
+
+  test("a searched folder whose name holds glob characters is asked of git as a path, so a folder the pattern would match stays out", async () => {
+    const f = await fixture()
+    git("init", "-q", f.directory)
+    await writeFile(path.join(f.directory, ".gitignore"), "*\n!.gitignore\n!/we\\[ird\\]/\n/we\\[ird\\]/*\n!/wei/\n/wei/*\n")
+    await module(path.join(f.directory, "we[ird]/mod"))
+    await module(path.join(f.directory, "wei/mod"))
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["we[ird]"], mode: "files" })).text).toBe("1 matches in 1 files\n\nwe[ird]/mod/src/A.java")
+  })
+
+  test("a repository inside an ignored folder that is not one itself is searched too", async () => {
+    const f = await fixture()
+    git("init", "-q", f.directory)
+    await writeFile(path.join(f.directory, ".gitignore"), "/modules/\n/cache/\n")
+    await module(path.join(f.directory, "modules/app"))
+    // A folder with more entries than a folder of repositories has is a cache, and is not looked inside.
+    await mkdir(path.join(f.directory, "cache"))
+    for (let index = 0; index < 1001; index++) await mkdir(path.join(f.directory, "cache", `p${index}`))
+    await module(path.join(f.directory, "cache/p0"))
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", mode: "files" })).text).toBe("1 matches in 1 files\n\nmodules/app/src/A.java")
+    expect((await f.engine.find(f.ctx, { glob: "A.java" })).text).toStartWith("1 file\n\nmodules/app/src/A.java")
+  })
+
+  test("only git's rules are overruled: .ignore, .rgignore and an excluding glob keep a nested repository out", async () => {
+    const f = await fixture()
+    git("init", "-q", f.directory)
+    await writeFile(path.join(f.directory, ".gitignore"), "*\n!.gitignore\n!.ignore\n!.rgignore\n")
+    for (const name of ["kept", "dotignored", "rgignored", "globbed"]) await module(path.join(f.directory, name))
+    await writeFile(path.join(f.directory, ".ignore"), "/dotignored/\n")
+    await writeFile(path.join(f.directory, ".rgignore"), "/rgignored/\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", glob: "!globbed", mode: "files" })).text).toBe("1 matches in 1 files\n\nkept/src/A.java")
+    expect((await f.engine.find(f.ctx, { glob: ["A.java", "!globbed"] })).text).toStartWith("1 file\n\nkept/src/A.java")
+  })
+
+  test("a search never runs a command a repository's config names, such as core.fsmonitor", async () => {
+    const f = await fixture()
+    git("init", "-q", f.directory)
+    const marker = path.join(await workspace(), "ran")
+    git("-C", f.directory, "config", "core.fsmonitor", `touch ${marker}; echo`)
+    await writeFile(path.join(f.directory, ".gitignore"), "*\n")
+    await module(path.join(f.directory, "mod"))
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", mode: "files" })).text).toBe("1 matches in 1 files\n\nmod/src/A.java")
+    await f.engine.find(f.ctx, {})
+    await expect(stat(marker)).rejects.toThrow()
   })
 
   test("paths, globs, literal and case options; .gitignore is respected", async () => {
@@ -808,7 +1054,7 @@ describe("created files", () => {
     const f = await fixture()
     const small = await f.engine.write(f.ctx, { path: "small.txt", content: "a\nb\nc\n" })
     const smallTag = /#([0-9A-F]{4})\]/.exec(small.text)![1]!
-    expect((await f.patch(`[small.txt#${smallTag}]\nPUT 2.=2:\n+B`)).text).toContain("2:B")
+    expect((await f.patch(`[small.txt#${smallTag}]\nPUT 2.=2:\n+B`)).text).toContain("1:a\n2:B\n3:c")
     const content = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n"
     const large = await f.engine.write(f.ctx, { path: "large.txt", content })
     const largeTag = /#([0-9A-F]{4})\]/.exec(large.text)![1]!
@@ -816,7 +1062,7 @@ describe("created files", () => {
     expect(refused).toContain("5:line 5")
     expect(await readFile(path.join(f.directory, "large.txt"), "utf8")).toBe(content)
     const retried = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`)
-    expect(retried.text).toContain("5:five")
+    expect(retried.text).toContain("4:line 4\n5:five\n6:line 6")
     const overwritten = await f.engine.write(f.ctx, { path: "large.txt", content: "x\n", tag: retried.tag })
     expect(overwritten.text).toStartWith("Overwrote [large.txt#")
   })
@@ -927,6 +1173,20 @@ describe("refusals and reapply tokens", () => {
     return { f, input: `[file.txt#${a}]\nPUT 10.=10:\n+TEN\n[b.txt#${b}]\nPUT 15.=15:\n+FIFTEEN\n[c.txt#${c}]\nPUT 1.=1:\n+C` }
   }
 
+  test("one section's failed checks, failed SUBs and unseen lines come in one refusal, and what it displays counts as seen", async () => {
+    const f = await fixture(numbered(20))
+    const tag = /#([0-9A-F]{4})\]/.exec((await f.read(":1-5")).text)![1]
+    const message = await refusal(f.patch(`[file.txt#${tag}]\nPUT 2:\n~wrong\n+x\nSUB 3: nothere\n+y\nPUT 15:\n+z\nPUT 99:\n+past the end`))
+    // A hunk past the end is named first and takes nothing away from the others.
+    expect(message).toStartWith(`[file.txt#${tag}]: Line 99 does not exist in file.txt (file has 20 lines)\n\n[file.txt#${tag}]: ~ check rows do not match, so these line numbers are off:\nline 2 does not start with "wrong"`)
+    expect(message).toContain(`\n\n[file.txt#${tag}]: SUB refused:\nSUB 3: "nothere" does not occur on line 3`)
+    expect(message).toContain("\n\nThis edit anchors to lines 15 of file.txt")
+    expect(tokenOf(message)).toBeUndefined()
+    expect(await readFile(f.filePath, "utf8")).toBe(numbered(20))
+    await f.patch(`[file.txt#${tag}]\nPUT 2:\n~line 2\n+x\nSUB 3: line\n+LINE\nPUT 15:\n+z`)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(1, 3).concat((await readFile(f.filePath, "utf8")).split("\n")[14]!)).toEqual(["x", "LINE 3", "z"])
+  })
+
   test("every section's unseen lines come in one refusal, and its token applies the whole patch like an unchanged resend", async () => {
     const { f, input } = await setup()
     const message = await refusal(f.patch(input))
@@ -1010,6 +1270,62 @@ describe("refusals and reapply tokens", () => {
   })
 })
 
+describe("final newlines", () => {
+  test("a lone + row appended to a file without a final newline adds one in the file's own line endings, and no row for it", async () => {
+    const f = await fixture("one\r\ntwo\r\nthree")
+    const r = await f.read()
+    const added = await f.patch(`[file.txt#${r.tag}]\nPUT >$:\n+`)
+    expect(await readFile(f.filePath, "utf8")).toBe("one\r\ntwo\r\nthree\r\n")
+    expect(added.text).toBe(`[file.txt#${added.tag}]\n3:three\n[file.txt now ends with a newline]`)
+    expect((await f.read()).text).toBe(`[file.txt#${added.tag}]\n1:one\n2:two\n3:three`)
+    // With the final newline in place, the same hunk adds a real blank line.
+    const blank = await f.patch(`[file.txt#${added.tag}]\nPUT >$:\n+`)
+    expect(await readFile(f.filePath, "utf8")).toBe("one\r\ntwo\r\nthree\r\n\r\n")
+    expect(blank.text).toBe(`[file.txt#${blank.tag}]\n3:three\n4:`)
+  })
+
+  test("an empty row that ends an unterminated file next to a deletion still gets its response, before anything is written", async () => {
+    const f = await fixture("a\nb\nc")
+    const r = await f.read()
+    const edited = await f.patch(`[file.txt#${r.tag}]\nPUT 2:\n+\nCUT 3`)
+    expect(await readFile(f.filePath, "utf8")).toBe("a\n")
+    expect(edited.text).toStartWith(`[file.txt#${edited.tag}]\n1:a`)
+    expect(edited.text).toContain("[file.txt now ends with a newline]")
+  })
+
+  test("new last rows ending in an empty one end the file with a newline after the last of them", async () => {
+    const f = await fixture("a\nb")
+    const r = await f.read()
+    const added = await f.patch(`[file.txt#${r.tag}]\nPUT >$:\n+c\n+`)
+    expect(await readFile(f.filePath, "utf8")).toBe("a\nb\nc\n")
+    expect(added.text).toBe(`[file.txt#${added.tag}]\n2:b\n3:c\n[file.txt now ends with a newline]`)
+  })
+
+  test("rewriting the last line of a file without a final newline says how to add one", async () => {
+    const f = await fixture("one\ntwo")
+    const r = await f.read()
+    expect(r.text).toEndWith("\n2:two\n[no final newline; PUT >$: with a lone + row adds one]")
+    const same = await f.patch(`[file.txt#${r.tag}]\nPUT 2:\n+two`)
+    expect(same.text).toBe(`[file.txt#${r.tag}]\nNo changes: these lines already read as the edit writes them; this tag is still current.\n1:one\n2:two\n[file.txt has no final newline, which an edit keeps; PUT >$: with a lone + row adds one]`)
+    expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo")
+  })
+
+  test("overwriting keeps a CRLF file's line endings and a BOM unless the content brings its own; the final newline follows the content", async () => {
+    const f = await fixture()
+    const write = async (name: string, before: string, content: string) => {
+      await writeFile(path.join(f.directory, name), before)
+      const tag = /#([0-9A-F]{4})\]/.exec((await f.engine.read(f.ctx, { paths: [name] })).text)![1]
+      const result = await f.engine.write(f.ctx, { path: name, content, tag })
+      return { text: result.text.split("\n")[0]!, bytes: await readFile(path.join(f.directory, name), "utf8") }
+    }
+    expect(await write("crlf.csv", "id,qty\r\n1,4", "id,qty\n1,4\n2,9\n")).toEqual({ text: expect.stringMatching(/; kept its CRLF line endings\)$/), bytes: "id,qty\r\n1,4\r\n2,9\r\n" })
+    expect(await write("bom.txt", `${BOM}a\r\nb\r\n`, "a\nB")).toEqual({ text: expect.stringMatching(/; kept its CRLF line endings and BOM\)$/), bytes: `${BOM}a\r\nB` })
+    expect((await write("given.txt", "a\r\nb\r\n", "a\r\nb\r\nc\r\n")).bytes).toBe("a\r\nb\r\nc\r\n")
+    expect(await write("mixed.txt", "a\r\nb\nc\r\n", "a\nb\n")).toEqual({ text: expect.not.stringContaining("kept its"), bytes: "a\nb\n" })
+    expect((await write("lf.txt", "a\nb\n", "a\nb")).bytes).toBe("a\nb")
+  })
+})
+
 describe("row maps and ~ checks", () => {
   const brief = [
     "# Handoff",
@@ -1038,9 +1354,11 @@ describe("row maps and ~ checks", () => {
       "15~- item 15",
       "19~## Do the remaining work befor...",
       "23~Last line",
+      // The other lines are known content, anchored with a ~ check; a small file needs none, since it is trusted whole.
+      "[to anchor a line not shown, put a ~TEXT row with its start under the PUT or CUT; no read needed]",
     ].join("\n"))
     const edited = await f.patch(`[brief.md#${tag}]\nPUT >19:\n+\n+Context.\nPUT 15.=15:\n+- item fifteen`)
-    expect(edited.text).toContain("15:- item fifteen")
+    expect(edited.text).toContain("14:- item 14\n15:- item fifteen\n16:- item 16\n...\n19:## Do the remaining work before the deadline\n20:\n21:Context.\n22:")
     expect(await lineOf(f, "brief.md", 21)).toBe("Context.")
   })
 
@@ -1088,9 +1406,10 @@ describe("row maps and ~ checks", () => {
     const f = await fixture("end\n")
     const r = await f.read()
     const inserted = await f.edit(r.tag, [{ start: 1, content: Array.from({ length: 30 }, (_, index) => `new ${index + 1}`).join("\n"), operation: "before" }])
-    expect(inserted.text).toBe(`[file.txt#${inserted.tag}]\n1:new 1\n2:new 2\n12~new 12\n22~new 22\n29:new 29\n30:new 30\n31:end`)
-    const next = await f.patch(`[file.txt#${inserted.tag}]\nPUT 12.=12:\n+NEW 12\nPUT 15.=15:\n~new 15\n+NEW 15`)
-    expect(next.text).toContain("12:NEW 12")
+    expect(inserted.text).toBe(`[file.txt#${inserted.tag}]\n1:new 1\n11~new 11\n21~new 21\n30:new 30\n31:end`)
+    // A shown map row is an anchor; one between them needs a ~ check.
+    const next = await f.patch(`[file.txt#${inserted.tag}]\nPUT 11.=11:\n+NEW 11\nPUT 15.=15:\n~new 15\n+NEW 15`)
+    expect(next.text).toContain("11:NEW 11")
     expect(await lineOf(f, "file.txt", 15)).toBe("NEW 15")
   })
 
@@ -1098,9 +1417,11 @@ describe("row maps and ~ checks", () => {
     const f = await fixture()
     const content = Array.from({ length: 1000 }, (_, index) => `export function f${index}() {\n  return ${index}\n}`).join("\n") + "\n"
     const lines = (await f.engine.write(f.ctx, { path: "big.ts", content })).text.split("\n")
-    expect(lines[0]).toBe(`Created [big.ts#${fileTag(content)}] (3000 lines, 3000 non-blank; outline only, read the ranges you need)`)
+    expect(lines[0]).toBe(`Created [big.ts#${fileTag(content)}] (3000 lines, 3000 non-blank; outline only)`)
     expect(lines.slice(1, 3)).toEqual(["1:export function f0() {", "4:export function f1() {"])
-    expect(lines.at(-1)).toBe("[outline capped at 150 rows; 850 more members or declarations not shown]")
+    expect(lines.at(-2)).toBe("[outline capped at 150 rows; 850 more members or declarations not shown]")
+    // The model wrote every line, so the response says how to reach the rest instead of asking for a read.
+    expect(lines.at(-1)).toBe("[every line is known: grep finds a line's number, and a ~TEXT row with its start under the PUT or CUT anchors it; no read needed]")
     await f.patch(`[big.ts#${fileTag(content)}]\nPUT 4.=4:\n+export function g1() {`)
     expect(await lineOf(f, "big.ts", 4)).toBe("export function g1() {")
   })
@@ -1169,23 +1490,197 @@ describe("tagless appends", () => {
   test("a [PATH] section appends without a tag, even in a session that never read the file", async () => {
     const f = await fixture()
     const result = await f.patch("[file.txt]\nPUT >$:\n+four")
-    expect(result.text).toBe(`[file.txt#${fileTag("one\ntwo\nthree\nfour\n")}]\n2:two\n3:three\n4:four`)
+    expect(result.text).toBe(`[file.txt#${fileTag("one\ntwo\nthree\nfour\n")}]\n3:three\n4:four`)
     await f.engine.patch({ ...f.ctx, session: "other" }, "[file.txt]\nPUT >$:\n+five")
     expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\nfour\nfive\n")
   })
 
-  test("a tag never issued for the file is refused even for an append, with a hint to drop it", async () => {
+  test("a tag never issued for the file still appends, with a warning, unless it was issued for another file", async () => {
     const f = await fixture()
     const r = await f.read()
     const wrong = r.tag === "0000" ? "0001" : "0000"
-    const message = await refusal(f.patch(`[file.txt#${wrong}]\nPUT >$:\n+x`))
-    expect(message).toContain(`tag #${wrong} was not issued for this file`)
+    const appended = await f.patch(`[file.txt#${wrong}]\nPUT >$:\n+four`)
+    expect(appended.text).toContain(`\n\nWarnings:\nTag #${wrong} was never issued for this file; never invent tags.`)
+    expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\nfour\n")
+    await writeFile(path.join(f.directory, "other.txt"), "other\n")
+    const other = await f.read("", { file: path.join(f.directory, "other.txt") })
+    const message = await refusal(f.patch(`[file.txt#${other.tag}]\nPUT >$:\n+five`))
+    expect(message).toContain(`tag #${other.tag} was not issued for this file`)
+    expect(message).toContain(`Tag #${other.tag} was issued for`)
     expect(message).toContain("To append without a tag, use a [file.txt] header with only PUT >$: hunks.")
-    expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\n")
+    expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\nfour\n")
+  })
+})
+
+describe("unknown tags", () => {
+  const lines = numbered(10)
+  const wrongFor = (content: string) => fileTag(content) === "0000" ? "0001" : "0000"
+
+  test("SUB and matching - rows apply under a tag never issued, with a warning, and leave unread lines unseen", async () => {
+    const f = await fixture(lines)
+    const wrong = wrongFor(lines)
+    const result = await f.patch(`[file.txt#${wrong}]\nSUB 2: line 2\n+second\nPUT 4.=4:\n-line 4\n+fourth`)
+    expect(await readFile(f.filePath, "utf8")).toBe(lines.replace("line 2\n", "second\n").replace("line 4\n", "fourth\n"))
+    expect(result.text).toContain(`Warnings:\nTag #${wrong} was never issued for this file; never invent tags. The edit was applied only because every hunk is safe without one`)
+    expect(result.text).toContain("\nThe - rows matched the file, so the edit was applied;")
+    // The response showed lines 1 to 5; the agent never read line 9, so the new tag does not anchor it.
+    await expect(f.patch(`[file.txt#${result.tag}]\nPUT 9.=9:\n+ninth`)).rejects.toThrow("never displayed in full")
+    await f.patch(`[file.txt#${result.tag}]\nPUT 5.=5:\n+fifth`)
+    expect(await readFile(f.filePath, "utf8")).toContain("fifth\n")
+  })
+
+  test("a tag issued for another file is no mix-up for hunks that check themselves", async () => {
+    const f = await fixture(lines)
+    await writeFile(path.join(f.directory, "other.txt"), "other\n")
+    const other = await f.read("", { file: path.join(f.directory, "other.txt") })
+    const result = await f.patch(`[file.txt#${other.tag}]\nSUB 3: line 3\n+third`)
+    expect(result.text).toContain(`Tag #${other.tag} was never issued for this file`)
+    expect(await readFile(f.filePath, "utf8")).toContain("\nthird\n")
+  })
+
+  test("any other hunk, a SUB that does not match, REM, MV and CP are refused as before", async () => {
+    const f = await fixture(lines)
+    const wrong = wrongFor(lines)
+    for (const body of ["PUT 2.=2:\n+x", "SUB 2: line 2\n+x\nPUT 5.=5:\n+y", "PUT 2.=2:\n~line\n+x", "CUT 2.=2", "REM", "MV moved.txt", "CP copy.txt"]) {
+      expect(await refusal(f.patch(`[file.txt#${wrong}]\n${body}`))).toContain(`tag #${wrong} was not issued for this file`)
+    }
+    expect(await refusal(f.patch(`[file.txt#${wrong}]\nSUB 2: line 3\n+x`))).toContain('SUB 2: "line 3" does not occur on line 2')
+    expect(await refusal(f.patch(`[file.txt#${wrong}]\nPUT 2.=2:\n-line 3\n+x`))).toContain("the - rows do not match the file")
+    expect(await readFile(f.filePath, "utf8")).toBe(lines)
   })
 })
 
 describe("grep options", () => {
+  test("a missing path is noted and read, grep and find serve the others; only with none left is it an error", async () => {
+    const f = await fixture()
+    await writeFile(path.join(f.directory, "b.txt"), "one more\n")
+    await expect(f.engine.grep(f.ctx, { pattern: "one", paths: ["nope.txt"] })).rejects.toThrow("nope.txt does not exist")
+    await expect(f.engine.grep(f.ctx, { pattern: "one", paths: ["a.txt", "c.txt:1-2"] })).rejects.toThrow("a.txt does not exist; c.txt:1-2 does not exist")
+    const grepped = (await f.engine.grep(f.ctx, { pattern: "one", paths: ["file.txt", "a.txt", "c.txt:1-2", "b.txt"] })).text
+    expect(grepped).toStartWith("[a.txt does not exist; c.txt:1-2 does not exist; searched the other paths]\n\n2 matches in 2 files\n\n[b.txt#")
+    expect((await f.engine.grep(f.ctx, { pattern: "one", paths: ["file.txt:1-2"] })).text).toContain("*1:one")
+    const read = (await f.engine.read(f.ctx, { paths: ["file.txt", "nope.txt", "b.txt"] })).text
+    expect(read).toContain("\n3:three\n\n[nope.txt does not exist]\n\n[b.txt#")
+    await expect(f.engine.read(f.ctx, { paths: ["nope.txt", "a.txt"] })).rejects.toThrow("nope.txt does not exist; a.txt does not exist")
+    expect((await f.engine.find(f.ctx, { paths: ["file.txt", "nope"] })).text).toMatch(/^\[nope does not exist; listed the other paths\]\n\n1 file\n\nfile\.txt \(3 lines/)
+    // path:A:B reads as a selector on a file named path:A, so the error gives the range form.
+    await expect(f.engine.read(f.ctx, { paths: ["file.txt:1:2"] })).rejects.toThrow("file.txt:1:2 does not exist; for lines 1 to 2, write file.txt:1-2")
+    await expect(f.engine.grep(f.ctx, { pattern: "one", paths: ["file.txt:1:2"] })).rejects.toThrow("file.txt:1:2 does not exist; for lines 1 to 2, write file.txt:1-2")
+  })
+
+  test("past 40 context lines on a page only definitions get theirs, and the other matches stay anchors", async () => {
+    const f = await fixture()
+    const pad = (from: number, count: number) => Array.from({ length: count }, (_, index) => `// pad ${from + index}`)
+    const lines = [
+      'import { formatSize } from "./size"',
+      ...pad(2, 19),
+      "export function formatSize(bytes: number) {",
+      ...Array.from({ length: 14 }, (_, index) => `  const step${index} = bytes + ${index}`),
+      "}",
+      ...pad(37, 19),
+      "const half = formatSize(512)",
+      ...pad(57, 19),
+      "function report() {",
+      ...Array.from({ length: 18 }, (_, index) => index === 3 ? "  return formatSize(2048)" : `  const value${index} = ${index}`),
+      "}",
+    ]
+    const source = lines.join("\n") + "\n"
+    await writeFile(path.join(f.directory, "size.ts"), source)
+    const row = (line: number) => `${[1, 21, 56, 80].includes(line) ? "*" : " "}${line}:${lines[line - 1]}`
+    const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => row(from + index))
+    const roomy = (await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], after: 1 })).text
+    expect(roomy).toContain(`\n${rows(55, 57).join("\n")}\n`)
+    expect(roomy).not.toContain("context lines only")
+    // An import, the definition, a use in a value and a use in a body; 3 lines before and 12 after each would be 57 context lines.
+    expect((await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], before: 3, after: 12 })).text).toBe([
+      "4 matches in 1 files",
+      [`[size.ts#${fileTag(source)}]`, row(1), "...", ...rows(18, 33), "...", row(56), "...", row(80)].join("\n"),
+      "[context lines only around the definition at size.ts:21: around all 4 matches they would be 57 lines, over grep's budget of 40; for another match, read a range like size.ts:1-13]",
+    ].join("\n\n"))
+    await f.patch(`[size.ts#${fileTag(source)}]\nPUT 56:\n+const half = formatSize(1024)`)
+    expect(await readFile(path.join(f.directory, "size.ts"), "utf8")).toBe(source.replace("formatSize(512)", "formatSize(1024)"))
+  })
+
+  test("with no definition among the matches the first ones get the context asked for, and the default gives none", async () => {
+    // A hit every fifth line: 20 matches.
+    const f = await fixture(Array.from({ length: 100 }, (_, index) => (index + 1) % 5 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
+    const asked = (await f.engine.grep(f.ctx, { pattern: "hit", before: 0, after: 5 })).text
+    expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n...\n*60:hit 60\n")
+    expect(asked).toEndWith("\n\n[context lines only around the first 10 of 20 matches: around all 20 matches they would be 76 lines, over grep's budget of 40; for another match, read a range like file.txt:55-60]")
+    const plain = (await f.engine.grep(f.ctx, { pattern: "hit" })).text
+    expect(plain).not.toContain("miss")
+    expect(plain).toEndWith("\n\n[no context lines: around all 20 matches they would be 77 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:4-8]")
+    // hit 5 to hit 25: few enough for the default context.
+    expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n 7:miss 7\n 8:miss 8\n 9:miss 9\n*10:hit 10\n")
+  })
+
+  test("a definition is a match naming what its line declares: after a declaring word, as a container member or as a Markdown heading", async () => {
+    const f = await fixture()
+    const pad = (count: number, text = "// pad") => Array.from({ length: count }, () => text)
+    const files: Record<string, string[]> = {
+      "sizes.ts": ["export class Sizes {", "  format(bytes: number) {", "    return bytes", "  }", "}", ...pad(25), "const a = format(1)", ...pad(25), "format(2)", ...pad(25), "function bytes(format: string) {", "  return format", "}", ...pad(25)],
+      "server.go": ["package main", "", "func (s *Server) Handle(w Writer) {", "\ts.log(w)", "}", ...pad(25), "func run(s *Server) {", "\ts.Handle(nil)", "}", ...pad(25), "var handler = s.Handle", ...pad(25)],
+      "notes.md": ["# Sizes", "", "## formatSize", "", ...pad(25, "text"), "Call formatSize for sizes.", ...pad(25, "text"), "See formatSize.", ...pad(25, "text")],
+      "a.py": ["from b import format_size", "print(format_size(1))", ...pad(25, "# pad"), "value = format_size(2)", ...pad(25, "# pad")],
+      "b.py": ["def format_size(bytes):", "    return bytes", ...pad(25, "# pad")],
+    }
+    for (const [name, lines] of Object.entries(files)) await writeFile(path.join(f.directory, name), lines.join("\n") + "\n")
+    // 1 line before and 20 after: 21 context lines per match, so any two are over the budget.
+    const grep = (pattern: string, paths: string[]) => f.engine.grep(f.ctx, { pattern, paths, before: 1, after: 20 })
+    const given = async (pattern: string, paths: string[]) => /\[context lines only around (.+?): around all/.exec((await grep(pattern, paths)).text)?.[1]
+    expect(await given("format", ["sizes.ts"])).toBe("the definition at sizes.ts:2")
+    expect(await given("Handle", ["server.go"])).toBe("the definition at server.go:3")
+    // A name in a Go receiver or in parameters is not what its line declares.
+    expect(await given("Server", ["server.go"])).toBe("the first 1 of 2 matches")
+    expect(await given("formatSize", ["notes.md"])).toBe("the definition at notes.md:3")
+    // The definition wins over matches in a file earlier on the page.
+    const python = (await grep("format_size", ["a.py", "b.py"])).text
+    expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n...\n*28:value = format_size(2)\n\n[b.py#")
+    expect(python).toContain("\n*1:def format_size(bytes):\n 2:    return bytes\n 3:# pad\n")
+    expect(python).toContain("[context lines only around the definition at b.py:1:")
+  })
+
+  test("definitions keep all their context past the budget, also when the pattern matches their declaring word", async () => {
+    const f = await fixture()
+    // 30 functions, each under a doc comment or a blank line: 2 lines before each come to 59 context lines.
+    const lines = Array.from({ length: 30 }, (_, index) => [index % 2 ? `/** Doc ${index}. */` : "", `function f${index}() {`, `  return ${index}`, "}"]).flat()
+    await writeFile(path.join(f.directory, "fns.ts"), lines.join("\n") + "\n")
+    const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"], before: 2, after: 0 })).text
+    expect(text).toStartWith(`30 matches in 1 files\n\n[fns.ts#${fileTag(lines.join("\n") + "\n")}]\n 1:\n*2:function f0() {\n...\n 4:}\n 5:/** Doc 1. */\n*6:function f1() {\n`)
+    expect(text).toEndWith("\n...\n 116:}\n 117:/** Doc 29. */\n*118:function f29() {")
+  })
+
+  test("past the budget, definitions that did not ask for context share it and the rest stay a list", async () => {
+    const f = await fixture()
+    const lines = Array.from({ length: 30 }, (_, index) => [index % 2 ? `/** Doc ${index}. */` : "", `function f${index}() {`, `  return ${index}`, "}"]).flat()
+    await writeFile(path.join(f.directory, "fns.ts"), lines.join("\n") + "\n")
+    const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"] })).text
+    // One line before and three after: the first comes to 4 lines and each next one to 3 more, so 13 fit in 40.
+    expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n 52:}\n 53:/** Doc 13. */\n*54:function f13() {\n...\n*58:function f14() {\n")
+    expect(text).toEndWith("\n\n[context lines only around the first 13 of 30 definitions: around all 30 matches they would be 90 lines, over grep's budget of 40; for another match, read a range like fns.ts:53-57]")
+  })
+
+  test("one file shows its first 100 matches, like a harness's own grep", async () => {
+    const f = await fixture(Array.from({ length: 150 }, (_, index) => `hit ${index + 1}`).join("\n") + "\n")
+    const text = (await f.engine.grep(f.ctx, { pattern: "hit", paths: ["file.txt"], before: 0, after: 0 })).text
+    expect(text).toStartWith("150 matches in 1 files")
+    expect([...text.matchAll(/^\*\d+:/gm)]).toHaveLength(100)
+    expect(text).toContain("*100:hit 100\n[50 more matches in this file]")
+  })
+
+  test("grep locks its page's files together without deadlocking against an edit or a file named twice", async () => {
+    const f = await fixture("one\ntwo\n")
+    await writeFile(path.join(f.directory, "b.txt"), "one\n")
+    await symlink(f.filePath, path.join(f.directory, "link.txt"))
+    const { tag } = await f.read()
+    const [grepped] = await Promise.all([
+      f.engine.grep(f.ctx, { pattern: "one", paths: ["file.txt", "link.txt", "b.txt"] }),
+      f.patch(`[file.txt#${tag}]\nPUT 2:\n+TWO`),
+    ])
+    expect(grepped.text).toStartWith("3 matches in 3 files")
+    expect(await readFile(f.filePath, "utf8")).toBe("one\nTWO\n")
+  })
+
   test("files and count modes list matching files without rows, 200 per page", async () => {
     const f = await fixture("hit\nhit\nmiss\n")
     await mkdir(path.join(f.directory, "many"))
@@ -1197,6 +1692,47 @@ describe("grep options", () => {
     expect(parts[2]).toBe("[206 matching files; continue with skip 200]")
     expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "files", skip: 200 })).text.split("\n\n")[1]!.split("\n")).toHaveLength(6)
     expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", paths: ["file.txt", "many/f000.txt"] })).text).toBe("3 matches in 2 files\n\n2 file.txt\n1 many/f000.txt")
+  })
+
+  test("a count over many files sums them by folder, at the deepest level that fits, most matches first", async () => {
+    const f = await fixture("hit\nhit\nmiss\n")
+    for (const [folder, count] of [["src/a", 30], ["src/b", 12]] as const) {
+      for (let index = 0; index < count; index++) {
+        await mkdir(path.join(f.directory, folder, `x${index}`), { recursive: true })
+        await writeFile(path.join(f.directory, folder, `x${index}`, "f.txt"), "hit\n")
+      }
+    }
+    await mkdir(path.join(f.directory, "docs"))
+    for (let index = 0; index < 3; index++) await writeFile(path.join(f.directory, "docs", `f${index}.txt`), "hit\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count" })).text).toBe([
+      "47 matches in 46 files, by folder",
+      "30 src/a/ (30 files)\n12 src/b/ (12 files)\n2 file.txt\n1 docs/f0.txt\n1 docs/f1.txt\n1 docs/f2.txt",
+      "[grep one folder for its files' counts]",
+    ].join("\n\n"))
+    // skip still pages the files one by one.
+    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", skip: 44 })).text).toBe("47 matches in 46 files\n\n1 src/b/x8/f.txt\n1 src/b/x9/f.txt")
+  })
+
+  test("a count that cannot be split by folder pages the files; a folder's own count splits below it", async () => {
+    const f = await fixture("miss\n")
+    await mkdir(path.join(f.directory, "src/a"), { recursive: true })
+    await mkdir(path.join(f.directory, "src/b"))
+    for (let index = 0; index < 41; index++) await writeFile(path.join(f.directory, "src", `f${String(index).padStart(2, "0")}.txt`), "hit\n")
+    // Every match sits in src/, so a sum by folder would be one row: the files are listed instead, from the root and from src alike.
+    for (const paths of [undefined, ["src"]]) {
+      const text = (await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", paths })).text
+      expect(text).toStartWith("41 matches in 41 files\n\n1 src/f00.txt\n1 src/f01.txt")
+      expect(text).not.toContain("by folder")
+    }
+    for (let index = 0; index < 20; index++) {
+      await writeFile(path.join(f.directory, "src/a", `g${index}.txt`), "hit\n")
+      await writeFile(path.join(f.directory, "src/b", `g${index}.txt`), "hit\n")
+    }
+    await rm(path.join(f.directory, "src"), { recursive: true, force: true }).then(() => mkdir(path.join(f.directory, "src/a"), { recursive: true }))
+    await mkdir(path.join(f.directory, "src/b"))
+    for (let index = 0; index < 30; index++) await writeFile(path.join(f.directory, "src/a", `g${index}.txt`), "hit\n")
+    for (let index = 0; index < 12; index++) await writeFile(path.join(f.directory, "src/b", `g${index}.txt`), "hit\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", paths: ["src"] })).text).toBe("42 matches in 42 files, by folder\n\n30 src/a/ (30 files)\n12 src/b/ (12 files)\n\n[grep one folder for its files' counts]")
   })
 
   test("noIgnore searches ignored files, and glob takes a list", async () => {
@@ -1244,22 +1780,19 @@ describe("read options", () => {
 })
 
 describe("moved lines after an edit", () => {
-  test("lines an edit moved are mapped in a window of 40 rows, then one note gives the old numbers of the rest", async () => {
+  test("lines an edit moved get one note with their old numbers; the kept rows around the change stay anchors", async () => {
     const f = await fixture(numbered(1000))
     const r = await f.read(":1-")
     const edited = await f.edit(r.tag, [{ start: 20, content: "a\nb\nc\nd", operation: "after" }])
-    const rows = edited.text.split("\n")
-    expect(rows.slice(0, 9)).toEqual([`[file.txt#${edited.tag}]`, "19:line 19", "20:line 20", "21:a", "22:b", "23:c", "24:d", "25:line 21", "26:line 22"])
-    expect(rows.slice(9, 49)).toEqual(Array.from({ length: 40 }, (_, index) => `${36 + index * 10}~line ${32 + index * 10}`))
-    expect(rows.slice(49)).toEqual(["[lines 427-1004 are old lines 423-1000, moved down by 4]"])
+    expect(edited.text.split("\n")).toEqual([`[file.txt#${edited.tag}]`, "20:line 20", "21:a", "22:b", "23:c", "24:d", "25:line 21", "[lines 26-1004 are old lines 22-1000, moved down by 4]"])
     const unchecked = await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 500.=500:\n+x`))
     expect(unchecked).toContain("This edit anchors to lines 500 of file.txt")
     expect(unchecked).toContain("Lines you wrote, or saw before an edit moved them, can skip this step")
-    await f.patch(`[file.txt#${edited.tag}]\nPUT 426.=426:\n+LINE 422`)
-    expect((await readFile(f.filePath, "utf8")).split("\n")[425]).toBe("LINE 422")
+    await f.patch(`[file.txt#${edited.tag}]\nPUT 25.=25:\n+LINE 21`)
+    expect((await readFile(f.filePath, "utf8")).split("\n")[24]).toBe("LINE 21")
   })
 
-  test("past the window a moved line the agent saw is edited with a check from its old number plus the offset", async () => {
+  test("a moved line the agent saw is edited with a check from its old number plus the offset", async () => {
     const f = await fixture(numbered(1000))
     const edited = await f.edit((await f.read(":1-")).tag, [{ start: 20, content: "a\nb\nc\nd", operation: "after" }])
     await f.patch(`[file.txt#${edited.tag}]\nPUT 500.=500:\n~line 496\n+LINE 496`)
@@ -1269,16 +1802,16 @@ describe("moved lines after an edit", () => {
   test("deleted lines move the rest up, and an edit that moves nothing gets no map", async () => {
     const f = await fixture(numbered(1000))
     const cut = await f.edit((await f.read(":1-")).tag, [{ start: 10, end: 13, content: "", operation: "replace" }])
-    expect(cut.text.split("\n").at(-1)).toBe("[lines 412-996 are old lines 416-1000, moved up by 4]")
+    expect(cut.text).toBe(`[file.txt#${cut.tag}]\n9:line 9\n10:line 14\n[lines 11-996 are old lines 15-1000, moved up by 4]`)
     const same = await f.edit(cut.tag, [{ start: 5, content: "replaced", operation: "replace" }])
-    expect(same.text).toBe(`[file.txt#${same.tag}]\n3:line 3\n4:line 4\n5:replaced\n6:line 6\n7:line 7`)
+    expect(same.text).toBe(`[file.txt#${same.tag}]\n4:line 4\n5:replaced\n6:line 6`)
   })
 
-  test("moved lines the agent never saw get no map row, and a check lets an insert there but not a replace", async () => {
+  test("a moved stretch gets its note when it holds a line the agent saw, and a check lets an insert there but not a replace", async () => {
     const f = await fixture(numbered(100))
     const edited = await f.edit((await f.read(":1-5")).tag, [{ start: 2, content: "x", operation: "after" }])
-    // Only old line 5, which the read showed, is mapped; lines 7-101 were never seen and get neither rows nor a note.
-    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n1:line 1\n2:line 2\n3:x\n4:line 3\n5:line 4\n6~line 5`)
+    // Old lines 4 and 5 were read, so the stretch they moved in gets a note; the lines past them were never seen.
+    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n2:line 2\n3:x\n4:line 3\n[lines 5-101 are old lines 4-100, moved down by 1]`)
     expect(await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 15.=15:\n~line 14\n+y`))).toContain("never displayed in full")
     await f.patch(`[file.txt#${edited.tag}]\nPUT >15:\n~line 14\n+after fourteen`)
     expect((await readFile(f.filePath, "utf8")).split("\n")[15]).toBe("after fourteen")
@@ -1649,6 +2182,8 @@ describe("find", () => {
       ["pic.png", Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), DAYS],
       ["src/b.ts", "x\n".repeat(100), 2 * 86400 + 60],
     ]
+    // .gitignore counts inside a repository only, as in git.
+    await mkdir(path.join(f.directory, ".git"))
     await mkdir(path.join(f.directory, "src"))
     for (const [name, content, seconds] of files) {
       await writeFile(path.join(f.directory, name), content)
@@ -1705,11 +2240,11 @@ describe("find", () => {
 describe("grep replace", () => {
   const token = (text: string) => /REAPPLY ([a-z0-9]{6})$/.exec(text)![1]!
 
-  test("previews each changed line under its match and applies through a single-use token", async () => {
+  test("previews each changed line once, as it will be, and applies through a single-use token", async () => {
     const content = "const foo = 1\nlet bar = foo + foo\nnothing\n"
     const f = await fixture(content)
     const preview = (await f.engine.grep(f.ctx, { pattern: "foo", replace: "baz" })).text
-    expect(preview).toMatch(new RegExp(`^2 matches in 1 files\\n\\n\\[file\\.txt#${fileTag(content)}\\]\\n\\*1:const foo = 1\\n>1\\|const baz = 1\\n\\*2:let bar = foo \\+ foo\\n>2\\|let bar = baz \\+ baz\\n\\nTo apply the 2 replaced lines shown \\(>N\\| rows\\), call edit with input: REAPPLY [a-z0-9]{6}$`))
+    expect(preview).toMatch(new RegExp(`^2 matches in 1 files\\n\\n\\[file\\.txt#${fileTag(content)}\\]\\n>1\\|const baz = 1\\n>2\\|let bar = baz \\+ baz\\n\\nTo apply the 2 replaced lines shown \\(>N\\| rows\\), call edit with input: REAPPLY [a-z0-9]{6}$`))
     expect(await readFile(f.filePath, "utf8")).toBe(content)
     const applied = await f.patch(`REAPPLY ${token(preview)}`)
     expect(applied.text).toStartWith(`[file.txt#${fileTag("const baz = 1\nlet bar = baz + baz\nnothing\n")}]`)
@@ -1723,21 +2258,26 @@ describe("grep replace", () => {
     expect(groups).toContain(">1|var alpha = 11\n")
     await f.patch(`REAPPLY ${token(groups)}`)
     const empty = (await f.engine.grep(f.ctx, { pattern: "^$", replace: "// gap" })).text
-    expect(empty).toContain("*2:\n>2|// gap\n")
+    expect(empty).toContain("]\n*2:\n>2|// gap\n")
     await f.patch(`REAPPLY ${token(empty)}`)
     expect(await readFile(f.filePath, "utf8")).toBe("var alpha = 11\n// gap\nvar beta = 22\n")
     const same = (await f.engine.grep(f.ctx, { pattern: "gap", replace: "gap" })).text
     expect(same).not.toContain(">2|")
     expect(same).toEndWith("[no replacement to apply: the shown matches stay the same or are in files nib cannot edit]")
+    // A match the replace leaves as it is stays a plain match row, next to the lines that change.
+    await writeFile(path.join(f.directory, "mixed.txt"), "color\ncolour\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "colou?r", replace: "color", paths: ["mixed.txt"] })).text).toContain("]\n*1:color\n>2|color\n")
   })
 
   test("a long line shows the stretch around its replacement, and the token changes it without a full read", async () => {
     const line = "a".repeat(3000) + "NEEDLE" + "b".repeat(100)
     const f = await fixture(`${line}\nshort\n`)
     const preview = (await f.engine.grep(f.ctx, { pattern: "NEEDLE", replace: "PIN" })).text
-    expect(preview).toContain(`\n*[1 chars 2916-3091 of 3106]|${"a".repeat(85)}NEEDLE${"b".repeat(85)}\n>[1 chars 2916-3088 of 3103]|${"a".repeat(85)}PIN${"b".repeat(85)}\n`)
-    await f.patch(`REAPPLY ${token(preview)}`)
+    expect(preview).toContain(`]\n>[1 chars 2916-3088 of 3103]|${"a".repeat(85)}PIN${"b".repeat(85)}\n`)
+    const applied = await f.patch(`REAPPLY ${token(preview)}`)
     expect(await readFile(f.filePath, "utf8")).toBe(`${"a".repeat(3000)}PIN${"b".repeat(100)}\nshort\n`)
+    // The preview showed only a stretch of the new line, so it is not seen as a whole.
+    expect(await refusal(f.patch(`[file.txt#${applied.tag}]\nPUT 1:\n+x`))).toContain("never displayed in full")
   })
 
   test("a file that changed after the preview still gets the change when it can be rebased", async () => {
@@ -1746,17 +2286,48 @@ describe("grep replace", () => {
     await writeFile(f.filePath, "zero\none\ntwo\nthree\n")
     const applied = await f.patch(`REAPPLY ${token(preview)}`)
     expect(applied.text).toContain("Recovered")
+    expect(applied.text).not.toContain("as previewed")
     expect(await readFile(f.filePath, "utf8")).toBe("zero\none\nTWO\nthree\n")
   })
 
-  test("matches past the per-file limit stay out of the token; replace needs mode matches and single-line patterns", async () => {
-    const f = await fixture(Array.from({ length: 25 }, (_, index) => `hit ${index}`).join("\n") + "\n")
+  test("a replace shows every match of its files, so one token covers them, and applied as previewed it answers with tags and counts", async () => {
+    const content = Array.from({ length: 25 }, (_, index) => `hit ${index}`).join("\n") + "\n"
+    const f = await fixture(content)
     await writeFile(path.join(f.directory, "other.txt"), "hit\n")
     const preview = (await f.engine.grep(f.ctx, { pattern: "hit", replace: "HIT" })).text
-    expect(preview).toContain("[5 more matches in this file; they are not in the token, so grep again after applying it]")
-    expect(preview).toContain("To apply the 21 replaced lines shown")
+    expect(preview).not.toContain("more matches")
+    expect(preview).toContain("\n>24|HIT 23\n>25|HIT 24\n\n[other.txt#")
+    expect(preview).not.toMatch(/^\*/m)
+    expect(preview).toContain("To apply the 26 replaced lines shown")
+    const replaced = content.replaceAll("hit", "HIT")
+    const applied = await f.patch(`REAPPLY ${token(preview)}`)
+    expect(applied.text).toBe(`[file.txt#${fileTag(replaced)}] 25 lines replaced as previewed\n\n[other.txt#${fileTag("HIT\n")}] 1 line replaced as previewed`)
+    // The >N| rows showed the new lines whole, so they are anchors without a read.
+    await f.patch(`[file.txt#${fileTag(replaced)}]\nPUT 3:\n+third`)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(1, 4)).toEqual(["HIT 1", "third", "HIT 3"])
     await expect(f.engine.grep(f.ctx, { pattern: "hit", replace: "x", mode: "files" })).rejects.toThrow("needs mode matches")
     await expect(f.engine.grep(f.ctx, { pattern: "hit\\nhit", replace: "x" })).rejects.toThrow("within one line")
+  })
+
+  test("applying a token that left changing lines out says how many, so the model greps again", async () => {
+    const f = await fixture("hit\n")
+    // 21 matching files: a page holds 20, so the last file's 2 lines stay out.
+    for (let index = 0; index < 20; index++) await writeFile(path.join(f.directory, `more${String(index).padStart(2, "0")}.txt`), "hit\nhit\n")
+    const preview = (await f.engine.grep(f.ctx, { pattern: "hit", replace: "HIT" })).text
+    expect(preview).toContain("[21 matching files; continue with skip 20]")
+    const applied = await f.patch(`REAPPLY ${token(preview)}`)
+    expect(applied.text).toEndWith("\n\n[2 more lines that the search would change were not in this token; grep again with the same pattern and replace for them]")
+    const rest = (await f.engine.grep(f.ctx, { pattern: "hit", replace: "HIT" })).text
+    expect(rest).toStartWith("2 matches in 1 files\n\n[more19.txt#")
+    expect((await f.patch(`REAPPLY ${token(rest)}`)).text).toBe(`[more19.txt#${fileTag("HIT\nHIT\n")}] 2 lines replaced as previewed`)
+  })
+
+  test("a replacement that adds lines shifts the ones below, so applying it shows the rows", async () => {
+    const f = await fixture("one\ntwo\nthree\n")
+    const preview = (await f.engine.grep(f.ctx, { pattern: "two", replace: "2\nII" })).text
+    expect(preview).toContain("]\n>2|2\n>2|II\n")
+    const applied = await f.patch(`REAPPLY ${token(preview)}`)
+    expect(applied.text).toBe(`[file.txt#${fileTag("one\n2\nII\nthree\n")}]\n1:one\n2:2\n3:II\n4:three`)
   })
 
   test("a single file whose rows pass the output budget is cut with a way on, instead of left out", async () => {
@@ -1769,7 +2340,96 @@ describe("grep replace", () => {
     const preview = (await f.engine.grep(f.ctx, { pattern: "match", replace: "MATCH" })).text
     const shown = [...preview.matchAll(/^>\d+\|/gm)].length
     expect(preview).toContain(`To apply the ${shown} replaced lines shown`)
-    await f.patch(`REAPPLY ${token(preview)}`)
+    expect((await f.patch(`REAPPLY ${token(preview)}`)).text).toEndWith(`[${300 - shown} more lines that the search would change were not in this token; grep again with the same pattern and replace for them]`)
     expect((await readFile(f.filePath, "utf8")).split("\n").filter((row) => row.startsWith("MATCH"))).toHaveLength(shown)
+  })
+})
+
+describe("ranges one line off", () => {
+  const plan = [
+    "# Plan",
+    "- **Name** of a peer, in precedence order, decided ONCE at server start:",
+    "  1. an explicit name from the server's --name flag",
+    "  2. the pane session it was started in",
+    "  3. else a minted anon id",
+    "- **Address** is the name plus the host it runs on",
+  ].join("\n") + "\n"
+  const rows = [
+    "- **Name** of a peer, in precedence order, decided ONCE at registration:",
+    "  1. an explicit name: --name or SKETERM_PEER_NAME",
+    "  2. the pane session it was started in",
+    "  3. else a minted anon-xxxx id",
+  ].map((line) => `+${line}`).join("\n")
+
+  test("a range that starts one line late applies with a warning naming the two alike lines", async () => {
+    const f = await fixture(plan)
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 3.=6:\n${rows}`)
+    expect(result.text).toEndWith("Warnings:\nLines 2 and 3 now nearly match: line 2 was kept just above an edit and line 3 is the edit's first new line. If the edit was meant to replace line 2, its range started one line late; fix that now.")
+  })
+
+  test("a range that ends one line early applies with a warning too", async () => {
+    const f = await fixture(plan)
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 1.=4:\n${rows}`)
+    expect(result.text).toEndWith("Warnings:\nLines 4 and 5 now nearly match: line 4 is an edit's last new line and line 5 was kept just below it. If the edit was meant to replace line 5, its range ended one line early; fix that now.")
+  })
+
+  test("a right range, or a line rewritten from one just like it, gets no warning", async () => {
+    const f = await fixture(plan)
+    const r = await f.read()
+    expect((await f.patch(`[file.txt#${r.tag}]\nPUT 2.=5:\n${rows}`)).text).not.toContain("Warnings:")
+    const g = await fixture("repeated line of some length\nrepeated line of some length\ntail\n")
+    const s = await g.read()
+    expect((await g.patch(`[file.txt#${s.tag}]\nPUT 2.=2:\n+repeated line of some length\n+an added line below it`)).text).not.toContain("Warnings:")
+  })
+})
+
+describe("forgiving the forms models borrow", () => {
+  const thirty = Array.from({ length: 30 }, (_, index) => `l${index + 1}`).join("\n") + "\n"
+
+  test("PUT N:=M: applies as the range N to M, with a note giving nib's form", async () => {
+    const f = await fixture(thirty)
+    const r = await f.read(":1-5")
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 2:=3:\n+two and three`)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(0, 3)).toEqual(["l1", "two and three", "l4"])
+    expect(result.text).toEndWith("Warnings:\nPUT 2:=3: was read as PUT 2.=3:; a range is written N.=M, with a dot.")
+  })
+
+  test("- rows that match quote the old lines: the edit applies, even to unseen lines, and the response shows the hunk without them", async () => {
+    const f = await fixture(thirty)
+    const r = await f.read(":1-5")
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 20:\n-l20\n+TWENTY\nCUT 25.=26\n-l25\n-l26  `)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(18, 24)).toEqual(["l19", "TWENTY", "l21", "l22", "l23", "l24"])
+    expect(result.text).toContain("Warnings:\nThe - rows matched the file, so the edit was applied;")
+    expect(result.text).toContain("Leave - rows out next time. This hunk is just:\nPUT 20:\n+TWENTY")
+    expect(await readFile(f.filePath, "utf8")).not.toContain("l25")
+    // The earlier CUT moved l28 up to line 26.
+    const cut = await f.patch(`[file.txt#${result.tag}]\nCUT 26\n-l28`)
+    expect(cut.text).toContain("This hunk is just:\nCUT 26")
+    expect(await readFile(f.filePath, "utf8")).not.toContain("l28")
+  })
+
+  test("- rows that do not match are refused with the real lines, and nothing is written", async () => {
+    const f = await fixture(thirty)
+    const r = await f.read(":1-5")
+    const wrong = await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 20:\n-l2O\n+x`))
+    expect(wrong).toContain('line 20 is not "l2O"')
+    expect(wrong).toContain("*20:l20")
+    expect(wrong).toContain("nib needs no - rows")
+    expect(wrong).not.toContain("REAPPLY")
+    expect(await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 20.=21:\n-l20\n+x`))).toContain("the - rows under lines 20-21 quote 1 line, but the hunk replaces 2")
+    expect(await readFile(f.filePath, "utf8")).toBe(thirty)
+  })
+
+  test("numbers over a limit are capped, with a note, instead of refused", async () => {
+    const f = await fixture(thirty)
+    const grep = (await f.engine.grep(f.ctx, { pattern: "^l5$", before: 2, after: 25, maxLineLength: 5000 })).text
+    expect(grep).toContain("*5:l5\n 6:l6")
+    expect(grep).toContain(" 25:l25\n")
+    expect(grep).not.toContain("26:l26")
+    expect(grep).toEndWith("[after 25 is over its limit of 20, so 20 was used]\n\n[maxLineLength 5000 is over its limit of 2000, so 2000 was used]")
+    const read = (await f.engine.read(f.ctx, { paths: ["file.txt:1"], maxLineLength: 3_000_000 })).text
+    expect(read).toStartWith("[maxLineLength 3000000 is over its limit of 2097152, so 2097152 was used]\n\n[file.txt#")
   })
 })
