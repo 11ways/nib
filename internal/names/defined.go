@@ -1,0 +1,166 @@
+package names
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"time"
+)
+
+// DefinedLimit bounds the definitions one agent makes; a redefinition counts too.
+const DefinedLimit = 64
+
+// Defined are the named directories agents define at runtime, kept per agent in memory for the life of the process. An agent sees the names
+// it defined and those it inherited when it started: the names its parent saw before the agent was spawned.
+type Defined struct {
+	mu     sync.Mutex
+	agents map[string]*defined
+	// Now stamps definitions; it must be comparable with other processes' clocks, as a spawn moment comes from the harness. Set it before
+	// first use.
+	Now func() time.Time
+}
+
+// defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins.
+type defined struct {
+	list []definition
+	own  int
+}
+
+// definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited.
+type definition struct {
+	Entry
+	at int64
+}
+
+// NewDefined makes an empty set.
+func NewDefined() *Defined { return &Defined{agents: map[string]*defined{}, Now: time.Now} }
+
+// Inherit gives agent the names parent saw before asOf, the zero asOf meaning now; it does nothing for an agent that has names already.
+func (d *Defined) Inherit(agent, parent string, asOf time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	from := d.agents[parent]
+	if agent == parent || d.agents[agent] != nil || from == nil {
+		return
+	}
+	moment := int64(math.MaxInt64)
+	if !asOf.IsZero() {
+		moment = asOf.UnixNano()
+	}
+	to := &defined{}
+	for _, entry := range from.list {
+		if entry.at < moment {
+			to.list = append(to.list, entry)
+		}
+	}
+	d.agents[agent] = to
+}
+
+// define adds a name for agent.
+func (d *Defined) define(agent string, entry Entry) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		names = &defined{}
+		d.agents[agent] = names
+	}
+	if names.own >= DefinedLimit {
+		return fmt.Errorf("this agent has made %d definitions, the most nib keeps", DefinedLimit)
+	}
+	names.own++
+	names.list = append(names.list, definition{entry, d.Now().UnixNano()})
+	return nil
+}
+
+// visible are the names agent sees, the latest of each name, in the order they were first defined.
+func (d *Defined) visible(agent string) []Entry {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		return nil
+	}
+	var entries []Entry
+	at := map[string]int{}
+	for _, entry := range names.list {
+		if i, ok := at[entry.Name]; ok {
+			entries[i] = entry.Entry
+			continue
+		}
+		at[entry.Name] = len(entries)
+		entries = append(entries, entry.Entry)
+	}
+	return entries
+}
+
+// View is what one agent sees: the server's table with the names visible to the agent laid over it. Each lookup reads the names as they are
+// then, so a name works from the moment it is defined.
+type View struct {
+	static  *Table
+	defined *Defined
+	agent   string
+}
+
+// For is the view of agent, whose definitions go to defined.
+func (t *Table) For(defined *Defined, agent string) *View {
+	return &View{static: t, defined: defined, agent: agent}
+}
+
+// table is the static table with the agent's names added.
+func (v *View) table() *Table {
+	visible := v.defined.visible(v.agent)
+	if len(visible) == 0 && v.static != nil {
+		return v.static
+	}
+	table := &Table{}
+	if v.static != nil {
+		table.Base = v.static.Base
+		table.Entries = slices.Clone(v.static.Entries)
+	}
+	table.Entries = append(table.Entries, visible...)
+	return table
+}
+
+// Expand turns a leading ~name/ (or a bare ~name) into its directory; ok is false when input names none.
+func (v *View) Expand(input string) (string, bool) { return v.table().Expand(input) }
+
+// Display is canonical under the deepest named directory holding it; ok is false when none does.
+func (v *View) Display(canonical string) (string, bool) { return v.table().Display(canonical) }
+
+// Home is the directory of name; ok is false when it names none.
+func (v *View) Home(name string) (string, bool) { return v.table().Home(name) }
+
+// Entries are every name the agent sees: the server's, then its own and inherited ones.
+func (v *View) Entries() []Entry { return slices.Clone(v.table().Entries) }
+
+// Define makes name stand for directory, an absolute path, for this agent and the agents it spawns from now on. A name is lowercase letters,
+// digits and dashes starting with a letter; a user's name on this machine, whose home ~name already means, and a name of the server's own
+// table are refused. directory must be an existing directory; it is kept canonical.
+func (v *View) Define(name, directory string) error {
+	switch {
+	case !valid.MatchString(name):
+		return errors.New("a name is lowercase letters, digits and dashes, starting with a letter")
+	case v.static != nil && slices.ContainsFunc(v.static.Entries, func(e Entry) bool { return e.Name == name }):
+		return fmt.Errorf("~%s is one of nib's own named directories, which cannot be redefined", name)
+	case isUser(name):
+		return fmt.Errorf("%s is a user on this machine, whose home ~%s already names", name, name)
+	case !filepath.IsAbs(directory):
+		return errors.New("the directory must be an absolute path")
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return fmt.Errorf("%s does not exist", directory)
+	}
+	if info, err := os.Stat(canonical); err != nil || !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", directory)
+	}
+	return v.defined.define(v.agent, Entry{name, canonical})
+}

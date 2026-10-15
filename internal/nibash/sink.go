@@ -1,0 +1,435 @@
+package nibash
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/js"
+)
+
+const (
+	// Output past either limit keeps its first headRows and last tailRows rows; the whole goes to a log.
+	budgetLines = 400
+	budgetBytes = 30 * 1024
+	headRows    = 100
+	tailRows    = 200
+	// A decider keeps decidedHead and decidedTail rows and chooses the middle, up to headRows+tailRows rows and budgetBytes in all; each
+	// passage it picks is widened by pickContext rows on both sides.
+	decidedHead = 30
+	decidedTail = 100
+	pickContext = 3
+	rowLimit    = engine.LineLimit
+	// collapseAfter is how long plain output gets before repeats in it collapse.
+	collapseAfter = 20
+)
+
+// logLimit caps a log, so a runaway program cannot fill the disk; a variable so a test can reach it.
+var logLimit = 64 * 1024 * 1024
+
+// sink is the terminal: what reaches the model. It takes records from nib commands and bytes from everything else, in the order they come.
+type sink struct {
+	mu      sync.Mutex
+	entries []entry
+	facts   []func() string
+}
+
+type entry struct {
+	record *record
+	bytes  []byte
+}
+
+func (s *sink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := len(s.entries); n > 0 && s.entries[n-1].record == nil {
+		s.entries[n-1].bytes = append(s.entries[n-1].bytes, p...)
+	} else {
+		s.entries = append(s.entries, entry{bytes: bytes.Clone(p)})
+	}
+	return len(p), nil
+}
+
+func (s *sink) add(r record) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := r
+	s.entries = append(s.entries, entry{record: &copied})
+}
+
+// fact adds a line computed when the call ends, after every stage has finished.
+func (s *sink) fact(f func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.facts = append(s.facts, f)
+}
+
+// item is one rendered unit before budgeting: an anchored row of a file, or a plain line. first and last are the log lines it stands for.
+type item struct {
+	source      *engine.Source
+	line        int
+	text        string
+	anchor      bool
+	marker      string
+	gap         bool
+	plain       bool
+	first, last int
+}
+
+// plainLines splits program bytes into display lines: a carriage-return overwrite keeps the line's final text, colors go, invalid UTF-8 shows
+// as U+FFFD.
+func plainLines(data []byte) []string {
+	text := strings.ToValidUTF8(string(data), "\ufffd")
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" && len(data) == 0 {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if at := strings.LastIndex(line, "\r"); at >= 0 {
+			line = line[at+1:]
+		}
+		lines[i] = engine.PlainText(line)
+	}
+	return lines
+}
+
+// decision is what a decider needs to know about a call besides its output.
+type decision struct {
+	decider  decider.Decider
+	command  string
+	purpose  string
+	exit     int
+	timedOut bool
+}
+
+// render turns what the sink holds into the tool result, records the anchored rows it shows as seen, and writes the whole output to a log when
+// the budget cuts it or a row is too long to show whole.
+func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory, d decision) string {
+	s.mu.Lock()
+	facts := s.facts
+	s.mu.Unlock()
+	rows, raw := s.collect(e, ctx)
+	rows, footer := fit(ctx.Ctx, rows, raw, logs, d)
+	// Only rows that are shown count as seen.
+	seen := map[*engine.Source][]int{}
+	var texts []string
+	for _, r := range rows {
+		texts = append(texts, r.text)
+		if r.anchor {
+			seen[r.source] = append(seen[r.source], r.line)
+		}
+	}
+	for source, lines := range seen {
+		e.Seen(ctx, source.Canonical, *source.View, lines, nil)
+	}
+	texts = append(texts, footer...)
+	out := strings.Join(texts, "\n")
+	var extra []string
+	for _, f := range facts {
+		if text := f(); text != "" {
+			extra = append(extra, text)
+		}
+	}
+	if len(extra) > 0 {
+		if out != "" {
+			out += "\n"
+		}
+		out += strings.Join(extra, "\n")
+	}
+	return out
+}
+
+// fit brings rows within the budget and saves the log when it cuts them or a row was cut at rowLimit; footer explains cut rows.
+func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d decision) ([]row, []string) {
+	over := len(rows) > budgetLines || size(rows) > budgetBytes
+	if !over && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
+		return rows, nil
+	}
+	log := logs.save(raw)
+	if over {
+		rows = shape(ctx, rows, log, d)
+	}
+	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
+		return rows, nil
+	}
+	if log.path == "" {
+		return rows, []string{"[cut rows: N is the row's line in the whole output, which could not be saved]"}
+	}
+	return rows, []string{fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)}
+}
+
+// collect lays out what the sink holds as rows, each with the log lines it stands for, and the log's text.
+func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
+	s.mu.Lock()
+	entries := s.entries
+	s.mu.Unlock()
+	var items []item
+	// raw is the log: every entry's text, a line break added where a record follows bytes that did not end one, as the rows break there.
+	var raw strings.Builder
+	newlines := 0
+	write := func(text string) {
+		raw.WriteString(text)
+		newlines += strings.Count(text, "\n")
+	}
+	open := func() bool { return raw.Len() > 0 && !strings.HasSuffix(raw.String(), "\n") }
+	var plain []engine.PlainLine
+	var plainAt []int
+	flushPlain := func() {
+		if len(plain) == 0 {
+			return
+		}
+		// Program output collapses only exact repeats, since lines that differ in a number may differ in what matters, and only when there is
+		// enough of it that collapsing pays.
+		rows := plain
+		if len(plain) > collapseAfter {
+			rows, _ = engine.Compress(plain, false)
+		}
+		// A row stands for the log lines from its own to the next row's, which covers what a collapsed run left out.
+		end := plainAt[len(plainAt)-1]
+		for k, r := range rows {
+			first, last := plainAt[r.At-1], end
+			if k+1 < len(rows) {
+				last = plainAt[rows[k+1].At-1] - 1
+			}
+			items = append(items, item{text: r.Text, plain: true, first: first, last: max(first, last)})
+		}
+		plain, plainAt = nil, nil
+	}
+	for _, en := range entries {
+		if en.record == nil {
+			first := newlines + 1
+			if bytes.IndexByte(en.bytes, 0) >= 0 {
+				flushPlain()
+				write(string(en.bytes))
+				last := newlines
+				if open() {
+					last++
+				}
+				items = append(items, item{text: fmt.Sprintf("[binary output, %d bytes; not shown]", len(en.bytes)), plain: true, first: first, last: max(first, last)})
+				continue
+			}
+			for i, line := range plainLines(en.bytes) {
+				plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: line})
+				plainAt = append(plainAt, first+i)
+			}
+			write(string(en.bytes))
+			continue
+		}
+		r := en.record
+		if open() {
+			write("\n")
+		}
+		at := newlines + 1
+		write(r.text + "\n")
+		if r.separator {
+			continue
+		}
+		if r.origin == nil {
+			plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: engine.PlainText(r.text)})
+			plainAt = append(plainAt, at)
+			continue
+		}
+		flushPlain()
+		marker := ""
+		if r.match {
+			marker = "*"
+		} else if r.context {
+			marker = " "
+		}
+		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, first: at, last: at})
+	}
+	flushPlain()
+	return s.layout(e, ctx, items), raw.String()
+}
+
+func size(rows []row) int {
+	n := 0
+	for _, r := range rows {
+		n += len(r.text) + 1
+	}
+	return n
+}
+
+// row is one rendered row; header is the index of the file header an anchored row sits under, -1 for a plain row or a header itself. first and
+// last are the log lines it stands for, 0 for a row of nib's own such as a file header; capped marks a plain row cut at rowLimit.
+type row struct {
+	text        string
+	header      int
+	source      *engine.Source
+	line        int
+	anchor      bool
+	plain       bool
+	capped      bool
+	first, last int
+}
+
+// layout groups anchored rows under their file's header and checks each against the latest version, so an N: row is always a real line.
+// A plain row too long to show whole is cut in read's bracketed form, numbered with its log line, so it never looks like an anchor.
+func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row {
+	var rows []row
+	var current *engine.Source
+	headerAt := -1
+	previous := 0
+	for _, it := range items {
+		if it.plain {
+			current = nil
+			text, capped := it.text, false
+			if js.Len(text) > rowLimit {
+				text, _ = engine.Row(it.first, text, rowLimit)
+				capped = true
+			}
+			rows = append(rows, row{text: text, header: -1, plain: true, capped: capped, first: it.first, last: it.last})
+			continue
+		}
+		source := it.source
+		if current != source {
+			current = source
+			previous = 0
+			rows = append(rows, row{text: header(e, ctx, source), header: -1})
+			headerAt = len(rows) - 1
+		}
+		if previous != 0 && it.line != previous+1 && it.line != previous {
+			rows = append(rows, row{text: "...", header: headerAt})
+		}
+		previous = it.line
+		content, latest := lineOf(e, ctx, source, it.line)
+		if latest {
+			text, anchor := engine.Row(it.line, content, rowLimit)
+			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, first: it.first, last: it.first})
+			continue
+		}
+		shown := engine.Visible(content)
+		if len([]rune(shown)) > rowLimit {
+			shown = string([]rune(shown)[:rowLimit]) + "..."
+		}
+		rows = append(rows, row{text: fmt.Sprintf("%s%d|%s", it.marker, it.line, shown), header: headerAt, first: it.first, last: it.first})
+	}
+	return rows
+}
+
+// header is a file's [DISPLAY#TAG] line, or [DISPLAY] when nib could not hold it as one version.
+func header(e *engine.Engine, ctx *engine.Context, source *engine.Source) string {
+	if source.View == nil {
+		return fmt.Sprintf("[%s] (not anchorable: over 2 MiB, binary or changing)", source.Display)
+	}
+	if latest := e.Latest(ctx, source.Canonical); latest == nil || latest.Key != source.View.Key {
+		return fmt.Sprintf("[%s] (changed since this command read it; read it again to edit)", source.Display)
+	}
+	return fmt.Sprintf("[%s#%s]", source.Display, source.View.Tag)
+}
+
+// lineOf is a source line's text and whether the session still holds that version as the latest, which makes the row an anchor.
+func lineOf(e *engine.Engine, ctx *engine.Context, source *engine.Source, line int) (string, bool) {
+	if source.View == nil {
+		text := ""
+		_ = source.Lines(func(n int, t string) bool {
+			if n == line {
+				text = t
+				return false
+			}
+			return true
+		})
+		return text, false
+	}
+	if line < 1 || line > len(source.View.Lines) {
+		return "", false
+	}
+	content := source.View.Lines[line-1]
+	latest := e.Latest(ctx, source.Canonical)
+	return content, latest != nil && latest.Key == source.View.Key
+}
+
+// fixedCut keeps the first headRows and last tailRows rows, with a note between them that may carry why no decider chose (because), and
+// repeats the file header the tail starts under.
+func fixedCut(rows []row, log saved, because string) []row {
+	total := len(rows)
+	if total <= headRows+tailRows {
+		return rows
+	}
+	start := total - tailRows
+	kept := append([]row{}, rows[:headRows]...)
+	var header []row
+	if h := rows[start].header; h >= headRows {
+		header = append(header, rows[h])
+	}
+	shown := headRows + len(header) + tailRows
+	clauses := []string{leftOut(rows[headRows:start])}
+	if because != "" {
+		clauses = append(clauses, because)
+	}
+	kept = append(kept, row{text: closing(shown, log, clauses), header: -1})
+	kept = append(kept, header...)
+	return append(kept, rows[start:]...)
+}
+
+// logDirectory holds a session's logs in a private directory.
+type logDirectory struct {
+	mu   sync.Mutex
+	path string
+	next int
+}
+
+func newLogDirectory() *logDirectory {
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		base = filepath.Join(os.TempDir(), fmt.Sprintf("nib-%d", os.Getuid()))
+	} else {
+		base = filepath.Join(base, "nib")
+	}
+	return &logDirectory{path: base}
+}
+
+// file is a new log file's path, creating the private directory first.
+func (l *logDirectory) file(kind string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := os.MkdirAll(l.path, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(l.path, 0o700); err != nil {
+		return "", err
+	}
+	l.next++
+	return filepath.Join(l.path, fmt.Sprintf("%d-%s-%d.log", os.Getpid(), kind, l.next)), nil
+}
+
+// saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds.
+type saved struct {
+	path         string
+	lines, holds int
+}
+
+// save writes text to a new log, capped at logLimit.
+func (l *logDirectory) save(text string) saved {
+	s := saved{lines: lineCount(text)}
+	path, err := l.file("output")
+	if err != nil {
+		return s
+	}
+	if len(text) > logLimit {
+		text = text[:logLimit]
+	}
+	if os.WriteFile(path, []byte(text), 0o600) != nil {
+		return s
+	}
+	s.path, s.holds = path, lineCount(text)
+	return s
+}
+
+// lineCount counts lines as sed does: a last line without its line break counts.
+func lineCount(text string) int {
+	n := strings.Count(text, "\n")
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		n++
+	}
+	return n
+}

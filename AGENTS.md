@@ -1,46 +1,61 @@
 # AGENTS.md
 
-nib is a stdio MCP server that gives coding agents hashline file tools: `read`, `grep`, `find`, `edit` (a line-anchored patch language) and `write`. See `README.md` for the full tool behavior; keep it in sync when behavior changes.
+nib is a stdio MCP server that gives coding agents hashline file tools: `read`, `grep`, `find`, `edit` (a line-anchored patch language) and `write`, plus `nibash`, a shell whose own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n` and `wc` print the same anchored rows. See `README.md` for the full tool behavior and `docs/design-nibash.md` for the design of the shell and the Go port; keep them in sync when behavior changes.
 
 ## Stack
 
-- TypeScript run directly by Bun (no build step). Bun APIs are used on purpose (`Bun.hash.xxHash32`, `Bun.spawn`).
-- `rg` (ripgrep) must be on `PATH` for `grep`, `find` and their tests.
-- Dependencies: `@modelcontextprotocol/sdk`, `zod`, `diff`. Versions are pinned in `package.json`.
+- Go, one binary (`cmd/nib`). Dependencies: `mvdan.cc/sh/v3` (the shell's parser and interpreter), `github.com/modelcontextprotocol/go-sdk` and `modernc.org/sqlite` (pure Go, for reading OpenCode's database read-only), pinned in `go.mod`.
+- `rg` (ripgrep) must be on `PATH` for `grep`, `find`, nibash's recursive searches and their tests; `bwrap` for nibash's programs in sandbox mode and for the benchmark.
+- The black-box tests and the benchmark are TypeScript on Bun (`@modelcontextprotocol/sdk`, `diff`).
 
 ## Commands
 
 ```sh
+go test ./...   # Go unit tests; must pass before committing
 bun install
-bun test        # all tests; must pass before committing
-bun typecheck   # tsgo --noEmit; must be clean
+bun test        # the black-box suites, against the binary over MCP; must pass before committing
+bun typecheck   # go vet and tsgo --noEmit; must be clean
+gofmt -l .      # must print nothing
 ```
 
 `bun bench/run.ts` runs real model sessions through Claude Code and OpenCode and costs money. Do not run it unless asked; `--plan`, `--validate`, `--reparse`, `--recheck` and `--report` are free and make no model calls. Its checks run in bwrap (bubblewrap), which must be installed. Its output in `bench/results/` and `bench/.cache/` is ignored by git; never commit it. A change to a task's prompt or to `bench/runners.ts` setup must keep stored results honest: prompts are part of a run's identity, a setup change needs `SETUP` in `bench/runners.ts` bumped, and a change to verification that can turn a verdict needs `VERIFY` in `bench/store.ts` bumped.
 
+`NIB_CORPUS=FILE go test ./internal/nibash -run Corpus -v` measures nibash against real commands (`research/bash-usage.ts --dump FILE` writes them, where that untracked folder exists).
+
+`go test ./internal/nibash -run Captures -v` is the offline check of the deciders: it renders the program outputs in `internal/nibash/testdata/captures/` with each decider and reports the needed lines and rows each keeps, the OpenRouter decider answering from the answers recorded in `testdata/captures/decider/`. A change to the questions or the windows needs them recorded again with `NIB_DECIDER_RECORD=1 NIB_DECIDER_KEY=...`, which calls OpenRouter and costs about two cents; do not run that unless asked.
+
 ## Layout
 
-| File | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `src/main.ts` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib --version`; each loads only its own modules |
-| `src/hook.ts` | Claude Code PreToolUse hook: shell parsing, the nib call a guarded command or built-in tool stands for, refuse-once state |
-| `src/setup.ts` | `nib setup`: adds the server, hook and approval to project or user configs, never replacing an existing entry |
-| `src/server.ts` | MCP tool registration, model-facing descriptions, roots and elicitation |
-| `src/engine.ts` | reads (selectors, outlines, skip rules, budget, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging (checks, SUB, blocks, MV, CP), refusals and reapply tokens, row maps, atomic publication, writes, workspace checks |
-| `src/snapshots.ts` | file tags, per-session snapshot store with seen and known lines, line remapping, shifted-line rescue |
-| `src/patch.ts` | patch language parser |
+| `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib --version` |
+| `internal/server/` | MCP tool registration, model-facing descriptions and lean schemas, argument recovery with notes, roots and elicitation |
+| `internal/engine/` | reads (selectors, outlines, skip rules, budget, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging (checks, SUB, blocks, MV, CP), refusals and reapply tokens, row maps, atomic publication, writes, workspace checks, the API nibash's commands read files through |
+| `internal/nibash/` | the shell: per-session interpreter, classification of nib's own commands, record links between them, the commands, the terminal sink and rendering, the cut and the assembly of a decider's choice, real programs in process groups, jobs, the sandbox |
+| `internal/decider/` | which rows of a cut nibash output the model sees: the decider kinds and every `NIB_DECIDER_*` variable, keywords, the OpenRouter decision model, its answer cache |
+| `internal/names/` | named directories (`~name/`): `nib.json`, JVM source roots, the names agents define at runtime (`hash -d`) and the inheritance of them by later subagents, per-agent views, expansion, display, the instructions table |
+| `internal/snapshots/` | per-session snapshot store with seen and known lines and when each was first seen, copies as of a moment for forks, line remapping, shifted-line rescue |
+| `internal/patch/` | patch language parser (pinned against the TypeScript parser by `testdata/corpus.json`) |
+| `internal/diff/` | port of jsdiff's `diffArrays` (pinned against jsdiff by `testdata/jsdiff.json`) |
+| `internal/tag/` | the file tag (xxHash32) |
+| `internal/js/` | JavaScript string semantics (UTF-16 lengths and offsets, JS whitespace) that nib's output rules were defined with |
+| `internal/setup/`, `internal/hook/`, `internal/hookstate/` | `nib setup` (server, approval, hook matchers, deny rules; order-preserving JSON); the hook for the built-in `Read` and for nib's own tools, which reads a subagent's parent from Claude Code's meta file and its spawn moment from the parent's transcript; the hook's private state, the per-call agent records it hands the server and the spawn moments it found |
+| `internal/opencode/` | read-only lookups in OpenCode 2's sqlite database, found by OpenCode's own environment: a session's parent, whether it is a fork, and its spawn moment |
+| `test/` | `engine`, `patch` and `server` suites against the binary (`support/engine.ts` gives them the engine's interface over MCP), and the `bench` tests |
 | `bench/` | benchmark: tasks and checks, fixture (nib at a pinned commit plus generated files), Claude Code and OpenCode runners, cached run store, HTML report |
-| `test/` | `engine`, `patch`, `server` (MCP client and stdio), `hook`, `setup` and `bench` (parsers, harness setup, sessions and stops through fake harnesses, store, fixture, confined verification, report; no model calls) tests |
 
 ## Rules
 
 - Every behavior change needs a test. Tests use temporary directories; never touch real user files.
+- A decider only chooses among real rows of plain output, never nib's own file rows; every gap names the log lines it leaves out, and the closing note says who chose. Output leaves the machine only with `NIB_DECIDER=openrouter`, and under `NIB_SANDBOX=1` only with `NIB_DECIDER_SANDBOX=1` as well; any other combination stops nib at startup.
 - The file tag must stay identical to oh-my-pi's `file_hash` (4 uppercase hex: xxHash32 of BOM-free text with trailing spaces, tabs and CRs stripped per line, masked to 16 bits). A test pins known vectors.
-- Tool descriptions and the server `instructions` must stay under 2048 characters (clients truncate them); a test checks this.
+- Tool descriptions and the server `instructions` must stay under 2048 characters (clients truncate them); a test checks this, and the size of all definitions together.
 - Writes must stay atomic (stage, then rename or exclusive link), preserve BOM, line endings, final newline, mode and ownership, and refuse hardlinked targets.
 - Confirming edits outside the client's MCP roots is opt-in (`NIB_CONFIRM_OUTSIDE_ROOTS=1`). When it is on, such edits must go through `authorize` (elicitation) and are never written silently.
-- `NIB_SANDBOX=1` confines every tool, reads included, to the roots. Each path is judged after symlinks are resolved (a new path by its nearest existing parent) and before anything is created for it; ripgrep must never be told to follow links.
+- `NIB_SANDBOX=1` confines every tool, reads included, to the roots. Each path is judged after symlinks are resolved (a new path by its nearest existing parent) and before anything is created for it; ripgrep must never be told to follow links. nibash's own commands and its interpreter's file access (redirects, `source`, globs, `cd`) are confined the same way; real programs run in bwrap, where system directories and the toolchain on `PATH` are readable but only the roots are writable.
 - Searches follow git's ignore rules only inside repositories, and a nested repository its parent ignores is still searched by its own rules (only the parent's own worktrees stay hidden); `git` is optional, and without it ripgrep's walk is all there is.
-- The hook refuses only what it can name an exact nib call for, and an unchanged resend always runs, so a session without nib's server keeps its files.
-- Rows shown as `N:TEXT` must be complete, real file lines: anything cut, color-stripped or synthetic uses a different prefix so it can never be used as an edit anchor. The one exception is `N~TEXT` row-map rows, and only for lines the agent wrote or saw, whose whole content it already knows. Plain read rows carry no number at all; removed lines in a `path#TAG` read (`-|TEXT`) and grep replace previews (`>N|TEXT`) never use the `N:` form.
-- Match the surrounding code style: no semicolons, double quotes, short one-line doc comments that explain surprises, not the obvious.
+- nibash never lies: a command runs as nib's own only where it does what the system program would mean, and its output differs only in form at the model's end. Anything else, an option it lacks included, runs the real program, and its description states every difference from bash.
+- nib never writes to a harness's own data: OpenCode's database is opened read-only (`mode=ro`, `query_only`), Claude Code's transcripts and meta files only read, and anything unexpected in them leaves an agent on its own rather than guessed.
+- The hook refuses only the built-in `Read` of files nib reads, naming the exact nib call, and an unchanged resend always runs, so a session without nib's server keeps its files.
+- Rows shown as `N:TEXT` must be complete, real file lines: anything cut, color-stripped or synthetic uses a different prefix so it can never be used as an edit anchor. The one exception is `N~TEXT` row-map rows, and only for lines the agent wrote or saw, whose whole content it already knows. Plain read rows carry no number at all; removed lines in a `path#TAG` read (`-|TEXT`), grep replace previews (`>N|TEXT`) and nibash rows that do not match the session's latest version (`N|TEXT`) never use the `N:` form.
+- Match the surrounding code style: Go as `gofmt` writes it, TypeScript with no semicolons and double quotes; short one-line doc comments that explain surprises, not the obvious.

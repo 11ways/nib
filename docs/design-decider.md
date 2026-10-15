@@ -1,0 +1,195 @@
+# Design: a decider for long nibash output
+
+Status: implemented. Phase 1 (log-line notes, the plain-row cap, the decider interface, keywords as the default, the offline check) and phase 2 (the OpenRouter decision model, opt-in only) are both in. Revised on 2026-10-15 after a review; section 15 answers it point by point. Research figures name their source or measurement. It replaces section 11 of `docs/design-nibash.md`.
+
+## 1. Goal and rules
+
+**Goal:** when nibash output is too long to show whole, choose which rows the model sees by what they are for, instead of always the first 100 and last 200. Same trigger and budget as before (over 400 rows or 30 KiB; at most 300 rows and 30 KiB shown); a decider may only change which rows of an already cut output are shown (user decision 1).
+
+**Rules for every decider:**
+1. **Choices only.** A decider returns ranges of rows and scores. Every row shown is a row of the output, unchanged; every note is a fixed template with numbers, paths and the decider's name filled in.
+2. **Every cut is announced** at each gap with the log lines it leaves out, and a closing note says who chose.
+3. **The whole output stays in the log.**
+4. **Output leaves the machine only when asked:** `NIB_DECIDER=openrouter`, and under `NIB_SANDBOX=1` also `NIB_DECIDER_SANDBOX=1`; any other combination with `openrouter` stops nib at startup.
+5. **Failure is never worse than keywords:** a failed model leaves keywords to decide, with the reason in the note.
+
+**Non-goals:** summaries; rewriting, reordering or merging rows; background jobs (their output goes only to a log); changing the budget (a lower threshold is a later benchmark arm); nib's own file rows (section 4).
+
+## 2. Findings: decision models on OpenRouter
+
+- **Endpoint:** `POST https://openrouter.ai/api/alpha/decisions` (`createApiAlphaDecisions` in [openapi.json](https://openrouter.ai/openapi.json)). Request: `model`, `state` (any JSON), `questions` (id to question), optional `provider`. A `noul` question has `instructions` and optional `criteria {true, false}` and is answered `{type, noul}`, the probability of yes. Response: `{id, model, provider, answers, usage: {input_tokens, output_tokens, cost}}`; `model` names the dated snapshot (`typesafe/jev-1.14-20261014`). Errors: `{"error": {"code", "message"}}` with 400, 401, 402, 403, 404, 413, 429 (TypeSafe sends `retry-after`), 500, 502, 503. The path says alpha and the schema changed several times, so decoding is lenient (section 8.6).
+- **Models** (`GET /api/v1/models?output_modalities=decisions`, 24 entries on 2026-10-15). One schema worked on all seven called. On a build log as 16 windows (Tests A and B): indexing an array (`windows[i]`) defeated most models; named fields (`output.w0`...) worked. jev-1.14 answered in 0.26 to 0.5 s per request, billed the state once (8,349 tokens against about 100,000 for pplx, liquid and solar on the same request), costs $0.042/M input, has a ZDR endpoint, and ranked a noisy log right where mercury-decide did not (Test D). Hence **`typesafe/jev-1.14`, pinned** (user decision 5): thresholds are tuned against one version.
+- **Limits:** requests over about 32,000 bytes of text run in Jev's slower, less accurate long-context mode ([Jev hub](https://openrouter.ai/docs/guides/community/jev)); identical calls move probabilities by up to 0.08 ([cookbook](https://openrouter.ai/docs/cookbook/building-agents/gate-tool-calls-with-jev)). The thresholds (0.5, 0.7) come from single calls per case, so a window near a threshold can flip between runs: known nondeterminism, which the cache removes for repeated outputs.
+- **Privacy flags:** `provider: {"zdr": true, "data_collection": "deny"}` routes only to endpoints that retain nothing and do not train; every decision endpoint listed is ZDR, and a live Jev call with these flags succeeded.
+
+## 3. Findings: the offline check
+
+`go test ./internal/nibash -run Captures -v` renders each capture in `internal/nibash/testdata/captures/` through the real renderer (`collect`, then `fit`) with each decider, and counts the needed log lines some shown row stands for. Four captures are the benchmark's program tasks, run offline from a fixture copy; two are made up (`generate.ts`) as cases where keywords cannot work (user decision 6). The OpenRouter arm answers from recorded real answers in `testdata/captures/decider/`, so the check is deterministic and free; recording them cost $0.0161 in all.
+
+| capture | needed lines | fixed | keywords | jev-1.14 and keywords |
+| --- | --- | --- | --- | --- |
+| build-log: 3,013 lines, one error, 106 warnings | 1 | 0, 300 rows, 12.5 KB | **1**, 137 rows, 6.0 KB | **1**, 161 rows, 7.0 KB; 6 requests, 1.2 s, $0.0024 |
+| type-errors: under budget | 90 | 90 (whole) | 90 | 90 (not asked) |
+| failing-test: under budget, one 20,157-char row | 3 | 3, now 2.9 KB instead of 21 KB (row cap) | 3 | 3 |
+| log-stats via a real program; purpose is a count | 904 | 43, 300 rows | 30, 296 rows | 43, 300 rows: whole judged 0.89, fixed cut and "filter or count" note; 8 requests, 0.5 s, $0.0058 |
+| noisy-service (made up): cause names no problem, 327 unrelated `ERROR` lines | 2 | 0 | 0 | **1** of 2; 8 requests, 1.2 s, $0.0057 |
+| long-run (made up): 2,393 passing tests, many named for errors, one failure marked with U+2715 | 2 | 0 | 0 | **2**; 6 requests, 0.4 s, $0.0018 |
+
+Conclusions:
+- **Keywords never lose a needed line the fixed cut keeps** on any capture with specific needed lines, and fix build-log. So **keywords are the default** (user decision 2). On log-stats, a count no selection serves, keywords keep 30 sample lines against fixed's 43; neither helps, and the note points at the log.
+- **Jev never loses a line keywords keep** and wins on both made-up captures, so the review's gate for phase 2 (a capture where keywords lose a needed line Jev keeps) is met, but only on made-up output. On noisy-service it ranked the cause window 0.93, below the windows full of the 503 symptom (0.95 to 0.97), and the routing line was kept only because the next window's widening reached it; "why did X start" favours symptoms. Phase 2 stays opt-in and is not recommended until the benchmark arms (section 13) show it on real runs.
+
+## 4. Where it acts
+
+`sink.render` lays out rows (`collect`), then `fit` cuts when over budget: with a decider and only plain rows, `shape` asks the decider about the rows between the first 30 and the last 100 and `assemble` builds the result; otherwise `fixedCut`. The decider runs under the MCP call's context (not the command's, which may have expired) with its own deadline. Rows from nib's own commands (`[PATH#TAG]` runs) are never sent and never chosen (user decision 7): they are file content the model asked for, what is shown of them counts as seen for `edit`, and keeping them out limits the privacy question to program output. Output mixing both is cut the fixed way.
+
+## 5. Log lines and long rows (both bugs found while measuring)
+
+**Log lines (review B2).** Notes used to cite rendered rows, while the log holds raw lines; after collapsing, binary output or records they differ (log-stats: "8496 rows; rows 101-8296" for 9,003 lines). Now every row carries the first and last log line it stands for, computed while the log is written: a bytes entry's lines from the log's line count when it is appended; a collapsed group's rows from `PlainLine.At`, a row standing for the lines up to the next row's (Compress's note and echo rows keep `At`); a binary chunk from its own line breaks; a separator record writes a line and no row; and where a record follows bytes that did not end their line (`printf foo; cat x`), the log gets a line break, as the rows have one, so no log line holds two rows. When the log hits its 64 MiB cap the closing note says where it stops. Tests: a sink with a binary chunk, a separator, an unterminated chunk before a record and a collapsed run, where every log line belongs to exactly one row and `sed -n A,Bp` on each gap returns exactly the left-out lines.
+
+**Long rows (review M6).** Plain rows had no length limit. A plain row over `engine.LineLimit` (2,000) is now cut in read's bracketed non-anchor form, numbered with its log line (`[2 cut at 2000 of 20157 chars]|...`), with a footer `[cut rows: N is the row's line in the whole output; read LOG:N with maxLineLength to see one whole]`; the log is saved whenever a row is cut.
+
+## 6. Assembly
+
+Constants in `sink.go`: `decidedHead` 30, `decidedTail` 100, `pickContext` 3, next to `headRows` and `tailRows`.
+1. Keep the first 30 and last 100 rows.
+2. Take picks scoring at least `PickThreshold` (0.5), highest first (ties in the decider's order), each widened by 3 rows; add each while the result stays within 300 rows and 30 KiB, else count it as not fitting.
+3. If no pick fits or reaches the threshold: the fixed cut, saying the decider found nothing.
+4. If the model judged that the purpose needs every line (`Whole` at least 0.7): the fixed cut, saying to filter or count the log instead.
+5. Rows stay in output order, with a gap note at every gap.
+
+## 7. Notes
+
+```
+[nibash: log lines 31-1179 left out]
+[nibash: 161 rows shown of 3,013 log lines; typesafe/jev-1.14 and keywords chose the middle for your description; whole output: LOG]
+[nibash: 137 rows shown of 3,013 log lines; keywords chose the middle; whole output: LOG]
+[nibash: 300 rows shown of 5,000 log lines; log lines 101-4800 left out; whole output: LOG]
+[nibash: 300 rows shown of 5,000 log lines; log lines 101-4800 left out; keywords found nothing in them; whole output: LOG]
+[nibash: 300 rows shown of 9,003 log lines; log lines 101-8803 left out; typesafe/jev-1.14 and keywords judged that your description needs every line, so filter or count the whole output instead; whole output: LOG]
+```
+Optional clauses of the closing note: `the decision model failed (REASON), so keywords chose the middle`; `2 more passages it chose did not fit (log lines 328-334, 628-634)`; `log lines 731-755 were not judged (OpenRouter 502)` or `(over the 8-request limit)`; `the log stops at its 64 MiB limit, in log line N`; `the whole output could not be saved`. The model's purpose is `for your description`, or `for the failure` without one; keywords read no purpose, so their note names none. `REASON` is one of `timeout after 2s`, `OpenRouter N`, `invalid answer`, `network error`, `cancelled`, `the decision model is off for this session after OpenRouter 401`.
+
+## 8. The decider package
+
+`internal/decider` is the vocabulary's home (review M8): `Kind` (`fixed`, `keywords`, `openrouter`) with its description clause as a fact on the member, `Parse(getenv)` for every `NIB_DECIDER_*` variable plus `NIB_SANDBOX`, and `Config.New()`. `cmd/nib` parses at startup, prints an error and exits 1 on a bad configuration, and passes the decider to `nibash.New(...).Deciding(d)`; a nil decider is the fixed cut.
+
+```go
+type Input struct { Command, Purpose string; Exit int; TimedOut bool; Rows []string }
+type Pick struct { Range; Score float64 }
+type Choice struct {
+	Picks    []Pick
+	Judged   bool    // whether Whole was answered (review: no NaN sentinel)
+	Whole    float64
+	Unjudged []Unjudged // ranges with the reason no answer covers them
+	Who      string  // "keywords", or "typesafe/jev-1.14 and keywords" (the configured id)
+	Failure  string  // why the model did not decide at all
+	Model    bool    // a model read the purpose
+	Usage    Usage
+}
+type Decider interface { Decide(context.Context, Input) Choice; Kind() Kind }
+```
+
+### 8.1 Description (review B1)
+
+`Shell.Description()` builds the nibash description from the configured kind's clause: "long output cut to its start and end" (fixed), "... its start, its end and the lines between that name errors or failures" (keywords), "... the parts between that a decision model on OpenRouter judges your description needs (keywords when it fails)" (openrouter). A Go test holds every variant under 2048 characters; the black-box suite checks the three as served.
+
+### 8.2 Keywords
+
+`Hit` in `keywords.go` is the vocabulary's only home: a problem word standing alone (`error(s)`, `fail(s|ed|ure|ures|ing)`, `panic(ked)`, `exception`, `traceback`, `fatal`, not inside paths or file names such as `src/errors.ts` or `error-handling.test.ts`), or a mark (pytest's `E `, `FAIL`, `not ok`, `Expected`/`Received`, Bun's U+2717 cross, exception class names such as `TypeError`), after removing counts of none (`0 errors`, `no failures`). `warning` is deliberately out (build-log has 106 warnings and one error). Hits score `KeywordScore` (0.5); the last hit goes first, since runners print the reason last, then the rest in order, since compilers print causes first.
+
+### 8.3 OpenRouter: what is asked
+
+- **Gate (review M4):** the model is asked only with a purpose, a nonzero status, or a timeout (`TimedOut` is passed explicitly, since `Shell.Run` reports status 0 on a timeout). A successful run without a description is cut by keywords: its wording was never measured and it would pay ~0.5 s and a request on every long successful output.
+- **Windows:** the candidate rows in windows of 25, each row cut to 400 characters for the question only, as named fields `output.w0`, `output.w1`... in output order. Requests are packed to at most 30,000 bytes of JSON (under Jev's 32,000-byte long-context switch), at most 8 per call in parallel and 16 in flight per process. Past 8, windows with keyword hits go first, then those nearest either end; the rest are named in the note as not judged.
+- **Questions:** one `noul` per window: with a purpose, "Does `output.wN` contain a line the developer needs for `purpose`?"; without one, "... needs to see to fix the failure of `command`?" (Test B's wording) or, after a timeout, "... to find out why `command` did not finish before its timeout?" (not measured). With a purpose, the first request also asks `whole`: "Does `purpose` need every line ... so that showing only some parts would mislead?". Changing the wording bumps `questionsVersion`.
+- **The command is sent as written** (user decision 3); state is `{command, purpose, exit_status, timed_out, output}`; nothing else (no `user`, `session_id`, directory or environment).
+
+### 8.4 OpenRouter: from answers to picks (reviews M3, M5)
+
+The choice is the union of the model's windows (each its `noul`) and the keyword hits at 0.5, so confident model picks rank first and a flood of hits cannot displace them, while a hit the model rated low is still kept if it fits: the target is "never loses a needed line that keywords keep", and the offline check asserts it. A failed request leaves its windows unjudged with its reason, and `Whole` unjudged if it carried that question; only when every request failed do keywords decide alone, with the reason.
+
+### 8.5 Failures, retries, session state
+
+One retry for 429, 5xx and network errors, after `Retry-After` or 200 ms, only if it fits the deadline (`NIB_DECIDER_TIMEOUT`, default 2 s for the whole decision). No retry for other 4xx or invalid answers. 401, 402 and 403 turn the model off for the server session; each later note says so. A call whose MCP context is already cancelled sends nothing. Recording took 0.4 to 1.2 s per decision with 6 to 8 parallel requests, so the 2 s deadline has some headroom but no tail-latency evidence: the timeout fallback is tested as a common path.
+
+### 8.6 Answers and the cache
+
+Responses are decoded leniently: only `answers.*.noul` and `usage` are read, and every asked id must have a number in [0, 1], else `invalid answer`. Answers are cached by SHA-256 of the question version, the endpoint URL and the whole request body (model, state, questions): 256 in memory, and with `NIB_DECIDER_CACHE` one JSON file each on disk (`0700` directory, `0600` files, written atomically). An entry holds only probabilities by window id, the snapshot, tokens and cost, never output text (a test asserts it). Entries read from disk are validated like live answers, since a cache directory under the roots is writable by sandboxed programs.
+
+## 9. Configuration
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `NIB_DECIDER` | `keywords` | `fixed`, `keywords` or `openrouter`; anything else stops nib at startup |
+| `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | (user decision 4); `openrouter` without either stops nib at startup |
+| `NIB_DECIDER_MODEL` | `typesafe/jev-1.14` | any Decisions model |
+| `NIB_DECIDER_URL` | `https://openrouter.ai/api/alpha/decisions` | tests point it at a fake |
+| `NIB_DECIDER_TIMEOUT` | `2000` | ms for the whole decision |
+| `NIB_DECIDER_CACHE` | unset | directory for answers on disk |
+| `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1`; without it nib stops at startup (review M9) |
+
+## 10. Privacy (review M7)
+
+`NIB_DECIDER=openrouter` is the user's consent to send, for each cut output: the command as written, the description, the exit status and the candidate rows. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in it; the README says so plainly. There is no secret-pattern denylist (it would be a denylist gating security). Never sent: nib's file rows, the kept start and end, the log path, the working directory. Every request carries the ZDR and no-collection flags; OpenRouter's own prompt logging is an account setting the README tells users to check.
+
+## 11. Cost and expected saving (review M2)
+
+The budget is unchanged, so a decider does not shrink what a cut output costs in the ordinary case; it can show fewer rows (build-log: 137 rows and 6.0 KB with keywords against 300 rows and 12.5 KB), about 1,600 tokens less per such cut. The main saving is the follow-up it avoids: when the needed line is cut, a model reads or greps the log, one more call and turn, roughly 1,000 tokens of result plus the turn's context. Keywords cost nothing. The OpenRouter decider costs $0.002 to $0.006 and 0.4 to 1.2 s per decided output on the captures; at a coding model's turn cost of a few cents (tens of thousands of cached context tokens per turn), one avoided follow-up per 5 to 10 decided outputs breaks even, a rough estimate to be replaced by the benchmark's measurement. Instant commands with a description (`seq 1 5000` described) pay the latency too.
+
+## 12. Testing
+
+- `internal/decider`: `Parse` (every variable, key fallback, the three startup errors); every kind builds its decider; keyword hits and misses (file names, zero counts, warnings); against `httptest` fakes: named windows in output order, `whole` once, provider flags, request size, the 8-request cap and its unjudged ranges (keyword window kept), 429 retried once, 502 retried once, 400 not retried, malformed and out-of-range answers, a partial failure, 401 turning the model off, the deadline, the gate (no request for exit 0 without a purpose, none when cancelled, a timeout judged as one), the cache (hit without a request, modes, no output text in entries, a tampered entry refused, the URL in the key), and a recorded real Jev response.
+- `internal/nibash`: rows and log lines (section 5), gap notes checked with `sed`, assembly with a fake decider (head, tail, threshold, widening, budget, order), every note template, file rows never reaching the decider, keywords end to end, the row cap, the capped log, the description per kind; the existing cut test with the new note.
+- Offline check (section 3), in `go test ./...`.
+- Black-box (`test/decider.test.ts`): keywords as the default end to end with the log checked by line; the fixed cut and its description; the OpenRouter decider against a `Bun.serve` fake under `NIB_SANDBOX=1` with `NIB_DECIDER_SANDBOX=1` (no request for `cat` of a file, the description sent as the purpose, flags, the note); the three startup errors.
+
+## 13. Benchmark changes still needed
+
+Not made here (the benchmark is being moved to OpenCode v2 in parallel):
+- **Identity:** `Identity` gains `decider?: string` (`"fixed"`, `"keywords"`, `"openrouter:typesafe/jev-1.14"`), appended to `identityKey` only when set. Since the default changed to keywords, a run without `NIB_DECIDER` is the keywords arm; the fixed arm must pass `NIB_DECIDER=fixed`.
+- **Environment:** `nibEnvironment` passes `NIB_DECIDER`; for OpenRouter also `NIB_DECIDER_SANDBOX=1` (the bench runs `NIB_SANDBOX=1`), the key and `NIB_DECIDER_CACHE=bench/.cache/decider`; `--decider fixed,keywords,openrouter` selects arms for shell-series nib jobs on program tasks.
+- **Metrics:** primary, follow-up reads of a cut output (nibash or `read` calls naming a path under the log directory, from transcripts); second, `toolChars` for nibash; then pass rate, turns, and the decider's own requests, cost and latency from the cache entries a run created.
+- **Notes:** `NOTE_PATTERNS` has no nibash pattern. Add `{ kind: "cut", pattern: /^\[nibash: (?:[\d,]+ rows shown of [\d,]+ log lines|log lines? [\d-]+ left out)[^\n]*\]$/gm }` and `{ kind: "cut", pattern: /^\[cut rows: [^\n]*\]$/gm }`, with the note kind added to `Note["kind"]`, and extend the bench test that prints every note template with these.
+- **Tasks** (from `generate.ts`), both `shell: true`:
+  - `noisy-service`: prompt "POST /v1/payments starts answering 503 partway through bun scripts/serve.ts, which replays a recorded day of traffic and exits. Find out why and fix config/routes.json so payments keep working. Do not change the script." `before` writes `scripts/serve.ts`, which prints `noisyService()`'s log built from the actual `config/routes.json` (the reload lines name its `/v1/payments` upstream and that upstream's host count), and `config/routes.json` with `"/v1/payments": "payments-v2"` and upstreams `payments` (3 hosts) and `payments-v2` (none). Solve: route `/v1/payments` to `payments`. Check: the script unchanged; `/v1/payments` names an upstream with at least one host; everything else in the file unchanged.
+  - `long-run`: prompt "bun scripts/check.ts runs the project's 2,394 checks and one fails. Find the failing check and fix the source so every check passes. Do not change the checks." `before` writes `src/duration.ts` whose `parseDuration` drops the sign (`Math.abs`), and `scripts/check.ts`, which prints `longRun()`'s output with the one real check (`parseDuration("-90s")` against -90) computed from `src/duration.ts`, printing `U+2715 ... got 90, want -90` and exiting 1 while it fails. Solve: keep the sign. Check: `scripts/check.ts` unchanged; `parseDuration` gives -90 for `"-90s"`, 90 for `"90s"` and the other fixture values.
+  - A change to `bench/runners.ts` setup for these needs `SETUP` bumped; their prompts are new identities.
+
+## 14. Known limitations
+
+- The made-up captures are the only evidence that the model beats keywords; on noisy-service it preferred symptom windows to the cause window.
+- With 300 rows of up to 2,000 characters, a fixed cut can still reach about 600 KB; only rows are capped, not the cut's total bytes. Making the fixed cut byte-aware would change what models see today on wide output and is left for a decision.
+- Thresholds were set from single calls; Jev drifts by up to 0.08 between identical calls.
+- The timeout question wording and the exit-0 behaviour with a purpose on very different outputs are not measured.
+
+## 15. Review, point by point
+
+| point | disposition |
+| --- | --- |
+| Bug 1, cut notes cite rows | done: log lines everywhere (section 5) |
+| Bug 2, plain rows unbounded | done: row cap with log line (section 5); the total bytes of a fixed cut remain (section 14) |
+| B1, description lies under fixed | done: built from the configured kind; every variant tested under 2048 |
+| B2, false one-line-per-line invariant | done: first and last log line per row, from the log's line count and `PlainLine.At`; line break added where a record follows an unterminated chunk; capped log announced; the four cases tested with `sed` |
+| M1, measurement cannot show the model's value | done: two made-up captures where keywords fail; phases split; phase 2's gate met on made-up output only, so it stays opt-in and unrecommended; bench tasks specified (section 13) |
+| M2, saving unstated | done: section 11; follow-up reads as the primary bench metric |
+| M3, model picks worse than keywords | done: union with keyword hits at 0.5; the offline check asserts the model never loses a line keywords keep |
+| M4, exit 0 without purpose | done: keywords only; `TimedOut` passed explicitly |
+| M5, all-or-nothing fallback | done: per-request unjudged ranges with reasons; `Whole` unjudged when its request failed |
+| M6, row cap in this change | done |
+| M7, secrets | done as overridden by the user: key falls back to `OPENROUTER_API_KEY`, command sent as written; cache test asserts no output text; README states that consent covers printed secrets; no denylist |
+| M8, vocabulary home | done: `internal/decider` with `Kind`, `Parse`, `Config.New`; passed to nibash in `cmd/nib` (not through `server.Options`, since the shell is built there); bench arm names listed for the bench test |
+| M9, silent sandbox downgrade | done: startup error |
+| Minor: mixed units | done: "N rows shown of M log lines" |
+| Minor: purpose echo | done: "for your description" |
+| Minor: NOTE_PATTERNS | listed (section 13) |
+| Minor: NaN sentinel | done: `Judged bool` |
+| Minor: WHO from response model | done: the configured id |
+| Minor: URL in cache key, validated entries | done |
+| Minor: keyword false hits | done: paths, file names and zero counts excluded; measured on the captures |
+| Minor: latency on instant commands | stated (section 11); the gate removes it without a description |
+| Minor: thresholds from single calls | stated (section 2) |
+| Minor: cancelled context | done: no request is sent |
+| Minor: head/tail constants | done: in `sink.go` |
+| Minor: sandboxed black-box fake, startup error tests | done |
+| Minor: 2 s deadline evidence | recorded latencies stated; the fallback is tested |

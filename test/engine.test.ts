@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, link, lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Engine, type Context } from "../src/engine"
-import { fileTag, SnapshotStore } from "../src/snapshots"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { binary, Engine, fileTag, type Context } from "./support/engine"
 
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))) })
@@ -715,28 +716,28 @@ describe("write", () => {
   test.skipIf(process.platform !== "linux")("partial staged writes under RLIMIT_FSIZE fail without touching the target", async () => {
     for (const operation of ["edit", "write"]) {
       const f = await fixture()
-      const script = `
-        import { Engine } from ${JSON.stringify(new URL("../src/engine.ts", import.meta.url).href)};
-        process.on("SIGXFSZ", () => {});
-        const engine = new Engine();
-        const ctx = { directory: ${JSON.stringify(f.directory)}, session: "test", signal: new AbortController().signal };
-        const read = await engine.read(ctx, { paths: ["file.txt"] });
-        const tag = /#([0-9A-F]{4})\\]/.exec(read.text)[1];
-        const content = "x".repeat(200_000);
-        try {
-          ${operation === "edit"
-            ? "await engine.patch(ctx, `[file.txt#${tag}]\\nPUT 1.=1:\\n+${content}`);"
-            : 'await engine.write(ctx, { path: "file.txt.new", content });'}
-          throw new Error("Expected EFBIG from the staged write");
-        } catch (error) {
-          if (error.code !== "EFBIG") throw error;
-          console.log("staged write rejected with EFBIG");
+      // The binary runs under a 1 KiB file size limit, so its staged write fails with EFBIG partway through.
+      const client = new Client({ name: "engine-test", version: "1" })
+      await client.connect(new StdioClientTransport({
+        command: "bash",
+        args: ["-c", 'ulimit -f 1; exec "$0"', await binary()],
+        cwd: f.directory,
+        env: { PATH: process.env.PATH ?? "", NIB_DIRECTORY: f.directory, NIB_SHELL: "0" },
+        stderr: "pipe",
+      }))
+      try {
+        const call = async (name: string, args: Record<string, unknown>) => {
+          const result = await client.callTool({ name, arguments: args }) as { isError?: boolean; content: { text: string }[] }
+          return { failed: !!result.isError, text: result.content[0]!.text }
         }
-      `
-      const child = Bun.spawn(["bash", "-c", 'ulimit -f 1; exec "$@"', "nib-test", process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" })
-      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
-      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" })
-      expect(stdout).toContain("EFBIG")
+        const tag = /#([0-9A-F]{4})\]/.exec((await call("read", { paths: ["file.txt"] })).text)![1]
+        const content = "x".repeat(200_000)
+        const result = operation === "edit"
+          ? await call("edit", { input: `[file.txt#${tag}]\nPUT 1.=1:\n+${content}` })
+          : await call("write", { path: "file.txt.new", content })
+        expect(result.failed).toBe(true)
+        expect(result.text).toContain("file too large")
+      } finally { await client.close() }
       expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\n")
       expect(await readdir(f.directory)).toEqual(["file.txt"])
     }
@@ -838,16 +839,6 @@ describe("sandbox", () => {
     const s = await sandboxed()
     await expect(s.engine.patch(s.boxed, `*** Add File: new/deep/a.txt\n+a\n*** Add File: ${path.join(s.outside, "b.txt")}\n+b`)).rejects.toThrow("b.txt is outside the sandbox")
     await expect(stat(path.join(s.directory, "new"))).rejects.toThrow()
-  })
-
-  test("the sandbox judges the canonical path an operation uses, not only the path it was asked for", async () => {
-    const s = await sandboxed()
-    await mkdir(path.join(s.directory, "src"))
-    await writeFile(path.join(s.directory, "src/a.txt"), "inside\n")
-    // The roots answer differently the second time, as a link that changes between two resolutions would make them disagree.
-    let asked = 0
-    const shifting: Context = { ...s.boxed, roots: async () => asked++ === 0 ? [s.directory] : [path.join(s.directory, "src")] }
-    await expect(s.engine.read(shifting, { paths: ["file.txt"] })).rejects.toThrow("file.txt resolves outside the sandbox")
   })
 
   test("client roots widen the sandbox", async () => {
@@ -1029,23 +1020,6 @@ describe("snapshots", () => {
     expect([fileTag("a \n b\t\r\nc"), fileTag("hello\n"), fileTag("")]).toEqual(["80BA", "5BF9", "5D05"])
     expect(fileTag("x  \r\ny\t")).toBe(fileTag("x\ny"))
     expect(fileTag("x\ny")).not.toBe(fileTag("x\ny\n"))
-  })
-
-  test("store deduplicates versions, unions seen lines and evicts least recently used paths", () => {
-    const store = new SnapshotStore({ paths: 2, versions: 2, units: Number.MAX_SAFE_INTEGER })
-    const version = (key: string) => ({ key, lines: key.split("\n"), tag: fileTag(key) })
-    store.record("s", "a", version("one"), [1])
-    store.record("s", "a", version("two"), [2])
-    store.record("s", "a", version("one"), [3])
-    expect(store.versions("s", "a").map((item) => [item.key, [...item.seen!]])).toEqual([["one", [1, 3]], ["two", [2]]])
-    store.record("s", "a", version("three"))
-    expect(store.versions("s", "a").map((item) => item.key)).toEqual(["three", "one"])
-    store.record("s", "b", version("b"))
-    store.versions("s", "a")
-    store.record("other", "a", version("c"))
-    expect(store.versions("s", "b")).toEqual([])
-    expect(store.versions("s", "a")).toHaveLength(2)
-    expect(store.origins("s", fileTag("three"), "b")).toEqual(["a"])
   })
 })
 
@@ -2361,18 +2335,26 @@ describe("ranges one line off", () => {
     "  3. else a minted anon-xxxx id",
   ].map((line) => `+${line}`).join("\n")
 
-  test("a range that starts one line late applies with a warning naming the two alike lines", async () => {
+  test("a range that starts one line late applies with a warning whose hunks undo it", async () => {
     const f = await fixture(plan)
     const r = await f.read()
     const result = await f.patch(`[file.txt#${r.tag}]\nPUT 3.=6:\n${rows}`)
-    expect(result.text).toEndWith("Warnings:\nLines 2 and 3 now nearly match: line 2 was kept just above an edit and line 3 is the edit's first new line. If the edit was meant to replace line 2, its range started one line late; fix that now.")
+    const fix = "CUT 2\nPUT >6:\n+- **Address** is the name plus the host it runs on"
+    expect(result.text).toEndWith(`Warnings:\nLines 2 and 3 now nearly match: line 2 was kept just above an edit and line 3 is the edit's first new line. If the edit was meant to replace line 2, its range started one line late and overwrote the line below it instead; these hunks, with the new tag, delete line 2 and put that line back:\n${fix}`)
+    // The hunks give exactly the file the right range would have.
+    const tag = /#([0-9A-F]{4})\]/.exec(result.text)![1]
+    await f.patch(`[file.txt#${tag}]\n${fix}`)
+    const intended = await fixture(plan)
+    const s = await intended.read()
+    await intended.patch(`[file.txt#${s.tag}]\nPUT 2.=5:\n${rows}`)
+    expect(await readFile(f.filePath, "utf8")).toBe(await readFile(intended.filePath, "utf8"))
   })
 
-  test("a range that ends one line early applies with a warning too", async () => {
+  test("a range that ends one line early applies with a warning whose hunk undoes it", async () => {
     const f = await fixture(plan)
     const r = await f.read()
     const result = await f.patch(`[file.txt#${r.tag}]\nPUT 1.=4:\n${rows}`)
-    expect(result.text).toEndWith("Warnings:\nLines 4 and 5 now nearly match: line 4 is an edit's last new line and line 5 was kept just below it. If the edit was meant to replace line 5, its range ended one line early; fix that now.")
+    expect(result.text).toEndWith("Warnings:\nLines 4 and 5 now nearly match: line 4 is an edit's last new line and line 5 was kept just below it. If the edit was meant to replace line 5, its range ended one line early; this hunk, with the new tag, deletes it:\nCUT 5")
   })
 
   test("a right range, or a line rewritten from one just like it, gets no warning", async () => {
@@ -2382,6 +2364,54 @@ describe("ranges one line off", () => {
     const g = await fixture("repeated line of some length\nrepeated line of some length\ntail\n")
     const s = await g.read()
     expect((await g.patch(`[file.txt#${s.tag}]\nPUT 2.=2:\n+repeated line of some length\n+an added line below it`)).text).not.toContain("Warnings:")
+  })
+})
+
+describe("bracket balance after an edit", () => {
+  const code = [
+    "function formatSize(bytes: number) {",
+    "  return `${bytes} bytes`",
+    "}",
+    "",
+    "function formatAge(time: number) {",
+    "  const seconds = Math.floor((Date.now() - time) / 1000)",
+    "  return seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ago`",
+    "}",
+    "",
+    "const UNITS = { k: 1024 }",
+  ].join("\n") + "\n"
+  const rewrite = [
+    "function formatAge(time: number) {",
+    "  const seconds = Math.floor((Date.now() - time) / 1000)",
+    "  if (seconds < 60) return `${seconds}s ago`",
+    "  return `${Math.floor(seconds / 60)}m ago`",
+    "}",
+  ].map((line) => `+${line}`).join("\n")
+
+  test("a closing line left outside a replaced block is named", async () => {
+    const f = await fixture(code)
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 5.=7:\n${rewrite}`)
+    expect(result.text).toEndWith("Warnings:\nBrackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new lines 5-9 have 1 more } than {, counted against the lines they replaced; check them and the lines just outside them.")
+  })
+
+  test("a stray closer typed into one line is named too", async () => {
+    const f = await fixture(code)
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 6:\n+  } const seconds = Math.floor((Date.now() - time) / 1000)`)
+    expect(result.text).toContain("Brackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new line 6 has")
+  })
+
+  test("the right range, brackets in strings and comments, and files that never balanced get no warning", async () => {
+    const f = await fixture(code)
+    const r = await f.read()
+    expect((await f.patch(`[file.txt#${r.tag}]\nPUT 5.=8:\n${rewrite}`)).text).not.toContain("Warnings:")
+    const g = await fixture(code)
+    const s = await g.read()
+    expect((await g.patch(`[file.txt#${s.tag}]\nPUT >10:\n+const brace = "}" // a } in a comment\n+const pattern = /[)]/`)).text).not.toContain("Warnings:")
+    const h = await fixture("case $1 in\n  start) run ;;\nesac\n")
+    const t = await h.read()
+    expect((await h.patch(`[file.txt#${t.tag}]\nPUT >2:\n+  stop) halt ;;`)).text).not.toContain("Warnings:")
   })
 })
 

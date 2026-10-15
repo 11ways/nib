@@ -4,12 +4,15 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import path from "node:path"
 import { REPO } from "./fixture"
 import { SETUP, type Budget, type Harness, type Mode, type Usage } from "./runners"
-import { sourceWithUses, type Task } from "./tasks"
+import { promptOf, sourceWithUses, type Task } from "./tasks"
 
 export const RESULTS = path.join(import.meta.dir, "results")
 
-/** Everything that shapes what a model sees in a run; runs with equal identities are samples of the same job. */
-export type Identity = { task: string; taskHash: string; fixture: string; harness: Harness; model: string; variant?: string; shell?: boolean; mode: Mode; nib?: string; setup: number }
+/**
+ * Everything that shapes what a model sees in a run; runs with equal identities are samples of the same job. `decider` is set only where nibash
+ * cuts output (nib mode in the shell series, see deciderOf); runs from before deciders have none and match no arm.
+ */
+export type Identity = { task: string; taskHash: string; fixture: string; harness: Harness; model: string; variant?: string; shell?: boolean; mode: Mode; nib?: string; setup: number; decider?: string }
 /** `failed` means the model's work did not pass; `error` means the harness or provider failed, which never counts as a sample. */
 export type Status = "passed" | "failed" | "error"
 export type Run = Identity & Usage & {
@@ -40,7 +43,7 @@ export function hash(...parts: string[]) {
 
 /** What the model is given: the prompts and the outside changes between them, constants they use included; a changed check alone keeps results, see recheck. */
 export function taskHash(task: Task) {
-  return hash(...task.steps.flatMap((step) => [step.prompt, sourceWithUses(step.before)]))
+  return hash(...task.steps.flatMap((step) => [promptOf(task, step), sourceWithUses(step.before)]))
 }
 
 export function checkHash(task: Task) {
@@ -49,16 +52,28 @@ export function checkHash(task: Task) {
 
 let nibHash: Promise<string> | undefined
 
-/** nib's source as the model meets it, tool descriptions included; any change makes nib runs new jobs. */
+/** nib's Go source as the model meets it, tool descriptions included, and its module versions; any change makes nib runs new jobs. Tests are left out. */
 export function currentNib() {
   return nibHash ??= (async () => {
-    const files = (await readdir(path.join(REPO, "src"))).filter((file) => file.endsWith(".ts")).sort()
-    return hash(...await Promise.all(files.map(async (file) => file + "\0" + await readFile(path.join(REPO, "src", file), "utf8"))))
+    const files: string[] = []
+    const walk = async (directory: string) => {
+      for (const entry of await readdir(path.join(REPO, directory), { withFileTypes: true })) {
+        const relative = path.join(directory, entry.name)
+        if (entry.isDirectory() && entry.name !== "testdata") await walk(relative)
+        else if (entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go")) files.push(relative)
+      }
+    }
+    await walk("cmd")
+    await walk("internal")
+    files.sort()
+    files.push("go.mod", "go.sum")
+    return hash(...await Promise.all(files.map(async (file) => file + "\0" + await readFile(path.join(REPO, file), "utf8"))))
   })()
 }
 
+/** A run's key; the decider is appended only when set, so the keys of runs without one stay as they were. */
 export function identityKey(identity: Identity) {
-  return hash(JSON.stringify([identity.task, identity.taskHash, identity.fixture, identity.harness, identity.model, identity.variant ?? "", identity.shell ? "shell" : "", identity.mode, identity.nib ?? "", identity.setup]))
+  return hash(JSON.stringify([identity.task, identity.taskHash, identity.fixture, identity.harness, identity.model, identity.variant ?? "", identity.shell ? "shell" : "", identity.mode, identity.nib ?? "", identity.setup, ...identity.decider ? [identity.decider] : []]))
 }
 
 export function identity(fields: Omit<Identity, "setup">): Identity {

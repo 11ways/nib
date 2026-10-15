@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { ElicitRequestSchema, ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { createServer, EDIT_DESCRIPTION, INSTRUCTIONS } from "../src/server"
+import { binary } from "./support/engine"
 
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))) })
@@ -18,10 +17,9 @@ async function workspace() {
   return directory
 }
 
-type Options = { confirm?: boolean; roots?: string[]; elicit?: (message: string) => { action: "accept" | "decline"; content?: Record<string, string> } }
+type Options = { confirm?: boolean; roots?: string[]; elicit?: (message: string) => { action: "accept" | "decline"; content?: Record<string, string> }; env?: Record<string, string> }
 
 async function connect(directory: string, options: Options = {}) {
-  const server = createServer({ directory, confirmOutsideRoots: options.confirm })
   const capabilities = { ...options.roots && { roots: { listChanged: true } }, ...options.elicit && { elicitation: { form: {} } } }
   const client = new Client({ name: "test", version: "1" }, { capabilities })
   if (options.roots) client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: options.roots!.map((root) => ({ uri: pathToFileURL(root).href })) }))
@@ -30,14 +28,22 @@ async function connect(directory: string, options: Options = {}) {
     prompts.push(request.params.message)
     return options.elicit!(request.params.message)
   })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+  await client.connect(new StdioClientTransport({
+    command: await binary(),
+    cwd: directory,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NIB_SHELL: "0", ...options.confirm && { NIB_CONFIRM_OUTSIDE_ROOTS: "1" }, ...options.env },
+    stderr: "pipe",
+  }))
+  clients.push(client)
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args }) as { isError?: boolean; content: { type: string; text?: string; data?: string; mimeType?: string }[] }
     return { ...result, text: result.content[0]?.text ?? "" }
   }
   return { client, call, prompts }
 }
+
+const clients: Client[] = []
+afterEach(async () => { await Promise.all(clients.splice(0).map((client) => client.close().catch(() => undefined))) })
 
 const tagOf = (text: string) => /#([0-9A-F]{4})\]/.exec(text)![1]!
 
@@ -51,19 +57,57 @@ describe("MCP server", () => {
       expect(tool.description!.length).toBeLessThanOrEqual(2048)
     }
     for (const name of ["read", "grep", "find"]) expect(tools.find((tool) => tool.name === name)!.annotations?.readOnlyHint).toBe(true)
-    expect(EDIT_DESCRIPTION.length).toBeLessThanOrEqual(2048)
-    expect(EDIT_DESCRIPTION).not.toContain("*** Begin Patch")
-    expect(EDIT_DESCRIPTION).not.toContain("*** End Patch")
-    expect(INSTRUCTIONS.length).toBeLessThanOrEqual(2048)
-    expect(client.getInstructions()).toBe(INSTRUCTIONS)
+    const edit = tools.find((tool) => tool.name === "edit")!.description!
+    expect(edit).not.toContain("*** Begin Patch")
+    expect(edit).not.toContain("*** End Patch")
+    expect(client.getInstructions()!.length).toBeLessThanOrEqual(2048)
   })
 
   test("tool definitions and instructions stay within a size budget", async () => {
     const { client } = await connect(await workspace())
     const { tools } = await client.listTools()
-    const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + INSTRUCTIONS.length
+    const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
     // Every session carries these in each model call's context; 8.2K characters is about 2K tokens.
     expect(size).toBeLessThanOrEqual(8200)
+  })
+
+  test("with nibash, six tools: the shell's description and the whole set stay within their budgets", async () => {
+    const { client } = await connect(await workspace(), { env: { NIB_SHELL: "1" } })
+    const { tools } = await client.listTools()
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "nibash", "read", "write"])
+    const nibash = tools.find((tool) => tool.name === "nibash")!
+    expect(nibash.description!.length).toBeLessThanOrEqual(2048)
+    expect(nibash.description).toStartWith("Run a command in nibash, nib's shell")
+    expect(client.getInstructions()).toContain("so do cat, head, tail, grep, rg, sed -n and wc in nibash")
+    const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
+    // The shell adds about 1.4K characters to the five file tools.
+    expect(size).toBeLessThanOrEqual(9000)
+  })
+
+  test("nibash's file views anchor edits through MCP, and its program output is plain", async () => {
+    const directory = await workspace()
+    await writeFile(path.join(directory, "a.txt"), "one\ntwo needle\nthree\n")
+    const { call } = await connect(directory, { env: { NIB_SHELL: "1" } })
+    const found = await call("nibash", { command: "grep -n needle a.txt | head -5", description: "find the needle" })
+    expect(found.text).toBe(`[a.txt#${tagOf(found.text)}]\n*2:two needle`)
+    const edited = await call("edit", { input: `[a.txt#${tagOf(found.text)}]\nPUT 2:\n+two NEEDLE` })
+    expect(edited.isError).toBeFalsy()
+    expect(await readFile(path.join(directory, "a.txt"), "utf8")).toBe("one\ntwo NEEDLE\nthree\n")
+    expect((await call("nibash", { command: "printf 'x\\n' | tr x y; exit 3" })).text).toBe("y\n[exit 3]")
+    expect((await call("nibash", { command: "if then" })).text).toStartWith("nibash: ")
+  })
+
+  test("named directories from nib.json are announced, resolve in every tool and print in short form", async () => {
+    const directory = await workspace()
+    const deep = path.join(directory, "modules/server/src/main/java/be/example/server/orm")
+    await mkdir(deep, { recursive: true })
+    await writeFile(path.join(deep, "Repo.java"), "class Repo {}\n")
+    await writeFile(path.join(directory, "nib.json"), JSON.stringify({ directories: { orm: "modules/server/src/main/java/be/example/server/orm" }, autoDirectories: false }))
+    const { client, call } = await connect(directory, { env: { NIB_SHELL: "1" } })
+    expect(client.getInstructions()).toEndWith("\n~orm = modules/server/src/main/java/be/example/server/orm")
+    expect((await call("read", { paths: ["~orm/Repo.java"] })).text).toStartWith("[~orm/Repo.java#")
+    expect((await call("nibash", { command: "cat ~orm/Repo.java" })).text).toStartWith("[~orm/Repo.java#")
+    expect((await call("nibash", { command: "ls ~orm; echo '~orm'; env | grep -c 'HOME orm' || true" })).text).toBe("Repo.java\n~orm\n0")
   })
 
   test("read, edit and write round-trip; failures are tool errors, not protocol errors", async () => {
@@ -224,7 +268,7 @@ describe("MCP server", () => {
     const directory = await workspace()
     await writeFile(path.join(directory, "a.txt"), "hello\n")
     const client = new Client({ name: "test", version: "1" })
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(import.meta.dir, "../src/main.ts")], cwd: directory, stderr: "pipe" }))
+    await client.connect(new StdioClientTransport({ command: await binary(), cwd: directory, stderr: "pipe" }))
     try {
       const result = await client.callTool({ name: "read", arguments: { paths: ["a.txt"] } }) as { content: { text: string }[] }
       expect(result.content[0]!.text).toMatch(/^\[a\.txt#[0-9A-F]{4}\]\n1:hello$/)
@@ -236,7 +280,7 @@ describe("MCP server", () => {
     const outside = await workspace()
     const writeOutside = async (env: Record<string, string>) => {
       const client = new Client({ name: "test", version: "1" })
-      await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(import.meta.dir, "../src/main.ts")], cwd: directory, env, stderr: "pipe" }))
+      await client.connect(new StdioClientTransport({ command: await binary(), cwd: directory, env, stderr: "pipe" }))
       try {
         return await client.callTool({ name: "write", arguments: { path: path.join(outside, "a.txt"), content: "a" } }) as { isError?: boolean; content: { text: string }[] }
       } finally { await client.close() }
@@ -254,7 +298,7 @@ describe("MCP server", () => {
     await writeFile(path.join(outside, "secret.txt"), "secret answer\n")
     const readOutside = async (env: Record<string, string>) => {
       const client = new Client({ name: "test", version: "1" })
-      await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(import.meta.dir, "../src/main.ts")], cwd: directory, env, stderr: "pipe" }))
+      await client.connect(new StdioClientTransport({ command: await binary(), cwd: directory, env, stderr: "pipe" }))
       try {
         return await client.callTool({ name: "read", arguments: { paths: [path.join(outside, "secret.txt")] } }) as { isError?: boolean; content: { text: string }[] }
       } finally { await client.close() }

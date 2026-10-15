@@ -1,0 +1,344 @@
+// Package hook is nib's Claude Code PreToolUse hook. With nibash owning the shell and setup denying the other built-in file tools, only the
+// built-in Read is left, which stays for PDFs and notebooks: the hook refuses it for any other file, naming the exact nib read to send instead.
+// For nib's own tools it only reports: a subagent's call is filed under its tool_use id, with the agent that spawned it, when, and whether it
+// is a fork, so the server keeps that agent's state apart and starts it with what it inherits: a fork its parent's seen lines, every subagent
+// the named directories its parent had defined when it was spawned.
+package hook
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/11ways/nib/internal/hookstate"
+)
+
+// Matcher is a hook registration: the matcher setup writes, and a tool name it must match for the hook to be registered for its job.
+type Matcher struct{ Matcher, Tool string }
+
+// Matchers are the hook's registrations: the built-in Read it guards, and nib's own tools, whose subagent calls it files for the server.
+var Matchers = []Matcher{{"Read", "Read"}, {"mcp__nib__.*", "mcp__nib__read"}}
+
+// taggedLimit is the engine's text limit: past it nib reads a file only plain.
+const taggedLimit = 2 * 1024 * 1024
+
+// Input is the part of Claude Code's hook input the hook uses; AgentID and AgentType are set only for a subagent's call.
+type Input struct {
+	SessionID      string         `json:"session_id"`
+	TranscriptPath string         `json:"transcript_path"`
+	Cwd            string         `json:"cwd"`
+	ToolName       string         `json:"tool_name"`
+	ToolInput      map[string]any `json:"tool_input"`
+	ToolUseID      string         `json:"tool_use_id"`
+	AgentID        string         `json:"agent_id"`
+	AgentType      string         `json:"agent_type"`
+}
+
+// metaLimit bounds the read of a subagent's meta file, a few hundred bytes in Claude Code 2.1.
+const metaLimit = 64 * 1024
+
+// origin is where a subagent comes from: its parent, "" for the main agent, the tool_use id of the parent's Agent call that spawned it, and
+// whether it is a fork.
+type origin struct {
+	parent, call string
+	fork         bool
+}
+
+// originOf is where the subagent making a call comes from; ok is false when its parent is not known. Hook input does not name it: Claude Code
+// keeps it in the meta file next to the subagent's transcript, which is not a documented interface, so anything unexpected there leaves the
+// subagent on its own.
+func originOf(input Input) (found origin, ok bool) {
+	if !hookstate.IsID(input.AgentID) || !filepath.IsAbs(input.TranscriptPath) || !strings.HasSuffix(input.TranscriptPath, ".jsonl") {
+		return origin{}, false
+	}
+	file, err := os.Open(filepath.Join(strings.TrimSuffix(input.TranscriptPath, ".jsonl"), "subagents", "agent-"+input.AgentID+".meta.json"))
+	if err != nil {
+		return origin{}, false
+	}
+	defer file.Close()
+	var meta struct {
+		IsFork        bool   `json:"isFork"`
+		ParentAgentID string `json:"parentAgentId"`
+		SpawnDepth    int    `json:"spawnDepth"`
+		ToolUseID     string `json:"toolUseId"`
+	}
+	if json.NewDecoder(io.LimitReader(file, metaLimit)).Decode(&meta) != nil || meta.IsFork != (input.AgentType == "fork") {
+		return origin{}, false
+	}
+	if !hookstate.IsID(meta.ToolUseID) {
+		meta.ToolUseID = ""
+	}
+	// A subagent of the main agent is spawned at depth 1 and names no parent; a deeper one must name its parent.
+	switch {
+	case meta.SpawnDepth == 1 && meta.ParentAgentID == "":
+		return origin{"", meta.ToolUseID, meta.IsFork}, true
+	case meta.SpawnDepth > 1 && hookstate.IsID(meta.ParentAgentID):
+		return origin{meta.ParentAgentID, meta.ToolUseID, meta.IsFork}, true
+	}
+	return origin{}, false
+}
+
+// spawnedAt is the spawn moment of the subagent making a call, as the hook filed it on the subagent's first call, else read from its
+// parent's transcript and filed; zero when it cannot be told.
+func spawnedAt(input Input, found origin, state string, now time.Time) time.Time {
+	spawns := hookstate.OpenSpawns(state)
+	if at, filed := spawns.Of(input.AgentID); filed {
+		return at
+	}
+	transcript := input.TranscriptPath
+	if found.parent != "" {
+		transcript = filepath.Join(strings.TrimSuffix(transcript, ".jsonl"), "subagents", "agent-"+found.parent+".jsonl")
+	}
+	at := spawnMoment(transcript, found.call)
+	_ = spawns.Note(input.AgentID, at, now)
+	return at
+}
+
+// spawnMoment is the first moment the parent's work may be missing from what a subagent its Agent call call spawned was given, read from the
+// parent's transcript; zero when it cannot be told. A fork's context is the parent's conversation up to the entry before the assistant
+// message holding that call, so no result of a call in that message or later is in it, parallel calls included. Every entry written before
+// that one was stamped before the request that produced the message, and every call outside the context started after that request, so the
+// moment is one millisecond past the latest stamp up to that entry: Claude Code stamps entries in whole milliseconds, and nib stamps seen
+// lines and named directories before the result that shows them is stamped. The transcript is not a documented interface: anything
+// unexpected gives zero.
+func spawnMoment(transcript, call string) time.Time {
+	if call == "" {
+		return time.Time{}
+	}
+	file, err := os.Open(transcript)
+	if err != nil {
+		return time.Time{}
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	// latest is the latest stamp up to each entry; first is the entry before each assistant message's first entry. A line that is not an
+	// entry is skipped: it can only make the moment earlier, which leaves the fork fewer lines, never more.
+	latest, first := map[string]time.Time{}, map[string]string{}
+	var running time.Time
+	for {
+		line, err := reader.ReadBytes('\n')
+		var entry struct {
+			Type       string          `json:"type"`
+			UUID       string          `json:"uuid"`
+			ParentUUID string          `json:"parentUuid"`
+			Timestamp  string          `json:"timestamp"`
+			Message    json.RawMessage `json:"message"`
+		}
+		if len(bytes.TrimSpace(line)) > 0 && json.Unmarshal(line, &entry) == nil {
+			if stamp, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil && stamp.After(running) {
+				running = stamp
+			}
+			if entry.UUID != "" {
+				latest[entry.UUID] = running
+			}
+			var message struct {
+				ID      string `json:"id"`
+				Content []struct {
+					Type string `json:"type"`
+					ID   string `json:"id"`
+				} `json:"content"`
+			}
+			if entry.Type == "assistant" && json.Unmarshal(entry.Message, &message) == nil && message.ID != "" {
+				if _, ok := first[message.ID]; !ok {
+					first[message.ID] = entry.ParentUUID
+				}
+				for _, block := range message.Content {
+					if block.Type != "tool_use" || block.ID != call {
+						continue
+					}
+					at, ok := latest[first[message.ID]]
+					if !ok || at.IsZero() {
+						return time.Time{}
+					}
+					return at.Truncate(time.Millisecond).Add(time.Millisecond)
+				}
+			}
+		}
+		if err != nil {
+			return time.Time{}
+		}
+	}
+}
+
+// edited are the file types an agent reads to change them, so a read of one keeps its numbered rows.
+var edited = map[string]bool{}
+
+func init() {
+	for _, ext := range strings.Fields("c h cpp cc cxx hpp hh css go html htm java js jsx mjs cjs json kt kts md markdown py pyi rs sh bash toml ts tsx mts cts yaml yml zig xml sql rb php swift vue svelte scss sass less gradle properties ini cfg conf hwk") {
+		edited[ext] = true
+	}
+}
+
+// readOnly are the files only the built-in Read can show.
+var readOnly = regexp.MustCompile(`(?i)\.(pdf|ipynb)$`)
+
+var logName = regexp.MustCompile(`(?i)\.(log|out|err)(\.\d+)?$`)
+
+// lookOnly is true for a file read only to look at, which a plain read shows without numbers or tag: a log or output file by its name, a file
+// in a log folder that is not code or config, or one too big to tag.
+func lookOnly(path string) bool {
+	if logName.MatchString(path) {
+		return true
+	}
+	if !edited[strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))] {
+		for _, segment := range strings.Split(path, "/") {
+			if segment == "log" || segment == "logs" {
+				return true
+			}
+		}
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > taggedLimit
+}
+
+// shown is a path as the agent should pass it to nib: relative to the session's folder when inside it.
+func shown(path, session string) string {
+	relative, err := filepath.Rel(session, path)
+	switch {
+	case err != nil:
+		return path
+	case relative == ".":
+		return "."
+	case relative == ".." || strings.HasPrefix(relative, "../"):
+		return path
+	}
+	return relative
+}
+
+func whole(value any) (int, bool) {
+	n, ok := value.(float64)
+	return int(n), ok && n >= 0 && n == float64(int(n))
+}
+
+// Decide is the refusal reason for a tool call, or "" to let it run: only Read of a file nib reads is refused.
+func Decide(input Input) string {
+	if input.ToolName != "Read" {
+		return ""
+	}
+	session := input.Cwd
+	if session == "" {
+		session, _ = os.Getwd()
+	}
+	file, _ := input.ToolInput["file_path"].(string)
+	if file == "" || readOnly.MatchString(file) {
+		return ""
+	}
+	full := file
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(session, file)
+	}
+	where := shown(full, session)
+	offset, hasOffset := whole(input.ToolInput["offset"])
+	limit, hasLimit := whole(input.ToolInput["limit"])
+	hasOffset = hasOffset && offset > 0
+	hasLimit = hasLimit && limit > 0
+	selector := ""
+	switch {
+	case hasOffset && hasLimit:
+		selector = fmt.Sprintf(":%d+%d", offset, limit)
+	case hasLimit:
+		selector = fmt.Sprintf(":1-%d", limit)
+	case hasOffset:
+		selector = fmt.Sprintf(":%d-", offset)
+	}
+	args := map[string]any{"paths": []string{where + selector}}
+	if lookOnly(full) {
+		args["plain"] = true
+	}
+	return strings.Join([]string{
+		"nib's hook refused Read: nib replaces it with fewer tokens. Use instead:",
+		"mcp__nib__read " + marshal(args),
+		"(If you need Read itself here, or nib's tools are missing from this session, send the same call again and it runs.)",
+	}, "\n")
+}
+
+// marshal is JSON.stringify: no escaping of <, > and &, which a path may hold.
+func marshal(value any) string {
+	var b strings.Builder
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(value)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// identity is what makes two calls the same for the resend rule: the tool and its arguments in key order.
+func identity(input Input) string {
+	encoded, _ := json.Marshal(input.ToolInput)
+	return input.ToolName + "\x00" + string(encoded)
+}
+
+var unsafeName = regexp.MustCompile(`[^\w-]`)
+
+// firstTime is true the first time this session makes this call; a resend means the agent has no nib, or a reason to insist. A state folder
+// that is not this user's own and private, or a state file that is a link, turns refusals off instead of being trusted.
+func firstTime(session, call, directory string) bool {
+	if !hookstate.Private(directory, true) {
+		return false
+	}
+	name := unsafeName.ReplaceAllString(session, "_")
+	if name == "" {
+		name = "session"
+	}
+	file, err := os.OpenFile(filepath.Join(directory, name+".txt"), os.O_RDWR|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	sum := sha256.Sum256([]byte(call))
+	digest := hex.EncodeToString(sum[:])[:16]
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == digest {
+			return false
+		}
+	}
+	_, err = file.WriteString(digest + "\n")
+	return err == nil
+}
+
+// Run reads one hook call and returns Claude Code's deny decision when nib should take the call, or "" to let it run. An MCP tool's call is
+// never refused; a subagent's is filed under its tool_use id, with its parent, spawn moment and whether it is a fork when those are known,
+// and a failure to file it only leaves that call to the main agent's state.
+func Run(stdin []byte, state string) string {
+	var input Input
+	if json.Unmarshal(stdin, &input) != nil {
+		return ""
+	}
+	if state == "" {
+		state = hookstate.Directory()
+	}
+	if strings.HasPrefix(input.ToolName, "mcp__") {
+		if input.AgentID != "" {
+			now := time.Now()
+			agent := hookstate.Agent{ID: input.AgentID}
+			if found, ok := originOf(input); ok {
+				agent.Spawned, agent.Forked, agent.Parent, agent.At = true, found.fork, found.parent, spawnedAt(input, found, state, now)
+			}
+			_ = hookstate.OpenAgents(state).Record(input.ToolUseID, agent, now)
+		}
+		return ""
+	}
+	reason := Decide(input)
+	if reason == "" || !firstTime(input.SessionID, identity(input), state) {
+		return ""
+	}
+	encoded, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName":            "PreToolUse",
+		"permissionDecision":       "deny",
+		"permissionDecisionReason": reason,
+	}})
+	return string(encoded)
+}

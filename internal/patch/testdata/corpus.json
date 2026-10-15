@@ -1,0 +1,739 @@
+[
+ {
+  "input": "[a.ts#3C4D]\nPUT >2*:\n+x\nPUT 5*:\n+y\nCUT 9*",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "3C4D",
+    "edits": [
+     {
+      "start": 2,
+      "end": 2,
+      "operation": "after",
+      "block": true,
+      "content": [
+       "x"
+      ]
+     },
+     {
+      "start": 5,
+      "end": 5,
+      "operation": "replace",
+      "block": true,
+      "content": [
+       "y"
+      ]
+     },
+     {
+      "start": 9,
+      "end": 9,
+      "operation": "replace",
+      "block": true,
+      "content": []
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "*** Begin Patch\n[src/a.ts#3c4d]\nPUT >$:\n+tail\nCUT 7.=8\nPUT 2.=3:\n+two\n+\nPUT <2:\n+before two\nPUT >1:\n+after one\n*** Add File: notes/new.md\n+# Title\n+\n*** Add File: empty.txt\n[\"with space.ts\"#ABCD]\nMV 'moved here.ts'\n*** End Patch",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "src/a.ts",
+    "tag": "3C4D",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "after",
+      "content": [
+       "after one"
+      ]
+     },
+     {
+      "start": 2,
+      "end": 2,
+      "operation": "before",
+      "content": [
+       "before two"
+      ]
+     },
+     {
+      "start": 2,
+      "end": 3,
+      "operation": "replace",
+      "content": [
+       "two",
+       ""
+      ]
+     },
+     {
+      "start": 7,
+      "end": 8,
+      "operation": "replace",
+      "content": []
+     },
+     {
+      "start": -1,
+      "end": -1,
+      "operation": "after",
+      "edge": "tail",
+      "content": [
+       "tail"
+      ]
+     }
+    ],
+    "line": 2
+   },
+   {
+    "kind": "create",
+    "path": "notes/new.md",
+    "content": "# Title\n\n",
+    "line": 13
+   },
+   {
+    "kind": "create",
+    "path": "empty.txt",
+    "content": "",
+    "line": 16
+   },
+   {
+    "kind": "edit",
+    "path": "with space.ts",
+    "tag": "ABCD",
+    "edits": [],
+    "line": 17,
+    "move": "moved here.ts"
+   }
+  ]
+ },
+ {
+  "input": "\r\n[a.ts#ABCD]\r\n\r\nPUT 1.=1:\r\n+x\r\n\r\n",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "replace",
+      "content": [
+       "x"
+      ]
+     }
+    ],
+    "line": 2
+   }
+  ]
+ },
+ {
+  "input": "[a.md#3c4d]\nPUT 19.=22:\n~what produced\n~the end\n+new\nSUB 30: old \"text\" -> here\n+new text\n+second line\nCUT 40.=40\n~\nPUT >5:\n~## Do\n+- item\n[log.txt]\nPUT >$:\n+entry",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.md",
+    "tag": "3C4D",
+    "edits": [
+     {
+      "start": 5,
+      "end": 5,
+      "operation": "after",
+      "content": [
+       "- item"
+      ],
+      "checks": [
+       "## Do"
+      ]
+     },
+     {
+      "start": 19,
+      "end": 22,
+      "operation": "replace",
+      "content": [
+       "new"
+      ],
+      "checks": [
+       "what produced",
+       "the end"
+      ]
+     },
+     {
+      "start": 30,
+      "end": 30,
+      "operation": "replace",
+      "sub": "old \"text\" -> here",
+      "content": [
+       "new text",
+       "second line"
+      ]
+     },
+     {
+      "start": 40,
+      "end": 40,
+      "operation": "replace",
+      "content": [],
+      "checks": [
+       ""
+      ]
+     }
+    ],
+    "line": 1
+   },
+   {
+    "kind": "edit",
+    "path": "log.txt",
+    "edits": [
+     {
+      "start": -1,
+      "end": -1,
+      "operation": "after",
+      "edge": "tail",
+      "content": [
+       "entry"
+      ]
+     }
+    ],
+    "line": 14
+   }
+  ]
+ },
+ {
+  "input": "[a.txt#ABCD]\nSUB 2: one\rtwo three\n+fixed",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.txt",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 2,
+      "end": 2,
+      "operation": "replace",
+      "sub": "one\rtwo three",
+      "content": [
+       "fixed"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1-2:\n+x\nPUT 3.=3:\n+y\n[b.ts#ABCD]\n-old\n+new\nPUT 3:\n+z\nSUB 4: q",
+  "error": "Patch line 2: ranges are written N.=M; got \"PUT 1-2:\"\nPatch line 7: - rows only go under a PUT N.=M: or CUT N.=M line; PUT replaces the range with + rows, CUT deletes; got \"-old\"\nPatch line 11: SUB needs + rows with the new text (a lone + deletes the old text); got \"SUB 4: q\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3:\n~old\n-old three\n+new three\nPUT 5.=6:\n-five\n+FIVE\n-six\n+SIX\nCUT 8.=8\n-eight\nCUT 10\n~ten\nCUT 12\n-twelve",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 3,
+      "end": 3,
+      "operation": "replace",
+      "content": [
+       "new three"
+      ],
+      "checks": [
+       "old"
+      ],
+      "old": [
+       "old three"
+      ]
+     },
+     {
+      "start": 5,
+      "end": 6,
+      "operation": "replace",
+      "content": [
+       "FIVE",
+       "SIX"
+      ],
+      "old": [
+       "five",
+       "six"
+      ]
+     },
+     {
+      "start": 8,
+      "end": 8,
+      "operation": "replace",
+      "content": [],
+      "old": [
+       "eight"
+      ]
+     },
+     {
+      "start": 10,
+      "end": 10,
+      "operation": "replace",
+      "content": [],
+      "checks": [
+       "ten"
+      ]
+     },
+     {
+      "start": 12,
+      "end": 12,
+      "operation": "replace",
+      "content": [],
+      "old": [
+       "twelve"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3:=5:\n+x",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 3,
+      "end": 5,
+      "operation": "replace",
+      "written": "PUT 3:=5:",
+      "content": [
+       "x"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "*** Begin Patch\nPUT 1.=1:\n+x\n*** End Patch",
+  "error": "Patch line 2: expected a [PATH#TAG] header or *** Add File: PATH; got \"PUT 1.=1:\""
+ },
+ {
+  "input": "*** Begin Patch\n[a.ts#ABCD]\nPUT 1.=1:\n*** End Patch",
+  "error": "Patch line 3: PUT needs at least one + row (use CUT to delete lines); got \"PUT 1.=1:\""
+ },
+ {
+  "input": "*** Begin Patch\n[a.ts#ABCD]\n-old\n+new\n*** End Patch",
+  "error": "Patch line 3: - rows only go under a PUT N.=M: or CUT N.=M line; PUT replaces the range with + rows, CUT deletes; got \"-old\""
+ },
+ {
+  "input": "[a.ts#ABCD]\n@@ -1,2 +1,2 @@",
+  "error": "Patch line 2: unified-diff hunk headers are not hashline; use PUT/CUT with line numbers; got \"@@ -1,2 +1,2 @@\""
+ },
+ {
+  "input": "*** Update File: a.ts\n+x",
+  "error": "Patch line 1: apply_patch file headers are not hashline; use a [PATH#TAG] section (REM deletes); got \"*** Update File: a.ts\""
+ },
+ {
+  "input": "[a.ts#ABCD]\n12:old",
+  "error": "Patch line 2: LINE:TEXT rows are read output; body rows are + followed by the new text; got \"12:old\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT >3:\n-old\n+x",
+  "error": "Patch line 2: - rows only go under PUT N.=M:, PUT N:, CUT N.=M or CUT N, where they must match the lines being replaced; got \"PUT >3:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nSUB 3: a\n-a\n+b",
+  "error": "Patch line 2: - rows only go under PUT N.=M:, PUT N:, CUT N.=M or CUT N, where they must match the lines being replaced; got \"SUB 3: a\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1..3:\n+x",
+  "error": "Patch line 2: ranges are written N.=M; got \"PUT 1..3:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1237:.1\n-old\n+new",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT 1237:.1\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1237:  return old\n+  return new",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT 1237:  return old\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3.=4: old\n+x",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT 3.=4: old\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT >3: x",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT >3: x\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3*: x",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT 3*: x\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT >$: x",
+  "error": "Patch line 2: a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it; got \"PUT >$: x\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nREM\nCUT 1.=1",
+  "error": "Patch line 3: nothing may follow REM, MV or CP in a section; got \"CUT 1.=1\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nMV b.ts\n[a.ts#ABCD]\nCUT 1.=1",
+  "error": "Patch line 3: a.ts already ends with REM, MV or CP; got \"[a.ts#ABCD]\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nCP b.ts\nCUT 1.=1",
+  "error": "Patch line 3: nothing may follow REM, MV or CP in a section; got \"CUT 1.=1\""
+ },
+ {
+  "input": "[a.ts]\nCP b.ts",
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not CP; copy [PATH#TAG] from your latest read to edit elsewhere; got \"CP b.ts\""
+ },
+ {
+  "input": "[a.ts]\nMV b.ts",
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not MV; copy [PATH#TAG] from your latest read to edit elsewhere; got \"MV b.ts\""
+ },
+ {
+  "input": "*** Begin Patch\n*** Add File: a.ts\n+x\nPUT 1.=1:\n+y\n*** End Patch",
+  "error": "Patch line 4: an Add File section takes only + rows; got \"PUT 1.=1:\""
+ },
+ {
+  "input": "*** Begin Patch\n[a.ts#ABCD]\n*** End Patch",
+  "error": "Section [a.ts#ABCD] has no PUT, CUT, SUB, REM, MV or CP"
+ },
+ {
+  "input": "*** Begin Patch\n*** End Patch",
+  "error": "Patch contains no sections"
+ },
+ {
+  "input": "",
+  "error": "Patch contains no sections"
+ },
+ {
+  "input": "\n\n",
+  "error": "Patch contains no sections"
+ },
+ {
+  "input": "[a.ts#ABCD]\nSUB 3:\n+x",
+  "error": "Patch line 2: SUB N: is followed on the same line by the exact old text; got \"SUB 3:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3.=3:\n~a\n~b\n+x",
+  "error": "Patch line 2: this hunk takes at most 1 ~ check row; got \"PUT 3.=3:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nCUT 3.=5\n~a\n~b\n~c",
+  "error": "Patch line 2: this hunk takes at most 2 ~ check rows; got \"CUT 3.=5\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT >$:\n~a\n+x",
+  "error": "Patch line 2: this hunk takes no ~ check rows; got \"PUT >$:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nSUB 2: a\n~a\n+x",
+  "error": "Patch line 2: this hunk takes no ~ check rows; got \"SUB 2: a\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3.=3:\n+x\n~a",
+  "error": "Patch line 4: ~ check rows go right after a PUT or CUT line, before its + rows; got \"~a\""
+ },
+ {
+  "input": "[a.ts#ABCD]\n12~old",
+  "error": "Patch line 2: N~TEXT rows are row-map output; anchor with PUT or CUT, and check a line with a ~TEXT row under that line; got \"12~old\""
+ },
+ {
+  "input": "[a.ts]\nPUT 1.=1:\n+x",
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not PUT; copy [PATH#TAG] from your latest read to edit elsewhere; got \"PUT 1.=1:\""
+ },
+ {
+  "input": "[a.ts]\nREM",
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not REM; copy [PATH#TAG] from your latest read to edit elsewhere; got \"REM\""
+ },
+ {
+  "input": "[a.ts#ABC]\nPUT >$:\n+x",
+  "error": "Patch line 1: a tag is 4 hex digits, like [PATH#3C4D]; got \"[a.ts#ABC]\""
+ },
+ {
+  "input": "[a.ts]\nPUT >$:\n+x\n[a.ts#ABCD]\nCUT 1.=1",
+  "error": "Patch line 4: a.ts already has a section without a tag; got \"[a.ts#ABCD]\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1.=1:\n+x\n[a.ts#ABCD]\nPUT 3.=3:\n+y",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "replace",
+      "content": [
+       "x"
+      ]
+     },
+     {
+      "start": 3,
+      "end": 3,
+      "operation": "replace",
+      "content": [
+       "y"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1.=1:\n+x\n[a.ts#BBBB]\nPUT 3.=3:\n+y",
+  "error": "Patch line 4: a.ts already has a section with tag ABCD; got \"[a.ts#BBBB]\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nREM",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [],
+    "line": 1,
+    "remove": true
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nCUT 1.=1\nREM",
+  "error": "Patch line 3: REM deletes the file and cannot be combined with PUT or CUT; got \"REM\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 2:\n+x\nPUT <2:\n+y\nPUT >1:\n+z\nPUT >$:\n+w\nPUT 1.=1:\n+v",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "replace",
+      "content": [
+       "v"
+      ]
+     },
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "after",
+      "content": [
+       "z"
+      ]
+     },
+     {
+      "start": 2,
+      "end": 2,
+      "operation": "before",
+      "content": [
+       "y"
+      ]
+     },
+     {
+      "start": 2,
+      "end": 2,
+      "operation": "replace",
+      "content": [
+       "x"
+      ]
+     },
+     {
+      "start": -1,
+      "end": -1,
+      "operation": "after",
+      "edge": "tail",
+      "content": [
+       "w"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[\"q.ts\"#abcd]\nPUT 1:\n+x",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "q.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "replace",
+      "content": [
+       "x"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "['q r.ts']\nPUT >$:\n+x",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "q r.ts",
+    "edits": [
+     {
+      "start": -1,
+      "end": -1,
+      "operation": "after",
+      "edge": "tail",
+      "content": [
+       "x"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[x#y]\nPUT >$:\n+a",
+  "error": "Patch line 1: a tag is 4 hex digits, like [PATH#3C4D]; got \"[x#y]\""
+ },
+ {
+  "input": "[\"x#y\"]\nPUT >$:\n+a",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "x#y",
+    "edits": [
+     {
+      "start": -1,
+      "end": -1,
+      "operation": "after",
+      "edge": "tail",
+      "content": [
+       "a"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "foo\nbar",
+  "error": "Patch line 1: expected a [PATH#TAG] header or *** Add File: PATH; got \"foo\"\nPatch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"bar\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 1.=1:\n+x\ngarbage\n+y\n[b.ts#ABCD]\nCUT 2",
+  "error": "Patch line 4: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"garbage\""
+ },
+ {
+  "input": "[a.ts#ABCD]\n  REM  ",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [],
+    "line": 1,
+    "remove": true
+   }
+  ]
+ },
+ {
+  "input": "*** Add File: a.ts",
+  "sections": [
+   {
+    "kind": "create",
+    "path": "a.ts",
+    "content": "",
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "*** Add File: 'b c.ts'\n+1\n+2",
+  "sections": [
+   {
+    "kind": "create",
+    "path": "b c.ts",
+    "content": "1\n2\n",
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nCUT 2.=4\n~x\n-a\n-b\n-c",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 2,
+      "end": 4,
+      "operation": "replace",
+      "content": [],
+      "checks": [
+       "x"
+      ],
+      "old": [
+       "a",
+       "b",
+       "c"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nSUB 1: foo bar \n+baz",
+  "sections": [
+   {
+    "kind": "edit",
+    "path": "a.ts",
+    "tag": "ABCD",
+    "edits": [
+     {
+      "start": 1,
+      "end": 1,
+      "operation": "replace",
+      "sub": "foo bar ",
+      "content": [
+       "baz"
+      ]
+     }
+    ],
+    "line": 1
+   }
+  ]
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 0:\n+x",
+  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"PUT 0:\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nCUT 01",
+  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"CUT 01\""
+ },
+ {
+  "input": "[a.ts#ABCD]\n~early\nPUT 1:\n+x",
+  "error": "Patch line 2: ~ check rows go right after a PUT or CUT line, before its + rows; got \"~early\""
+ }
+]

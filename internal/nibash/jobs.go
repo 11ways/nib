@@ -1,0 +1,363 @@
+package nibash
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/11ways/nib/internal/engine"
+)
+
+// job is work running detached from the calls: a whole command run with background: true, or a statement run with &.
+type job struct {
+	id       int
+	command  string
+	log      string
+	cancel   context.CancelFunc
+	done     chan struct{}
+	mu       sync.Mutex
+	groups   map[int]bool
+	exit     int
+	reported bool
+	// killed is the signal kill sent; a process the job starts after it gets it at once, and the job starts nothing more.
+	killed syscall.Signal
+}
+
+func (j *job) add(pgid int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.groups[pgid] = true
+	if j.killed != 0 {
+		_ = syscall.Kill(-pgid, j.killed)
+	}
+}
+
+func (j *job) running() bool {
+	select {
+	case <-j.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// terminating are the signals that end a job, so its shell starts nothing more after them.
+var terminating = map[syscall.Signal]bool{syscall.SIGTERM: true, syscall.SIGKILL: true, syscall.SIGINT: true, syscall.SIGHUP: true, syscall.SIGQUIT: true}
+
+// signal sends sig to every process group the job started; a terminating one also stops the job's shell, also before it started anything.
+func (j *job) signal(sig syscall.Signal) {
+	j.mu.Lock()
+	groups := make([]int, 0, len(j.groups))
+	for pgid := range j.groups {
+		groups = append(groups, pgid)
+	}
+	if terminating[sig] {
+		j.killed = sig
+	}
+	j.mu.Unlock()
+	for _, pgid := range groups {
+		_ = syscall.Kill(-pgid, sig)
+	}
+	if terminating[sig] {
+		j.cancel()
+	}
+}
+
+type jobTable struct {
+	mu   sync.Mutex
+	jobs []*job
+	next int
+}
+
+func newJobTable() *jobTable { return &jobTable{next: 1} }
+
+func (t *jobTable) find(spec string) *job {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if spec == "%%" || spec == "%+" || spec == "%" {
+		if len(t.jobs) == 0 {
+			return nil
+		}
+		return t.jobs[len(t.jobs)-1]
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(spec, "%"))
+	if err != nil {
+		return nil
+	}
+	for _, j := range t.jobs {
+		if j.id == id {
+			return j
+		}
+	}
+	return nil
+}
+
+func (t *jobTable) all() []*job {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.jobs)
+}
+
+// finished reports, once each, the jobs that ended since the last call.
+func (t *jobTable) finished() []string {
+	var lines []string
+	for _, j := range t.all() {
+		if j.running() || j.reported {
+			continue
+		}
+		j.reported = true
+		lines = append(lines, fmt.Sprintf("[job %%%d finished, exit %d; output: %s]", j.id, j.exit, j.log))
+	}
+	return lines
+}
+
+func (t *jobTable) killAll() {
+	for _, j := range t.all() {
+		if j.running() {
+			j.signal(syscall.SIGKILL)
+		}
+	}
+}
+
+// cappedWriter writes to a log until it holds logLimit bytes, then drops the rest.
+type cappedWriter struct {
+	mu      sync.Mutex
+	file    *os.File
+	written int
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if room := logLimit - w.written; room > 0 {
+		n, err := w.file.Write(p[:min(len(p), room)])
+		w.written += n
+		if err != nil {
+			return n, err
+		}
+	}
+	return len(p), nil
+}
+
+// launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal.
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context) (*job, error) {
+	path, err := sess.logs.file("job")
+	if err != nil {
+		return nil, err
+	}
+	logFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		logFile.Close()
+		return nil, err
+	}
+	out := &cappedWriter{file: logFile}
+	if err := interp.StdIO(devnull, out, out)(runner); err != nil {
+		logFile.Close()
+		devnull.Close()
+		return nil, err
+	}
+	sess.jobs.mu.Lock()
+	j := &job{id: sess.jobs.next, command: command, log: path, done: make(chan struct{}), groups: map[int]bool{}}
+	sess.jobs.next++
+	sess.jobs.jobs = append(sess.jobs.jobs, j)
+	sess.jobs.mu.Unlock()
+	jobTools := *tools
+	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, links: &links{}, logs: sess.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callKey{}, c))
+	jobTools.Ctx = ctx
+	j.cancel = cancel
+	go func() {
+		defer close(j.done)
+		defer devnull.Close()
+		defer logFile.Close()
+		err := runner.Run(ctx, node)
+		var exit interp.ExitStatus
+		j.mu.Lock()
+		killed := j.killed
+		j.mu.Unlock()
+		switch {
+		case killed != 0:
+			j.exit = 128 + int(killed)
+		case errors.As(err, &exit):
+			j.exit = int(exit)
+		case err != nil:
+			fmt.Fprintf(out, "nibash: %v\n", err)
+			j.exit = 1
+		}
+	}()
+	return j, nil
+}
+
+// startJob runs a whole command as a job, for background: true.
+func (sess *session) startJob(file *syntax.File, command string, tools *engine.Context, dir string) (*job, error) {
+	runner := sess.runner.Subshell()
+	if err := interp.Dir(dir)(runner); err != nil {
+		return nil, err
+	}
+	return sess.launch(runner, file, command, tools)
+}
+
+// startJob starts the statement an & put away as a job, in a copy of the shell as it is now, and prints the job's spec for $!.
+func (c *call) startJob(ctx context.Context, args []string) error {
+	hc := interp.HandlerCtx(ctx)
+	key, err := strconv.Atoi(args[0])
+	stmt := c.jobs[key]
+	if err != nil || stmt == nil {
+		return interp.ExitStatus(1)
+	}
+	runner := c.session.runner.Subshell()
+	if err := interp.Dir(hc.Dir)(runner); err != nil {
+		return err
+	}
+	var text strings.Builder
+	syntax.NewPrinter().Print(&text, stmt)
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools)
+	if err != nil {
+		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
+		return interp.ExitStatus(1)
+	}
+	fmt.Fprintf(hc.Stdout, "%%%d", j.id)
+	return nil
+}
+
+var signalNames = map[string]syscall.Signal{"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUIT": syscall.SIGQUIT, "KILL": syscall.SIGKILL, "TERM": syscall.SIGTERM, "USR1": syscall.SIGUSR1, "USR2": syscall.SIGUSR2, "STOP": syscall.SIGSTOP, "CONT": syscall.SIGCONT}
+
+func parseSignal(name string) (syscall.Signal, bool) {
+	name = strings.TrimPrefix(strings.ToUpper(name), "SIG")
+	if sig, ok := signalNames[name]; ok {
+		return sig, true
+	}
+	if n, err := strconv.Atoi(name); err == nil && n > 0 && n < 65 {
+		return syscall.Signal(n), true
+	}
+	return 0, false
+}
+
+// kill signals jobs (%N) and processes (PID, or -PGID for a group), as bash's kill does.
+func (c *call) kill(ctx context.Context, args []string) error {
+	hc := interp.HandlerCtx(ctx)
+	sig := syscall.SIGTERM
+	if len(args) > 0 && args[0] == "-l" {
+		names := make([]string, 0, len(signalNames))
+		for name := range signalNames {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		fmt.Fprintln(hc.Stdout, strings.Join(names, " "))
+		return nil
+	}
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "--" {
+		value := args[0][1:]
+		if value == "s" || value == "n" {
+			if len(args) < 2 {
+				fmt.Fprintln(hc.Stderr, "kill: option requires an argument")
+				return interp.ExitStatus(2)
+			}
+			value, args = args[1], args[1:]
+		}
+		parsed, ok := parseSignal(value)
+		if !ok {
+			// A negative number after the signal is a process group.
+			if _, err := strconv.Atoi(value); err == nil {
+				break
+			}
+			fmt.Fprintf(hc.Stderr, "kill: %s: invalid signal specification\n", value)
+			return interp.ExitStatus(1)
+		}
+		sig = parsed
+		args = args[1:]
+	}
+	args = slices.DeleteFunc(args, func(a string) bool { return a == "--" })
+	if len(args) == 0 {
+		fmt.Fprintln(hc.Stderr, "kill: usage: kill [-s sigspec | -sigspec] pid | jobspec ...")
+		return interp.ExitStatus(2)
+	}
+	status := 0
+	for _, target := range args {
+		if strings.HasPrefix(target, "%") {
+			j := c.session.jobs.find(target)
+			if j == nil {
+				fmt.Fprintf(hc.Stderr, "kill: %s: no such job\n", target)
+				status = 1
+				continue
+			}
+			j.signal(sig)
+			continue
+		}
+		pid, err := strconv.Atoi(target)
+		if err != nil {
+			fmt.Fprintf(hc.Stderr, "kill: %s: arguments must be process or job IDs\n", target)
+			status = 1
+			continue
+		}
+		if err := syscall.Kill(pid, sig); err != nil {
+			fmt.Fprintf(hc.Stderr, "kill: (%d) - %s\n", pid, errorText(err))
+			status = 1
+		}
+	}
+	return interp.ExitStatus(status)
+}
+
+func errorText(err error) string {
+	text := err.Error()
+	if text == "" {
+		return text
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
+// listJobs prints the session's jobs with their state and log.
+func (c *call) listJobs(ctx context.Context) error {
+	hc := interp.HandlerCtx(ctx)
+	for _, j := range c.session.jobs.all() {
+		state := "Running"
+		if !j.running() {
+			state = fmt.Sprintf("Done (exit %d)", j.exit)
+		}
+		fmt.Fprintf(hc.Stdout, "[%d]  %s  %s  (output: %s)\n", j.id, state, j.command, j.log)
+	}
+	return nil
+}
+
+// wait waits for the named jobs, or for every job, within the call's time.
+func (c *call) wait(ctx context.Context, args []string) error {
+	hc := interp.HandlerCtx(ctx)
+	targets := c.session.jobs.all()
+	if len(args) > 0 {
+		targets = nil
+		for _, spec := range args {
+			j := c.session.jobs.find(spec)
+			if j == nil {
+				fmt.Fprintf(hc.Stderr, "wait: %s: no such job\n", spec)
+				return interp.ExitStatus(127)
+			}
+			targets = append(targets, j)
+		}
+	}
+	status := 0
+	for _, j := range targets {
+		select {
+		case <-j.done:
+			status = j.exit
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return interp.ExitStatus(status)
+}
+
+var _ io.Writer = (*cappedWriter)(nil)

@@ -1,7 +1,7 @@
 /** Benchmark tasks: prompts a model works through, a check of the finished tree, and a reference solution that proves the check passes. */
 import { diffArrays } from "diff"
 import { readFileSync, rmSync } from "node:fs"
-import { mkdtemp, readdir, readFile, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { API_CONFIG, DATA_FILES, NEW_HOST, OLD_HOST } from "./fixture"
@@ -10,12 +10,17 @@ import { API_CONFIG, DATA_FILES, NEW_HOST, OLD_HOST } from "./fixture"
 export type Step = { prompt: string; before?: (work: string) => Promise<void>; solve: (work: string) => Promise<void> }
 /**
  * `check` throws with the reason when the finished tree in `work` is wrong; `pristine` is the untouched fixture. `tests` names the test file the
- * prompts ask for: verification runs it, and it must pass with more tests and assertions than the untouched fixture's copy.
+ * prompts ask for: verification runs it, and it must pass with more tests and assertions than the untouched fixture's copy. `shell` marks a task
+ * that needs a shell to run programs; it runs only in the shell series, since the default series offers no shell.
  */
-export type Task = { name: string; about: string; steps: Step[]; check: (work: string, pristine: string) => Promise<void>; tests?: string }
-/** One-shot tasks take one prompt; multi-step ones take several on the same files, the repeated editing nib is built for. */
-export type TaskKind = "one-shot" | "multi-step"
-export const taskKind = (task: Task): TaskKind => task.steps.length > 1 ? "multi-step" : "one-shot"
+export type Task = { name: string; about: string; steps: Step[]; check: (work: string, pristine: string) => Promise<void>; tests?: string; shell?: boolean }
+/** One-shot tasks take one prompt; multi-step ones take several on the same files, the repeated editing nib is built for; program tasks need a shell. */
+export type TaskKind = "one-shot" | "multi-step" | "program"
+// Edit tasks are judged on their edits alone, so their prompts rule out runs that would only cost time; program tasks are about running programs.
+const EDITS_ONLY = "\n\nDo not run tests, type checks, builds or git commands; just make the edits and stop."
+/** The prompt a model gets for `step` of `task`. */
+export const promptOf = (task: Task, step: Step) => task.shell ? step.prompt : step.prompt + EDITS_ONLY
+export const taskKind = (task: Task): TaskKind => task.shell ? "program" : task.steps.length > 1 ? "multi-step" : "one-shot"
 
 const read = (directory: string, file: string) => readFile(path.join(directory, file), "utf8")
 const load = (directory: string, file: string) => import(path.join(directory, file))
@@ -57,6 +62,196 @@ const AGE_TEST = `\ndescribe("describeAge", () => {\n  test("names an age in its
 const CUT_HINT = "a CUT line ends at its line numbers; delete text inside a line with SUB"
 const CUT_CASE = `  test("CUT N deletes one line and CUT N-M a range", () => {\n    const [section] = parsePatch("[a.ts#3C4D]\\nCUT 3\\nCUT 5-7")\n    expect(section).toMatchObject({ edits: [{ start: 3, end: 3, operation: "replace" }, { start: 5, end: 7, operation: "replace" }] })\n  })\n`
 const CUT_TEXT_CASE = `  test("a CUT line ends at its line numbers", () => {\n    expect(() => parsePatch("[a.ts#3C4D]\\nCUT 3 old text")).toThrow("${CUT_HINT}")\n  })\n`
+const SEEDED_TAG = "export function fileTag(text: string, seed: number) {\n  return (Bun.hash.xxHash32(text.split(\"\\n\").map(trimEnd).join(\"\\n\"), seed)"
+const PLAIN_TAG = "export function fileTag(text: string) {\n  return (Bun.hash.xxHash32(text.split(\"\\n\").map(trimEnd).join(\"\\n\"), 0)"
+const ROW = "if (!colored && !cut) return { text: `${line}:${content}`, anchor: true }"
+const TRIMMED_ROW = "if (!colored && !cut) return { text: `${line}:${content.trimEnd()}`, anchor: true }"
+const BUILD_FORMATS = ["esm", "iife"]
+const BUILD_CONFIG = {
+  targets: [
+    { name: "core", entry: "src/engine.ts", outDir: "dist/core", format: "esm" },
+    { name: "patch", entry: "src/patch.ts", outDir: "dist/patch", format: "esm" },
+    { name: "worker", entry: "src/snapshots.ts", outDir: "dist/worker", format: "cjs" },
+    { name: "server", entry: "src/server.ts", outDir: "dist/server", format: "esm" },
+    { name: "cli", entry: "src/main.ts", outDir: "dist/cli", format: "iife" },
+    { name: "browser", entry: "src/patch.ts", outDir: "dist/browser", format: "iife" },
+  ],
+}
+// A bundler-like build: hundreds of colored lines per target, the one real error in the middle, and a summary at the end.
+const BUILD_SCRIPT = `// Builds every target in config/build.json.
+const config = JSON.parse(await Bun.file(new URL("../config/build.json", import.meta.url)).text())
+const FORMATS = ${JSON.stringify(BUILD_FORMATS)}
+let seed = 42
+const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+const paint = (code, text) => "\\x1b[" + code + "m" + text + "\\x1b[0m"
+let failed = 0
+for (const target of config.targets) {
+  console.log(paint("1", "[" + target.name + "]") + " building " + target.entry + " -> " + target.outDir + " (" + target.format + ")")
+  if (!FORMATS.includes(target.format)) {
+    console.log(paint("31", "[" + target.name + "] error: unsupported format \\"" + target.format + "\\" in config/build.json (supported: " + FORMATS.join(", ") + ")"))
+    failed++
+    continue
+  }
+  for (let index = 0; index < 600; index++) {
+    const module = "src/module" + Math.floor(next() * 400) + ".ts"
+    if (next() < 0.03) console.log(paint("33", "[" + target.name + "] warning: " + module + " has an unused import"))
+    else console.log("[" + target.name + "] " + paint("2", "transform") + " " + module + " " + Math.floor(next() * 90) + "ms")
+  }
+  console.log(paint("32", "[" + target.name + "] done: " + (200 + Math.floor(next() * 400)) + " modules, " + Math.floor(next() * 900) + " KiB"))
+}
+console.log(failed ? paint("31", "build failed: " + failed + " of " + config.targets.length + " targets failed") : paint("32", "build ok"))
+process.exit(failed ? 1 : 0)
+`
+const SLOW_ORDERS = /GET \/v1\/orders\/\d+ 200 (\d+)ms/g
+async function slowOrders(directory: string) {
+  const log = await read(directory, "logs/api-2026-10-13.log")
+  return [...log.matchAll(SLOW_ORDERS)].filter((match) => Number(match[1]) >= 50).length
+}
+async function unchangedTests(work: string, pristine: string) {
+  for (const file of (await codeFiles(pristine)).filter((name) => name.startsWith("test"))) if (await read(work, file) !== await read(pristine, file)) fail(`${file} changed`)
+}
+// A gateway's routes halfway through a migration: /v1/payments was moved to payments-v2, whose hosts were never added. 42 routes, 7 upstreams,
+// as the replayed log's first line says.
+const ROUTE_TABLE: [string, string[]][] = [
+  ["orders", ["/v1/orders", "/v1/orders/:id", "/v1/orders/:id/items", "/v1/orders/:id/cancel", "/v1/orders/:id/history", "/v1/orders/:id/invoice", "/v1/orders/export", "/v1/orders/search"]],
+  ["users", ["/v1/users", "/v1/users/:id", "/v1/users/:id/addresses", "/v1/users/:id/preferences", "/v1/users/:id/sessions", "/v1/users/me", "/v1/users/invite", "/v1/users/search"]],
+  ["carts", ["/v1/carts", "/v1/carts/:id", "/v1/carts/:id/items", "/v1/carts/:id/items/:item", "/v1/carts/:id/checkout", "/v1/carts/:id/coupons"]],
+  ["payments", ["/v1/payments", "/v1/payments/:id", "/v1/payments/:id/capture", "/v1/payments/:id/refunds", "/v1/payments/methods", "/v1/payments/webhooks", "/v1/refunds/:id"]],
+  ["search", ["/v1/search", "/v1/search/suggest", "/v1/search/facets", "/v1/catalog", "/v1/catalog/:id", "/v1/catalog/:id/related"]],
+  ["auth", ["/v1/auth/login", "/v1/auth/logout", "/v1/auth/refresh", "/v1/auth/reset", "/v1/auth/verify", "/v1/auth/mfa", "/v1/auth/keys"]],
+]
+const upstreamHosts = (subnet: number, count: number) => Array.from({ length: count }, (_, index) => `10.0.${subnet}.${11 + index}:8080`)
+const ROUTES_CONFIG = {
+  routes: Object.fromEntries(ROUTE_TABLE.flatMap(([upstream, paths]) => paths.map((route) => [route, route === "/v1/payments" ? "payments-v2" : upstream]))),
+  upstreams: { orders: upstreamHosts(1, 4), users: upstreamHosts(2, 3), carts: upstreamHosts(3, 2), payments: upstreamHosts(4, 3), "payments-v2": [], search: upstreamHosts(5, 2), auth: upstreamHosts(6, 2) },
+}
+// noisyService() of internal/nibash/testdata/captures/generate.ts, reading the route the reload sets from config/routes.json: with the starting
+// config it prints that capture byte for byte (a test holds it there), and once /v1/payments has hosts again its POSTs stop failing.
+const SERVE_SCRIPT = `// Replays a recorded day of the gateway's traffic; partway through, the gateway reloads config/routes.json.
+const config = JSON.parse(await Bun.file(new URL("../config/routes.json", import.meta.url)).text())
+let seed = 7
+const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+const pick = (list) => list[Math.floor(next() * list.length)]
+const time = (second) => new Date(Date.UTC(2026, 9, 13, 9, 0, 0) + second * 1000 + Math.floor(next() * 990)).toISOString()
+const upstream = config.routes["/v1/payments"]
+const healthy = (config.upstreams[upstream] ?? []).length
+const lines = []
+const reloadAt = 1700
+let second = 0
+let reloaded = ""
+lines.push(time(second) + " INFO  server: listening on :8080 (routes: 42, upstreams: 7)")
+lines.push(time(second) + ' INFO  routes: /v1/payments -> upstream "payments" (3 healthy hosts of 3)')
+while (lines.length < 3200) {
+  second += 1
+  if (lines.length === reloadAt) {
+    reloaded = time(second)
+    lines.push(reloaded + " INFO  config: reloaded config/routes.json (" + Object.keys(config.routes).length + " routes, " + Object.keys(config.upstreams).length + " upstreams)")
+    lines.push(time(second) + " INFO  routes: /v1/payments -> upstream " + JSON.stringify(upstream) + " (" + healthy + " healthy hosts of " + healthy + ")")
+    continue
+  }
+  const failing = lines.length > reloadAt && healthy === 0
+  const roll = next()
+  if (roll < 0.09) lines.push(time(second) + " ERROR pool: connection pool exhausted (64/64 in use), retrying in 50ms")
+  else if (roll < 0.16) lines.push(time(second) + " DEBUG health: ok (db " + (1 + Math.floor(next() * 4)) + "ms, cache 1ms)")
+  else if (roll < 0.19) lines.push(time(second) + " WARN  gc: pause " + (80 + Math.floor(next() * 90)) + "ms")
+  else if (roll < 0.34) lines.push(failing ? time(second) + " INFO  http: POST /v1/payments 503 0ms" : time(second) + " INFO  http: POST /v1/payments 201 " + (30 + Math.floor(next() * 40)) + "ms")
+  else lines.push(time(second) + " INFO  http: " + pick(["GET", "GET", "GET", "PUT"]) + " /v1/" + pick(["orders", "users", "carts"]) + "/" + (10000 + Math.floor(next() * 90000)) + " 200 " + (2 + Math.floor(next() * 60)) + "ms")
+}
+lines.push(time(second + 1) + " INFO  server: draining (SIGTERM)")
+lines.push(time(second + 1) + " INFO  server: stopped; " + lines.filter((line) => line.includes(" 503 ")).length + " POST /v1/payments answered 503 since " + reloaded.slice(11, 19))
+console.log(lines.join("\\n"))
+`
+// parseDuration drops the sign; line 41 is the bug, as the check's failure says.
+const DURATION_SOURCE = `// Durations as people write them in config files and flags: "90s", "15m", "1h30m", "250ms", and "-2h" for a time back.
+
+const UNITS: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 }
+const PART = /(\\d+(?:\\.\\d+)?)(ms|s|m|h|d)/g
+const DURATION = /^([+-])?((?:\\d+(?:\\.\\d+)?(?:ms|s|m|h|d))+)$/
+
+/** Seconds as the largest units that divide them, like 5400 as "1h30m"; 0 is "0s". */
+export function formatDuration(seconds: number): string {
+  if (seconds === 0) return "0s"
+  const sign = seconds < 0 ? "-" : ""
+  let rest = Math.abs(seconds)
+  const parts: string[] = []
+  for (const unit of ["d", "h", "m", "s"]) {
+    const size = UNITS[unit]!
+    const count = Math.floor(rest / size)
+    if (count > 0) {
+      parts.push(count + unit)
+      rest -= count * size
+    }
+  }
+  const millis = Math.round(rest * 1000)
+  if (millis > 0) parts.push(millis + "ms")
+  return sign + parts.join("")
+}
+
+/** Whether text is a duration parseDuration takes. */
+export function isDuration(text: string): boolean {
+  return DURATION.test(text.trim())
+}
+
+/**
+ * Seconds in a duration; a leading - counts back, as in "-90s" for a minute and a half ago.
+ * @throws Error when text is not a duration
+ */
+export function parseDuration(text: string): number {
+  const match = DURATION.exec(text.trim())
+  if (!match) throw new Error("not a duration: " + JSON.stringify(text))
+  let total = 0
+  for (const [, amount, unit] of match[2]!.matchAll(PART)) total += Number(amount) * UNITS[unit!]!
+  const sign = match[1] === "-" ? -1 : 1
+  return Math.abs(sign * total)
+}
+`
+// The values the long-run check holds parseDuration to.
+const DURATIONS: [string, number][] = [["-90s", -90], ["90s", 90], ["1h30m", 5400], ["-2h", -7200], ["15m", 900], ["+45s", 45], ["0s", 0], ["2d", 172800]]
+// longRun() of internal/nibash/testdata/captures/generate.ts, from the generator state that noisyService() leaves, with its one real check run on
+// src/duration.ts: while that fails it prints that capture byte for byte (a test holds it there).
+const CHECK_SCRIPT = `// Runs the project's checks.
+import { parseDuration } from "../src/duration.ts"
+
+let seed = 1467546745
+const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+const pick = (list) => list[Math.floor(next() * list.length)]
+const AREAS = ["durations", "parser", "router", "cache", "errors", "retry", "auth", "orders", "money", "locale"]
+const VERBS = ["parses", "formats", "rounds", "keeps", "merges", "sorts", "rejects", "accepts", "reports", "skips"]
+const THINGS = ["empty input", "a trailing comma", "unicode names", "large numbers", "nested lists", "a missing field", "duplicate keys", "negative values", "an expired token", "a slow upstream"]
+const NOISY = ["reports an error for {}", "fails fast on {}", "throws a TypeError for {}", "keeps the failure count for {}", "returns errors for {}"]
+const lines = []
+const failAt = 1400
+let count = 0
+let failed = 0
+for (let file = 0; file < 38; file++) {
+  lines.push("src/" + AREAS[file % AREAS.length] + file + ".test.ts:")
+  for (let n = 0; n < 63; n++) {
+    count++
+    const thing = pick(THINGS)
+    const name = next() < 0.11 ? pick(NOISY).replace("{}", thing) : pick(VERBS) + " " + thing
+    const ms = (next() * 0.9).toFixed(2)
+    if (count === failAt) {
+      let got
+      try {
+        got = parseDuration("-90s")
+      } catch (error) {
+        got = String(error)
+      }
+      if (got === -90) lines.push('\\u2713 durations > parses "-90s" [0.31ms]')
+      else {
+        failed++
+        lines.push('\\u2715 durations > parses "-90s" [0.31ms]', "    got " + got + ", want -90 (src/duration.ts:41)", "    at parseDuration (src/duration.ts:41:12)")
+      }
+      continue
+    }
+    lines.push("\\u2713 " + AREAS[file % AREAS.length] + " > " + name + " [" + ms + "ms]")
+  }
+  lines.push("")
+}
+lines.push(" " + (count - failed) + " pass", " " + failed + " fail", " " + count * 3 + " expect() calls", "Ran " + count + " tests across 38 files. [1.84s]")
+console.log(lines.join("\\n"))
+process.exit(failed ? 1 : 0)
+`
 
 export const TASKS: Task[] = [
   {
@@ -363,6 +558,125 @@ export const TASKS: Task[] = [
       for (const [name, ending] of Object.entries(DATA_ENDINGS)) {
         const actual = await read(work, path.join("data", name))
         if (actual !== DATA_FILES[name] + ending) fail(`data/${name} is ${JSON.stringify(actual)}, expected ${JSON.stringify(DATA_FILES[name] + ending)}`)
+      }
+    },
+  },
+  {
+    name: "type-errors",
+    about: "a signature change breaks the type check in 45 places; run it and fix them",
+    shell: true,
+    steps: [{
+      prompt: "The type check fails since a teammate changed src/snapshots.ts. Run bun typecheck and fix it so it passes, without changing what any existing call computes.",
+      before: (work) => change(work, "src/snapshots.ts", (text) => text.replace(PLAIN_TAG, SEEDED_TAG)),
+      solve: (work) => change(work, "src/snapshots.ts", (text) => text.replace("fileTag(text: string, seed: number)", "fileTag(text: string, seed = 0)")),
+    }],
+    check: async (work) => {
+      // The fixture's own tests pin this vector: oh-my-pi's file_hash of "hello\n".
+      const { engine, ctx, directory } = await engineIn(work)
+      await writeFile(path.join(directory, "t.txt"), "hello\n")
+      const shown = (await engine.read(ctx, { paths: ["t.txt"] })).text
+      if (!shown.includes("#5BF9]")) fail(`reads no longer show the tag 5BF9 for "hello\\n":\n${shown}`)
+    },
+  },
+  {
+    name: "failing-test",
+    about: "a one-character bug fails a test with a long diff; run the tests and fix the source",
+    shell: true,
+    steps: [{
+      prompt: "The test suite fails. Run bun test, find the cause and fix it in src/. Do not change any test.",
+      before: (work) => change(work, "src/engine.ts", (text) => text.replace(ROW, TRIMMED_ROW)),
+      solve: (work) => change(work, "src/engine.ts", (text) => text.replace(TRIMMED_ROW, ROW)),
+    }],
+    check: async (work, pristine) => {
+      await unchangedTests(work, pristine)
+      const { engine, ctx, directory } = await engineIn(work)
+      await writeFile(path.join(directory, "t.txt"), "keep  \nthese\t\n")
+      const shown = (await engine.read(ctx, { paths: ["t.txt"] })).text
+      if (!shown.includes("\n1:keep  \n2:these\t")) fail(`reads drop trailing whitespace:\n${JSON.stringify(shown)}`)
+    },
+  },
+  {
+    name: "build-log",
+    about: "a build prints 3000 colored lines with its one error in the middle; find it and fix the config",
+    shell: true,
+    steps: [{
+      prompt: "bun scripts/build.ts fails. Find out why and fix config/build.json so the build succeeds. Do not change the build script.",
+      before: async (work) => {
+        await mkdir(path.join(work, "scripts"), { recursive: true })
+        await writeFile(path.join(work, "scripts", "build.ts"), BUILD_SCRIPT)
+        await writeFile(path.join(work, "config", "build.json"), JSON.stringify(BUILD_CONFIG, null, 2) + "\n")
+      },
+      solve: (work) => change(work, "config/build.json", (text) => text.replace('"format": "cjs"', '"format": "esm"')),
+    }],
+    check: async (work) => {
+      if (await read(work, "scripts/build.ts") !== BUILD_SCRIPT) fail("scripts/build.ts changed")
+      const config = JSON.parse(await read(work, "config/build.json"))
+      const targets: { name: string; format: string }[] = config.targets ?? []
+      if (targets.length !== BUILD_CONFIG.targets.length) fail(`config/build.json has ${targets.length} targets, expected ${BUILD_CONFIG.targets.length}`)
+      // Only the worker's format may change, to one the build supports.
+      for (const [index, target] of BUILD_CONFIG.targets.entries()) {
+        const actual = targets[index]!
+        if (!BUILD_FORMATS.includes(actual.format)) fail(`target ${actual.name} has format ${JSON.stringify(actual.format)}`)
+        const expected = target.name === "worker" ? { ...target, format: actual.format } : target
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) fail(`target ${target.name} changed beyond the worker's format`)
+      }
+    },
+  },
+  {
+    name: "log-stats",
+    about: "count slow requests in a 9000-line log and write the number down",
+    shell: true,
+    steps: [{
+      prompt: "How many GET requests to /v1/orders in logs/api-2026-10-13.log took 50 ms or longer? Write only that number to answer.txt in the project root.",
+      solve: async (work) => writeFile(path.join(work, "answer.txt"), `${await slowOrders(work)}\n`),
+    }],
+    check: async (work, pristine) => {
+      const expected = await slowOrders(pristine)
+      const answer = (await read(work, "answer.txt").catch(() => fail("answer.txt is missing"))).trim()
+      if (answer !== String(expected)) fail(`answer.txt says ${JSON.stringify(answer)}, expected ${expected}`)
+    },
+  },
+  {
+    name: "noisy-service",
+    about: "a 3200-line service log hides the cause, a route reload, among hundreds of unrelated ERROR lines; fix the route",
+    shell: true,
+    steps: [{
+      prompt: "POST /v1/payments starts answering 503 partway through bun scripts/serve.ts, which replays a recorded day of traffic and exits. Find out why and fix config/routes.json so payments keep working. Do not change the script.",
+      before: async (work) => {
+        await mkdir(path.join(work, "scripts"), { recursive: true })
+        await writeFile(path.join(work, "scripts", "serve.ts"), SERVE_SCRIPT)
+        await writeFile(path.join(work, "config", "routes.json"), JSON.stringify(ROUTES_CONFIG, null, 2) + "\n")
+      },
+      solve: (work) => change(work, "config/routes.json", (text) => text.replace('"/v1/payments": "payments-v2"', '"/v1/payments": "payments"')),
+    }],
+    check: async (work) => {
+      if (await read(work, "scripts/serve.ts") !== SERVE_SCRIPT) fail("scripts/serve.ts changed")
+      const config = JSON.parse(await read(work, "config/routes.json"))
+      const upstream = config.routes?.["/v1/payments"]
+      // Only payments, the upstream that served the route before the reload, serves payments; the others with hosts serve other routes.
+      if (upstream !== "payments") fail(`/v1/payments goes to ${JSON.stringify(upstream)}, not to "payments", the upstream that served it before the reload`)
+      if (!Bun.deepEquals(config, { ...ROUTES_CONFIG, routes: { ...ROUTES_CONFIG.routes, "/v1/payments": "payments" } })) fail("config/routes.json changed beyond the /v1/payments route")
+    },
+  },
+  {
+    name: "long-run",
+    about: "2394 checks, many named for errors, print one failure marked only with a cross; find it and fix the source",
+    shell: true,
+    steps: [{
+      prompt: "bun scripts/check.ts runs the project's 2,394 checks and one fails. Find the failing check and fix the source so every check passes. Do not change the checks.",
+      before: async (work) => {
+        await mkdir(path.join(work, "scripts"), { recursive: true })
+        await writeFile(path.join(work, "scripts", "check.ts"), CHECK_SCRIPT)
+        await writeFile(path.join(work, "src", "duration.ts"), DURATION_SOURCE)
+      },
+      solve: (work) => change(work, "src/duration.ts", (text) => text.replace("return Math.abs(sign * total)", "return sign * total")),
+    }],
+    check: async (work) => {
+      if (await read(work, "scripts/check.ts") !== CHECK_SCRIPT) fail("scripts/check.ts changed")
+      const { parseDuration } = await load(work, "src/duration.ts")
+      for (const [text, seconds] of DURATIONS) {
+        const actual = parseDuration(text)
+        if (actual !== seconds) fail(`parseDuration(${JSON.stringify(text)}) is ${actual}, expected ${seconds}`)
       }
     },
   },

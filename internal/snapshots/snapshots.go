@@ -1,0 +1,607 @@
+// Package snapshots keeps per-session file versions with the lines the agent saw or wrote, and rebases edits across versions.
+package snapshots
+
+import (
+	"container/list"
+	"math"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/11ways/nib/internal/diff"
+	"github.com/11ways/nib/internal/js"
+	"github.com/11ways/nib/internal/tag"
+)
+
+// View is the text identity of one file version: LF-normalized BOM-free body, its line contents, and its tag.
+type View struct {
+	Key   string
+	Lines []string
+	Tag   string
+}
+
+// Version is a retained View; Seen is nil when edits may anchor anywhere, Known holds lines whose content the agent wrote or saw before they moved.
+type Version struct {
+	View
+	Seen  map[int]bool
+	Known map[int]bool
+	// at is when the store first held this version, and seenAt and knownAt when each line joined Seen or Known, in Unix nanoseconds; Copy
+	// takes only what is older than its moment.
+	at              int64
+	seenAt, knownAt map[int]int64
+}
+
+// Operation is how a LineEdit changes its lines.
+type Operation int
+
+const (
+	Replace Operation = iota
+	Before
+	After
+)
+
+// Tail is the start and end of an edit that appends after whatever the last line is when applied.
+const Tail = int(^uint(0) >> 2)
+
+// LineEdit is one edit in 1-based line coordinates; see the TypeScript LineEdit for what each field means.
+type LineEdit struct {
+	Start, End int
+	Operation  Operation
+	Content    []string
+	Edge       bool
+	Block      bool
+	Checks     []string
+	HasChecks  bool
+	Confirmed  []int
+	Sub        *string
+	Quoted     bool
+	Opaque     bool
+	Old        []string
+	Written    string
+}
+
+const (
+	maxPaths        = 256
+	maxVersions     = 4
+	maxUnits        = 64 * 1024 * 1024
+	diffTimeout     = time.Second
+	evidenceMinRune = 8
+)
+
+// Limits bound a Store.
+type Limits struct{ Paths, Versions, Units int }
+
+type history struct {
+	id       string
+	versions []*Version
+	units    int
+}
+
+// Store holds per-session file versions with LRU eviction across all sessions and paths. It is safe for concurrent use; a Version's line
+// sets change only in Record, so a caller reads one it holds only while it keeps others from recording the same session and path.
+type Store struct {
+	mu        sync.Mutex
+	limits    Limits
+	histories map[string]*list.Element
+	order     *list.List
+	units     int
+	// Now is the wall clock lines are stamped with when they become seen or known; it must be comparable with other processes' clocks, as a
+	// fork's moment comes from its harness. Set it before first use.
+	Now func() time.Time
+}
+
+// NewStore makes a store with nib's default limits.
+func NewStore() *Store { return NewStoreWith(Limits{maxPaths, maxVersions, maxUnits}) }
+
+// NewStoreWith makes a store with the given limits.
+func NewStoreWith(limits Limits) *Store {
+	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), Now: time.Now}
+}
+
+func id(session, path string) string { return session + "\x00" + path }
+
+// Record makes view the most recent version and unions seen and known into its line sets; a nil seen leaves Seen as it is. A line keeps the
+// moment it first joined a set.
+func (s *Store) Record(session, path string, view View, seen, known []int) *Version {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.Now().UnixNano()
+	key := id(session, path)
+	h := &history{id: key}
+	if element, ok := s.histories[key]; ok {
+		h = element.Value.(*history)
+		s.order.Remove(element)
+		delete(s.histories, key)
+		s.units -= h.units
+	}
+	var version *Version
+	for i, existing := range h.versions {
+		if existing.Key == view.Key {
+			version = existing
+			h.versions = slices.Delete(h.versions, i, i+1)
+			break
+		}
+	}
+	if version == nil {
+		version = &Version{View: view, at: now}
+	}
+	if seen != nil {
+		version.Seen, version.seenAt = stamp(version.Seen, version.seenAt, seen, now)
+	}
+	if known != nil {
+		version.Known, version.knownAt = stamp(version.Known, version.knownAt, known, now)
+	}
+	h.versions = append([]*Version{version}, h.versions...)
+	if len(h.versions) > s.limits.Versions {
+		h.versions = h.versions[:s.limits.Versions]
+	}
+	h.units = 1
+	for _, v := range h.versions {
+		h.units += js.Len(v.Key) * 2
+	}
+	s.histories[key] = s.order.PushBack(h)
+	s.units += h.units
+	s.evict()
+	return version
+}
+
+// evict drops least recently used histories until the store is within its limits.
+func (s *Store) evict() {
+	for len(s.histories) > s.limits.Paths || s.units > s.limits.Units {
+		oldest := s.order.Front()
+		if oldest == nil {
+			break
+		}
+		old := oldest.Value.(*history)
+		s.units -= old.units
+		s.order.Remove(oldest)
+		delete(s.histories, old.id)
+	}
+}
+
+// stamp adds lines to set, noting now for each line new to it.
+func stamp(set map[int]bool, at map[int]int64, lines []int, now int64) (map[int]bool, map[int]int64) {
+	if set == nil {
+		set, at = map[int]bool{}, map[int]int64{}
+	}
+	for _, line := range lines {
+		if !set[line] {
+			set[line], at[line] = true, now
+		}
+	}
+	return set, at
+}
+
+// before is the part of set, with its moments, that joined it before moment.
+func before(set map[int]bool, at map[int]int64, moment int64) (map[int]bool, map[int]int64) {
+	if set == nil {
+		return nil, nil
+	}
+	kept, keptAt := map[int]bool{}, map[int]int64{}
+	for line := range set {
+		if at[line] < moment {
+			kept[line], keptAt[line] = true, at[line]
+		}
+	}
+	return kept, keptAt
+}
+
+// Copy makes session to's versions copies of session from's as they were just before asOf, each as recently used as its original, replacing
+// any to had; the zero asOf copies them as they are. A version the store first held at or after asOf is left out, and so is a path left with
+// none. Lines keep the moments they became seen or known, so a later Copy from to filters them alike. Later records to either session never
+// reach the other.
+func (s *Store) Copy(from, to string, asOf time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if from == to {
+		return
+	}
+	moment := int64(math.MaxInt64)
+	if !asOf.IsZero() {
+		moment = asOf.UnixNano()
+	}
+	source, target := from+"\x00", to+"\x00"
+	var originals []*list.Element
+	for element := s.order.Front(); element != nil; {
+		next := element.Next()
+		h := element.Value.(*history)
+		switch {
+		case strings.HasPrefix(h.id, target):
+			s.units -= h.units
+			s.order.Remove(element)
+			delete(s.histories, h.id)
+		case strings.HasPrefix(h.id, source):
+			originals = append(originals, element)
+		}
+		element = next
+	}
+	for _, element := range originals {
+		h := element.Value.(*history)
+		copied := &history{id: target + h.id[len(source):], units: 1}
+		for _, v := range h.versions {
+			if v.at >= moment {
+				continue
+			}
+			version := &Version{View: v.View, at: v.at}
+			version.Seen, version.seenAt = before(v.Seen, v.seenAt, moment)
+			version.Known, version.knownAt = before(v.Known, v.knownAt, moment)
+			copied.versions = append(copied.versions, version)
+			copied.units += js.Len(v.Key) * 2
+		}
+		if len(copied.versions) == 0 {
+			continue
+		}
+		s.histories[copied.id] = s.order.InsertAfter(copied, element)
+		s.units += copied.units
+	}
+	s.evict()
+}
+
+// Versions are the retained versions, newest first; asking refreshes recency.
+func (s *Store) Versions(session, path string) []*Version {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	element, ok := s.histories[id(session, path)]
+	if !ok {
+		return nil
+	}
+	s.order.MoveToBack(element)
+	return slices.Clone(element.Value.(*history).versions)
+}
+
+// Origins are the other paths this session issued tag for, oldest first.
+func (s *Store) Origins(session, tagValue, except string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := session + "\x00"
+	var found []string
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		h := element.Value.(*history)
+		if !strings.HasPrefix(h.id, prefix) || h.id == prefix+except {
+			continue
+		}
+		for _, v := range h.versions {
+			if v.Tag == tagValue {
+				found = append(found, h.id[len(prefix):])
+				break
+			}
+		}
+	}
+	return found
+}
+
+// Paths lists the paths this session has versions of.
+func (s *Store) Paths(session string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := session + "\x00"
+	var found []string
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		if h := element.Value.(*history); strings.HasPrefix(h.id, prefix) {
+			found = append(found, h.id[len(prefix):])
+		}
+	}
+	return found
+}
+
+// NewView builds the view of an LF-normalized, BOM-free body split into lines.
+func NewView(body string, lines []string) View {
+	return View{Key: strings.ReplaceAll(body, "\r\n", "\n"), Lines: lines, Tag: tag.Of(body)}
+}
+
+// LineChanges is the line diff from previous to current; ok is false when it times out.
+func LineChanges(previous, current []string) ([]diff.Change, bool) {
+	return diff.Arrays(previous, current, diffTimeout)
+}
+
+// LineMap maps 1-based previous line numbers to current ones across unchanged runs; ok is false when the diff times out.
+func LineMap(previous, current []string) (map[int]int, bool) {
+	changes, ok := LineChanges(previous, current)
+	if !ok {
+		return nil, false
+	}
+	mapping := map[int]int{}
+	before, after := 1, 1
+	for _, change := range changes {
+		switch {
+		case change.Added:
+			after += change.Count
+		case change.Removed:
+			before += change.Count
+		default:
+			for offset := 0; offset < change.Count; offset++ {
+				mapping[before+offset] = after + offset
+			}
+			before += change.Count
+			after += change.Count
+		}
+	}
+	return mapping, true
+}
+
+// AnchorLines are the lines an edit depends on: the whole replaced range, or the insertion neighbour.
+func AnchorLines(edit LineEdit) []int {
+	if edit.Edge {
+		return nil
+	}
+	if edit.Operation != Replace {
+		return []int{edit.Start}
+	}
+	lines := make([]int, 0, max(0, edit.End-edit.Start+1))
+	for line := edit.Start; line <= edit.End; line++ {
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// Unverified are the anchor lines version does not let these edits use, sorted.
+func Unverified(version *Version, edits []LineEdit) []int {
+	if version.Seen == nil {
+		return nil
+	}
+	lines := map[int]bool{}
+	for _, edit := range edits {
+		if edit.Edge || edit.Quoted {
+			continue
+		}
+		confirmed := map[int]bool{}
+		for _, line := range edit.Confirmed {
+			confirmed[line] = true
+		}
+		if edit.Operation != Replace {
+			if !version.Seen[edit.Start] && !confirmed[edit.Start] {
+				lines[edit.Start] = true
+			}
+			continue
+		}
+		for line := edit.Start; line <= edit.End; line++ {
+			if version.Seen[line] {
+				continue
+			}
+			end := line == edit.Start || line == edit.End
+			if !version.Known[line] || (end && !confirmed[line]) {
+				lines[line] = true
+			}
+		}
+	}
+	return sortedKeys(lines)
+}
+
+func sortedKeys(set map[int]bool) []int {
+	keys := make([]int, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func duplicates(lines []string) map[string]bool {
+	seen := map[string]bool{}
+	repeated := map[string]bool{}
+	for _, line := range lines {
+		if seen[line] {
+			repeated[line] = true
+		}
+		seen[line] = true
+	}
+	return repeated
+}
+
+// Port of oh-my-pi validate_context: every anchor needs a neighbour that moved by the same offset.
+func contextHolds(previous, current []string, mapping map[int]int, anchors []int) bool {
+	previousRepeated := duplicates(previous)
+	currentRepeated := duplicates(current)
+	set := map[int]bool{}
+	for _, a := range anchors {
+		set[a] = true
+	}
+	sorted := sortedKeys(set)
+	for index := 0; index < len(sorted); {
+		last := index
+		for last+1 < len(sorted) && sorted[last+1] == sorted[last]+1 {
+			last++
+		}
+		before, hasBefore := sorted[index]-1, sorted[index] > 1
+		after, hasAfter := sorted[last]+1, sorted[last] < len(previous)
+		for _, line := range sorted[index : last+1] {
+			mapped, ok := mapping[line]
+			if !ok {
+				return false
+			}
+			offset := mapped - line
+			moved := func(neighbour int, has bool) bool {
+				if !has {
+					return false
+				}
+				target, ok := mapping[neighbour]
+				return ok && target == neighbour+offset
+			}
+			if !previousRepeated[previous[line-1]] && !currentRepeated[current[mapped-1]] {
+				if !moved(before, hasBefore) && !moved(after, hasAfter) {
+					return false
+				}
+			} else {
+				if !hasBefore && !hasAfter {
+					return false
+				}
+				if hasBefore && !moved(before, true) {
+					return false
+				}
+				if hasAfter && !moved(after, true) {
+					return false
+				}
+			}
+		}
+		index = last + 1
+	}
+	return true
+}
+
+// ResolveEdges pins tail edges to the last line of a file with length lines.
+func ResolveEdges(edits []LineEdit, length int) []LineEdit {
+	resolved := make([]LineEdit, len(edits))
+	for i, edit := range edits {
+		if edit.Edge {
+			edit.Start, edit.End = length, length
+		}
+		resolved[i] = edit
+	}
+	return resolved
+}
+
+// RemapEdits rebases edits authored against previous onto current when every anchor moved by one uniform offset; ok is false otherwise.
+func RemapEdits(previous *Version, current []string, edits []LineEdit) (offset int, remapped []LineEdit, ok bool) {
+	var anchors []int
+	for _, edit := range edits {
+		anchors = append(anchors, AnchorLines(edit)...)
+	}
+	if len(anchors) == 0 {
+		return 0, ResolveEdges(edits, len(current)), true
+	}
+	mapping, ok := LineMap(previous.Lines, current)
+	if !ok || !contextHolds(previous.Lines, current, mapping, anchors) {
+		return 0, nil, false
+	}
+	offsets := map[int]bool{}
+	for _, line := range anchors {
+		target, ok := mapping[line]
+		if !ok {
+			return 0, nil, false
+		}
+		offsets[target-line] = true
+	}
+	if len(offsets) != 1 {
+		return 0, nil, false
+	}
+	for o := range offsets {
+		offset = o
+	}
+	shifted := make([]LineEdit, len(edits))
+	for i, edit := range edits {
+		if !edit.Edge {
+			edit.Start += offset
+			edit.End += offset
+		}
+		shifted[i] = edit
+	}
+	return offset, ResolveEdges(shifted, len(current)), true
+}
+
+func uniqueEvidence(lines []string, line int) (string, bool) {
+	if line < 1 || line > len(lines) {
+		return "", false
+	}
+	content := js.Trim(lines[line-1])
+	if content == "" || utf8.RuneCountInString(content) < evidenceMinRune {
+		return "", false
+	}
+	count := 0
+	for _, other := range lines {
+		if js.Trim(other) == content {
+			count++
+		}
+	}
+	return content, count == 1
+}
+
+func identifier(r rune, ok bool) bool {
+	return ok && (unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_')
+}
+
+// carries is token-bounded containment: "foo(bar)" is not carried by "foo(bar_baz)".
+func carries(line, evidence string) bool {
+	first, _ := utf8.DecodeRuneInString(evidence)
+	lastRune, _ := utf8.DecodeLastRuneInString(evidence)
+	startsWord := identifier(first, evidence != "")
+	endsWord := identifier(lastRune, evidence != "")
+	for from := 0; ; {
+		at := strings.Index(line[from:], evidence)
+		if at < 0 {
+			return false
+		}
+		at += from
+		before, _ := utf8.DecodeLastRuneInString(line[:at])
+		after, _ := utf8.DecodeRuneInString(line[at+len(evidence):])
+		if !(startsWord && identifier(before, at > 0)) && !(endsWord && identifier(after, at+len(evidence) < len(line))) {
+			return true
+		}
+		from = at + 1
+	}
+}
+
+// RescueShifted are the unseen replace anchors that a shift-aware reading accepts (port of oh-my-pi rescue_shifted_anchors).
+func RescueShifted(versions []*Version, current View, edits []LineEdit, unseen map[int]bool) map[int]bool {
+	var images []func(int) bool
+	for _, version := range versions {
+		if len(version.Seen) == 0 {
+			continue
+		}
+		v := version
+		if v.Key == current.Key {
+			images = append(images, func(line int) bool { return v.Seen[line] })
+			continue
+		}
+		forward, _ := LineMap(v.Lines, current.Lines)
+		backward := map[int]int{}
+		for before, after := range forward {
+			backward[after] = before
+		}
+		images = append(images, func(line int) bool { return v.Seen[backward[line]] })
+	}
+	rescued := map[int]bool{}
+	for _, edit := range edits {
+		if edit.Operation != Replace || len(edit.Content) == 0 {
+			continue
+		}
+		var pending []int
+		for _, line := range AnchorLines(edit) {
+			if unseen[line] {
+				pending = append(pending, line)
+			}
+		}
+		if len(pending) == 0 {
+			continue
+		}
+		head, ok := uniqueEvidence(current.Lines, pending[0])
+		headAt := -1
+		if ok {
+			headAt = slices.IndexFunc(edit.Content, func(line string) bool { return carries(line, head) })
+		}
+		if headAt < 0 {
+			continue
+		}
+		if len(pending) > 1 {
+			tail, ok := uniqueEvidence(current.Lines, pending[len(pending)-1])
+			if !ok {
+				continue
+			}
+			lastAt := -1
+			for i := len(edit.Content) - 1; i >= 0; i-- {
+				if carries(edit.Content[i], tail) {
+					lastAt = i
+					break
+				}
+			}
+			if lastAt < headAt {
+				continue
+			}
+		}
+		all := true
+		for _, line := range pending {
+			if !slices.ContainsFunc(images, func(seen func(int) bool) bool { return seen(line) }) {
+				all = false
+				break
+			}
+		}
+		if all {
+			for _, line := range pending {
+				rescued[line] = true
+			}
+		}
+	}
+	return rescued
+}

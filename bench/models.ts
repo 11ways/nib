@@ -1,4 +1,4 @@
-/** The models a full benchmark covers: Claude through Claude Code, GPT through OpenCode on the OpenAI subscription login, the rest through OpenCode and OpenRouter. */
+/** The models a full benchmark covers: Claude through Claude Code, GPT through OpenCode v2 on the OpenAI subscription login, the rest through OpenCode v2 and OpenRouter. */
 import type { Model } from "./runners"
 
 /** Pinned versions rather than -latest aliases, so a model id always means the same weights and cached results stay comparable. */

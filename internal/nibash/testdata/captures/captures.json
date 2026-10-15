@@ -1,0 +1,74 @@
+[
+  {
+    "name": "build-log",
+    "file": "build-log.out.gz",
+    "about": "the benchmark's build-log task: 3,013 colored lines, 106 warnings, one error in the middle",
+    "command": "bun scripts/build.ts",
+    "exit": 1,
+    "purpose": "find out why the build fails",
+    "needs": [
+      "\\[worker\\] error: unsupported format"
+    ]
+  },
+  {
+    "name": "type-errors",
+    "file": "type-errors.out.gz",
+    "about": "the benchmark's type-errors task: under the budget, so nothing is cut",
+    "command": "bun typecheck",
+    "exit": 1,
+    "purpose": "find what breaks the type check",
+    "needs": [
+      "An argument for 'seed' was not provided",
+      "export function fileTag\\(text: string, seed: number\\)"
+    ]
+  },
+  {
+    "name": "failing-test",
+    "file": "failing-test.out.gz",
+    "about": "the benchmark's failing-test task: under the budget, one row of 20,000 characters",
+    "command": "bun test",
+    "exit": 1,
+    "purpose": "find why the test fails",
+    "needs": [
+      "^Received: ",
+      "^Expected substring",
+      "\u2717 large reads"
+    ]
+  },
+  {
+    "name": "log-stats",
+    "file": "log-stats.out.gz",
+    "about": "the benchmark's log-stats log through a real program; the purpose is a count, which no selection serves",
+    "command": "tail -n +1 logs/api-2026-10-13.log | cut -c1-200",
+    "exit": 0,
+    "purpose": "count GET /v1/orders requests that took 50 ms or more",
+    "count": true,
+    "needs": [
+      "GET /v1/orders/\\d+ 200 \\d+ms"
+    ]
+  },
+  {
+    "name": "noisy-service",
+    "file": "noisy-service.out.gz",
+    "about": "made up (generate.ts): the cause names no problem, and 327 unrelated ERROR lines flood keywords",
+    "command": "bun scripts/serve.ts",
+    "exit": 0,
+    "purpose": "find why POST /v1/payments started answering 503 partway through the run",
+    "needs": [
+      "config: reloaded config/routes.json",
+      "routes: /v1/payments -> upstream \"payments-v2\""
+    ]
+  },
+  {
+    "name": "long-run",
+    "file": "long-run.out.gz",
+    "about": "made up (generate.ts): 2,393 passing tests, many named for errors, and one failure marked only with a cross",
+    "command": "bun test",
+    "exit": 1,
+    "purpose": "find the failing test and why it fails",
+    "needs": [
+      "^\u2715 durations",
+      "got 90, want -90"
+    ]
+  }
+]

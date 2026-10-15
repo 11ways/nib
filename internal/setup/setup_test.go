@@ -1,0 +1,272 @@
+package setup
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+var nib = []string{"nib"}
+
+func readJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func equal(t *testing.T, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		g, _ := json.Marshal(got)
+		w, _ := json.Marshal(want)
+		t.Fatalf("got  %s\nwant %s", g, w)
+	}
+}
+
+func TestFreshProjectGetsServerHookApprovalAndDenyRules(t *testing.T) {
+	directory := t.TempDir()
+	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{
+		".mcp.json: added the nib MCP server",
+		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write",
+	})
+	equal(t, readJSON(t, filepath.Join(directory, ".mcp.json")), map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "nib", "args": []any{}}}})
+	equal(t, readJSON(t, filepath.Join(directory, ".claude/settings.local.json")), map[string]any{
+		"enabledMcpjsonServers": []any{"nib"},
+		"hooks": map[string]any{"PreToolUse": []any{
+			map[string]any{"matcher": "Read", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}},
+			map[string]any{"matcher": "mcp__nib__.*", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}},
+		}},
+		"permissions": map[string]any{"deny": []any{"Bash", "Grep", "Glob", "Edit", "Write"}},
+	})
+	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{".mcp.json: already set up", ".claude/settings.local.json: already set up"})
+}
+
+func TestExistingConfigsKeepTheirOrderAndContent(t *testing.T) {
+	directory := t.TempDir()
+	writeFile(t, filepath.Join(directory, ".mcp.json"), `{"mcpServers": {"sketerm": {"type": "stdio", "command": "sketerm", "args": ["mcp"]}}}`)
+	writeFile(t, filepath.Join(directory, ".claude/settings.local.json"), `{"zeta": 1.50, "enabledMcpjsonServers": ["sketerm"], "permissions": {"deny": ["Bash", "WebFetch"]}, "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "./guard.sh"}]}]}}`)
+	writeFile(t, filepath.Join(directory, "opencode.json"), `{"permission": {"bash": {"*": "allow"}}, "mcp": {"zenit-dev": {"type": "local", "command": ["zenit-dev", "mcp"]}}}`)
+	install := filepath.Join(directory, "opt/my nib/nib")
+	report := Setup(Options{Directory: directory, Command: []string{install}})
+	equal(t, report, []string{
+		".mcp.json: added the nib MCP server",
+		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse hook and deny rules for Grep, Glob, Edit, Write",
+		"opencode.json: added the nib MCP server and deny rules for read, grep, glob, edit (permissions for shell set there already, so OpenCode keeps those tools as configured)",
+	})
+	settings, _ := os.ReadFile(filepath.Join(directory, ".claude/settings.local.json"))
+	// Keys stay in the order they were written, and numbers as they were written.
+	if !strings.HasPrefix(string(settings), "{\n  \"zeta\": 1.50,\n  \"enabledMcpjsonServers\": [") {
+		t.Fatalf("order or numbers changed:\n%s", settings)
+	}
+	hooks := readJSON(t, filepath.Join(directory, ".claude/settings.local.json"))["hooks"].(map[string]any)["PreToolUse"].([]any)
+	equal(t, hooks[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"], "'"+install+"' hook")
+	opencode := readJSON(t, filepath.Join(directory, "opencode.json"))
+	equal(t, opencode["permission"].(map[string]any)["bash"], map[string]any{"*": "allow"})
+	equal(t, opencode["mcp"], map[string]any{"zenit-dev": map[string]any{"type": "local", "command": []any{"zenit-dev", "mcp"}}, "servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{install}, "codemode": false}}})
+	equal(t, opencode["permissions"], []any{map[string]any{"action": "read", "resource": "*", "effect": "deny"}, map[string]any{"action": "grep", "resource": "*", "effect": "deny"}, map[string]any{"action": "glob", "resource": "*", "effect": "deny"}, map[string]any{"action": "edit", "resource": "*", "effect": "deny"}})
+	// A nib entry someone changed counts as set up, whichever way it starts nib.
+	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{".mcp.json: already set up", ".claude/settings.local.json: already set up", "opencode.json: already set up (permissions for shell set there already, so OpenCode keeps those tools as configured)"})
+}
+
+func TestDryRunDisabledServerAndNonJSON(t *testing.T) {
+	directory := t.TempDir()
+	equal(t, Setup(Options{Directory: directory, Command: nib, DryRun: true}), []string{
+		".mcp.json: would add the nib MCP server",
+		".claude/settings.local.json: would add approval of the nib server in .mcp.json and nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write",
+	})
+	if _, err := os.Stat(filepath.Join(directory, ".mcp.json")); err == nil {
+		t.Fatal("a dry run wrote")
+	}
+	writeFile(t, filepath.Join(directory, ".claude/settings.local.json"), `{"disabledMcpjsonServers": ["nib"]}`)
+	writeFile(t, filepath.Join(directory, ".mcp.json"), "{ // comment\n}")
+	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{
+		".mcp.json: left untouched, since it is not plain JSON (comments?)",
+		".claude/settings.local.json: added nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write (nib is in disabledMcpjsonServers there, so it stays off until you remove it)",
+	})
+}
+
+func TestUserSetup(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, "xdg/opencode/opencode.json"), "{}")
+	env := map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(home, "configs/nib"), "XDG_CONFIG_HOME": filepath.Join(home, "xdg")}
+	var calls [][]string
+	claude := func(args []string) (int, string) {
+		calls = append(calls, args)
+		return 0, ""
+	}
+	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: claude}
+	equal(t, Setup(options), []string{
+		"~/configs/nib/settings.json: added nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write",
+		"claude mcp: added nib for this user",
+		"~/xdg/opencode/opencode.json: added the nib MCP server and deny rules for shell, read, grep, glob, edit",
+	})
+	equal(t, calls, [][]string{{"mcp", "add", "--scope", "user", "nib", "--", "nib"}})
+	// Only a user-scope server counts: one a project registers does not.
+	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"projects": {"x": {"mcpServers": {"nib": {}}}}}`)
+	if report := Setup(options); report[1] != "claude mcp: added nib for this user" {
+		t.Fatalf("got %v", report)
+	}
+	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"mcpServers": {"nib": {}}}`)
+	if report := Setup(options); report[1] != "claude mcp: nib is already registered for this user" {
+		t.Fatalf("got %v", report)
+	}
+}
+
+func TestModesLinksUnreadableFilesAndForeignHooks(t *testing.T) {
+	directory := t.TempDir()
+	writeFile(t, filepath.Join(directory, ".mcp.json"), `{"mcpServers": {"secret": {"command": "x", "env": {"TOKEN": "t"}}}}`)
+	if err := os.Chmod(filepath.Join(directory, ".mcp.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dotfiles := t.TempDir()
+	writeFile(t, filepath.Join(dotfiles, "settings.local.json"), `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "bun /opt/other/src/main.ts hook"}]}]}}`)
+	if err := os.MkdirAll(filepath.Join(directory, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dotfiles, "settings.local.json"), filepath.Join(directory, ".claude/settings.local.json")); err != nil {
+		t.Fatal(err)
+	}
+	Setup(Options{Directory: directory, Command: nib})
+	if info, _ := os.Stat(filepath.Join(directory, ".mcp.json")); info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", info.Mode())
+	}
+	if info, _ := os.Lstat(filepath.Join(directory, ".claude/settings.local.json")); info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the link was replaced")
+	}
+	entries := readJSON(t, filepath.Join(dotfiles, "settings.local.json"))["hooks"].(map[string]any)["PreToolUse"].([]any)
+	if len(entries) != 3 || entries[1].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"] != "nib hook" {
+		t.Fatalf("another program's main.ts hook is not nib's: %v", entries)
+	}
+	unreadable := t.TempDir()
+	writeFile(t, filepath.Join(unreadable, ".mcp.json"), `{"mcpServers": {"keep": {"command": "x"}}}`)
+	if err := os.Chmod(filepath.Join(unreadable, ".mcp.json"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getuid() != 0 {
+		if report := Setup(Options{Directory: unreadable, Command: nib}); report[0] != ".mcp.json: left untouched, since it cannot be read (EACCES)" {
+			t.Fatalf("got %v", report)
+		}
+	}
+	_ = os.Chmod(filepath.Join(unreadable, ".mcp.json"), 0o600)
+	equal(t, readJSON(t, filepath.Join(unreadable, ".mcp.json"))["mcpServers"], map[string]any{"keep": map[string]any{"command": "x"}})
+}
+
+func TestOlderNibHooksCountAsNibs(t *testing.T) {
+	install := t.TempDir()
+	writeFile(t, filepath.Join(install, "package.json"), `{"name": "@11ways/nib"}`)
+	writeFile(t, filepath.Join(install, "src/main.ts"), "")
+	for _, command := range []string{"nib hook", "/usr/local/bin/nib hook", "/usr/bin/bun '" + filepath.Join(install, "src/main.ts") + "' hook"} {
+		if !isNibHook(command) {
+			t.Errorf("%q should be nib's hook", command)
+		}
+	}
+	for _, command := range []string{"bun /opt/other/src/main.ts hook", "./guard.sh", "nib setup"} {
+		if isNibHook(command) {
+			t.Errorf("%q is not nib's hook", command)
+		}
+	}
+}
+
+func TestOlderHooksGetTheToolsMatcherAndLoseMultiEdit(t *testing.T) {
+	directory := t.TempDir()
+	settings := filepath.Join(directory, ".claude/settings.local.json")
+	// What an older setup wrote: the hook for Read only, through an older matcher, and a deny rule for MultiEdit, kept in its place.
+	writeFile(t, settings, `{"enabledMcpjsonServers": ["nib"], "hooks": {"PreToolUse": [{"matcher": "Bash|Read|Grep", "hooks": [{"type": "command", "command": "nib hook"}]}]}, "permissions": {"deny": ["Bash", "MultiEdit", "Grep", "Glob", "Edit", "Write"]}}`)
+	writeFile(t, filepath.Join(directory, ".mcp.json"), `{"mcpServers": {"nib": {"command": "nib"}}}`)
+	equal(t, Setup(Options{Directory: directory, Command: nib, DryRun: true})[1],
+		".claude/settings.local.json: would add nib's PreToolUse hook for mcp__nib__.*; would remove the deny rule for MultiEdit, a tool Claude Code no longer has")
+	equal(t, Setup(Options{Directory: directory, Command: nib})[1],
+		".claude/settings.local.json: added nib's PreToolUse hook for mcp__nib__.*; removed the deny rule for MultiEdit, a tool Claude Code no longer has")
+	written := readJSON(t, settings)
+	equal(t, written["permissions"], map[string]any{"deny": []any{"Bash", "Grep", "Glob", "Edit", "Write"}})
+	entries := written["hooks"].(map[string]any)["PreToolUse"].([]any)
+	equal(t, len(entries), 2)
+	equal(t, entries[1].(map[string]any)["matcher"], "mcp__nib__.*")
+	equal(t, Setup(Options{Directory: directory, Command: nib})[1], ".claude/settings.local.json: already set up")
+}
+
+func TestMatchersFollowClaudeCode(t *testing.T) {
+	cases := []struct {
+		matcher, tool string
+		want          bool
+	}{
+		{"", "mcp__nib__read", true},
+		{"*", "Read", true},
+		{"Read", "Read", true},
+		{"Bash|Read", "Read", true},
+		{"Bash, Read", "Read", true},
+		{"Read", "mcp__nib__read", false},
+		{"mcp__nib__.*", "mcp__nib__read", true},
+		{"mcp__.*", "mcp__nib__read", true},
+		{"Read|mcp__nib__.*", "Read", true},
+		{"mcp__nib__.*", "Read", false},
+		{"Re", "Read", false},
+		{"(", "Read", false},
+	}
+	for _, c := range cases {
+		if got := matches(c.matcher, c.tool); got != c.want {
+			t.Errorf("matches(%q, %q) = %v, want %v", c.matcher, c.tool, got, c.want)
+		}
+	}
+}
+
+func TestAnOpenCode1EntryMovesToOpenCode2sForm(t *testing.T) {
+	directory := t.TempDir()
+	// What an older setup wrote: the server as OpenCode 1 had it, and denials under OpenCode 1's tool names, which OpenCode 2 still reads.
+	old := `{"mcp": {"zenit-dev": {"type": "local", "command": ["zenit-dev"]}, "nib": {"type": "local", "command": ["nib"], "environment": {"NIB_SANDBOX": "1"}, "enabled": false, "timeout": 5000}}, "permission": {"bash": "deny", "read": "deny", "grep": "deny", "glob": "deny", "list": "deny", "edit": "deny", "write": "deny", "patch": "deny"}}`
+	writeFile(t, filepath.Join(directory, "opencode.json"), old)
+	dry := Setup(Options{Directory: directory, Command: nib, DryRun: true})
+	equal(t, dry[2], "opencode.json: would add the nib MCP server in OpenCode 2's form, outside code mode; would remove its OpenCode 1 form (mcp.nib)")
+	if data, _ := os.ReadFile(filepath.Join(directory, "opencode.json")); string(data) != old {
+		t.Fatal("a dry run wrote")
+	}
+	equal(t, Setup(Options{Directory: directory, Command: nib})[2], "opencode.json: added the nib MCP server in OpenCode 2's form, outside code mode; removed its OpenCode 1 form (mcp.nib)")
+	opencode := readJSON(t, filepath.Join(directory, "opencode.json"))
+	equal(t, opencode["mcp"], map[string]any{
+		"zenit-dev": map[string]any{"type": "local", "command": []any{"zenit-dev"}},
+		"servers":   map[string]any{"nib": map[string]any{"type": "local", "command": []any{"nib"}, "environment": map[string]any{"NIB_SANDBOX": "1"}, "disabled": true, "timeout": map[string]any{"catalog": 5000.0, "execution": 5000.0}, "codemode": false}},
+	})
+	if _, ok := opencode["permissions"]; ok {
+		t.Fatal("tools OpenCode 1's permission denies already must get no second rule")
+	}
+	equal(t, Setup(Options{Directory: directory, Command: nib})[2], "opencode.json: already set up")
+}
+
+func TestOpenCodeServersOutsideCodeModeAndForeignForms(t *testing.T) {
+	home := t.TempDir()
+	config := filepath.Join(home, "oc")
+	env := map[string]string{"OPENCODE_CONFIG_DIR": config, "CLAUDE_CONFIG_DIR": filepath.Join(home, "claude")}
+	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: func([]string) (int, string) { return 0, "" }}
+	file := filepath.Join(config, "opencode.json")
+	// A nib server in OpenCode 2's form with code mode unset gets it turned off; a rule the user wrote for an action keeps it.
+	writeFile(t, file, `{"permissions": [{"action": "edit", "resource": "*.md", "effect": "allow"}], "mcp": {"servers": {"nib": {"type": "local", "command": ["/opt/nib"]}}}}`)
+	equal(t, Setup(options)[2], "~/oc/opencode.json: added code mode off for the nib MCP server and deny rules for shell, read, grep, glob (permissions for edit set there already, so OpenCode keeps those tools as configured)")
+	written := readJSON(t, file)
+	equal(t, written["mcp"], map[string]any{"servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{"/opt/nib"}, "codemode": false}}})
+	equal(t, len(written["permissions"].([]any)), 5)
+	// Code mode someone turned on stays on, and an OpenCode 1 entry setup cannot read stays as it is.
+	writeFile(t, file, `{"mcp": {"servers": {"nib": {"type": "local", "command": ["nib"], "codemode": true}}}, "tools": {"bash": false, "read": false, "grep": false, "glob": false, "edit": false}}`)
+	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (codemode is set for nib there, so OpenCode offers nib's tools as configured)")
+	writeFile(t, file, `{"mcp": {"nib": {"type": "remote", "url": "http://x"}}, "permissions": {"x": 1}}`)
+	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (its mcp.nib is not a local server in OpenCode 1's form, so it stays as it is; its \"permissions\" is not a list, so OpenCode's own tools stay on)")
+}

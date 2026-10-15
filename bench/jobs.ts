@@ -6,9 +6,9 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import os, { tmpdir } from "node:os"
 import path from "node:path"
 import { applyChanges, changedFiles, copyFixture, linkModules, pristineFixture, REPO } from "./fixture"
-import { addUsage, emptyUsage, harnessVersion, MAX_TOOL_CALLS, openSession, parseClaude, parseOpencode, type HarnessSession, type Mode, type Model } from "./runners"
+import { addUsage, deciderOf, emptyUsage, harnessVersion, MAX_TOOL_CALLS, openSession, parseClaude, parseOpencode, type HarnessSession, type Mode, type Model } from "./runners"
 import { checkHash, hash, identity, identityKey, loadRuns, runDirectory, saveRun, stoppedEarly, taskHash, type Run, type Status } from "./store"
-import type { Task } from "./tasks"
+import { promptOf, type Task } from "./tasks"
 
 export type Job = { task: Task; model: Model; mode: Mode; nib: string; fixture: string }
 
@@ -16,7 +16,7 @@ const CHECK = path.join(import.meta.dir, "check.ts")
 const CHECK_TIMEOUT = 180_000
 
 function jobFields(job: Job) {
-  return { task: job.task.name, taskHash: taskHash(job.task), fixture: job.fixture, harness: job.model.harness, model: job.model.model, variant: job.model.variant, shell: job.model.shell, mode: job.mode, nib: job.mode === "nib" ? job.nib : undefined }
+  return { task: job.task.name, taskHash: taskHash(job.task), fixture: job.fixture, harness: job.model.harness, model: job.model.model, variant: job.model.variant, shell: job.model.shell, mode: job.mode, nib: job.mode === "nib" ? job.nib : undefined, decider: deciderOf(job.model, job.mode) }
 }
 
 export function jobKey(job: Job) {
@@ -160,8 +160,9 @@ export async function runJob(job: Job, options: { timeout: number; keep: boolean
       for (const [index, step] of job.task.steps.entries()) {
         await step.before?.(work)
         harness ??= await openSession(job.model, job.mode, work, home, options.timeout, job.task.steps.length)
-        const result = await harness.prompt(step.prompt, options.timeout)
-        transcript.push(JSON.stringify({ type: "nib-bench-step", step: index + 1, prompt: step.prompt }), result.stdout.trim())
+        const prompt = promptOf(job.task, step)
+        const result = await harness.prompt(prompt, options.timeout)
+        transcript.push(JSON.stringify({ type: "nib-bench-step", step: index + 1, prompt }), result.stdout.trim())
         addUsage(usage, result.session)
         if (result.timedOut) [status, failure, stopped] = ["failed", `timed out after ${options.timeout / 1000}s in step ${index + 1}`, "timeout"]
         else if (result.capped) [status, failure, stopped] = ["failed", `stopped after ${MAX_TOOL_CALLS} tool calls in step ${index + 1}`, "cap"]
@@ -210,7 +211,10 @@ export async function runJob(job: Job, options: { timeout: number; keep: boolean
   return run
 }
 
-/** Proves every task fair without a model: the untouched fixture fails its check, and the reference solution passes it. */
+/**
+ * Proves every task fair without a model: the tree the model starts from fails the check, and the reference solution passes it. A task whose
+ * first step changes the tree first starts from that change, and may break the type check on purpose.
+ */
 export async function validate(tasks: Task[]) {
   const problems: string[] = []
   await Promise.all(tasks.map(async (task) => {
@@ -218,10 +222,13 @@ export async function validate(tasks: Task[]) {
     const work = path.join(base, "work")
     try {
       await copyFixture(work)
+      const [first, ...rest] = task.steps
+      await first?.before?.(work)
       const untouched = await verify(task, work)
       if (untouched.ok) problems.push(`${task.name}: the untouched fixture already passes`)
-      else if (untouched.failure?.includes("types:")) problems.push(`${task.name}: the untouched fixture fails its type check:\n${untouched.failure}`)
-      for (const step of task.steps) {
+      else if (untouched.failure?.includes("types:") && !first?.before) problems.push(`${task.name}: the untouched fixture fails its type check:\n${untouched.failure}`)
+      await first?.solve(work)
+      for (const step of rest) {
         await step.before?.(work)
         await step.solve(work)
       }
