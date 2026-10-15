@@ -1,9 +1,9 @@
 {
-  "name": "nib",
+  "name": "@11ways/nib",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "nib-mcp": "./src/main.ts" },
+  "bin": { "nib": "./src/main.ts" },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsgo --noEmit"
