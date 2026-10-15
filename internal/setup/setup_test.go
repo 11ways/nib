@@ -11,6 +11,21 @@ import (
 
 var nib = []string{"nib"}
 
+// TestMain keeps every test away from the real Claude Code and OpenCode configs, which an Options without Home or Env falls back to.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "nib-setup-home-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	for _, name := range []string{"CLAUDE_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
+		os.Unsetenv(name)
+	}
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -84,7 +99,9 @@ func TestExistingConfigsKeepTheirOrderAndContent(t *testing.T) {
 	equal(t, opencode["permission"].(map[string]any)["bash"], map[string]any{"*": "allow"})
 	equal(t, opencode["mcp"], map[string]any{"zenit-dev": map[string]any{"type": "local", "command": []any{"zenit-dev", "mcp"}}, "servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{install}, "codemode": false}}})
 	equal(t, opencode["permissions"], []any{map[string]any{"action": "read", "resource": "*", "effect": "deny"}, map[string]any{"action": "grep", "resource": "*", "effect": "deny"}, map[string]any{"action": "glob", "resource": "*", "effect": "deny"}, map[string]any{"action": "edit", "resource": "*", "effect": "deny"}})
-	// A nib entry someone changed counts as set up, whichever way it starts nib.
+	// A nib entry that does not start the nib setup registers, such as one whose program is gone, is pointed at it, keeping its other keys.
+	stale := "nib's command, replacing a stale one ('" + install + "')"
+	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{".mcp.json: added " + stale, ".claude/settings.local.json: already set up", "opencode.json: added " + stale + " (permissions for shell set there already, so OpenCode keeps those tools as configured)"})
 	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{".mcp.json: already set up", ".claude/settings.local.json: already set up", "opencode.json: already set up (permissions for shell set there already, so OpenCode keeps those tools as configured)"})
 }
 
@@ -110,7 +127,7 @@ func TestUserSetup(t *testing.T) {
 	writeFile(t, filepath.Join(home, "xdg/opencode/opencode.json"), "{}")
 	env := map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(home, "configs/nib"), "XDG_CONFIG_HOME": filepath.Join(home, "xdg")}
 	var calls [][]string
-	claude := func(args []string) (int, string) {
+	claude := func(_ string, args []string) (int, string) {
 		calls = append(calls, args)
 		return 0, ""
 	}
@@ -126,7 +143,7 @@ func TestUserSetup(t *testing.T) {
 	if report := Setup(options); report[1] != "claude mcp: added nib for this user" {
 		t.Fatalf("got %v", report)
 	}
-	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"mcpServers": {"nib": {}}}`)
+	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"mcpServers": {"nib": {"type": "stdio", "command": "nib", "args": []}}}`)
 	if report := Setup(options); report[1] != "claude mcp: nib is already registered for this user" {
 		t.Fatalf("got %v", report)
 	}
@@ -256,17 +273,139 @@ func TestOpenCodeServersOutsideCodeModeAndForeignForms(t *testing.T) {
 	home := t.TempDir()
 	config := filepath.Join(home, "oc")
 	env := map[string]string{"OPENCODE_CONFIG_DIR": config, "CLAUDE_CONFIG_DIR": filepath.Join(home, "claude")}
-	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: func([]string) (int, string) { return 0, "" }}
+	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: func(string, []string) (int, string) { return 0, "" }}
 	file := filepath.Join(config, "opencode.json")
 	// A nib server in OpenCode 2's form with code mode unset gets it turned off; a rule the user wrote for an action keeps it.
 	writeFile(t, file, `{"permissions": [{"action": "edit", "resource": "*.md", "effect": "allow"}], "mcp": {"servers": {"nib": {"type": "local", "command": ["/opt/nib"]}}}}`)
-	equal(t, Setup(options)[2], "~/oc/opencode.json: added code mode off for the nib MCP server and deny rules for shell, read, grep, glob (permissions for edit set there already, so OpenCode keeps those tools as configured)")
+	equal(t, Setup(options)[2], "~/oc/opencode.json: added nib's command, replacing a stale one (/opt/nib) and code mode off for the nib MCP server and deny rules for shell, read, grep, glob (permissions for edit set there already, so OpenCode keeps those tools as configured)")
 	written := readJSON(t, file)
-	equal(t, written["mcp"], map[string]any{"servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{"/opt/nib"}, "codemode": false}}})
+	equal(t, written["mcp"], map[string]any{"servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{"nib"}, "codemode": false}}})
 	equal(t, len(written["permissions"].([]any)), 5)
 	// Code mode someone turned on stays on, and an OpenCode 1 entry setup cannot read stays as it is.
 	writeFile(t, file, `{"mcp": {"servers": {"nib": {"type": "local", "command": ["nib"], "codemode": true}}}, "tools": {"bash": false, "read": false, "grep": false, "glob": false, "edit": false}}`)
 	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (codemode is set for nib there, so OpenCode offers nib's tools as configured)")
 	writeFile(t, file, `{"mcp": {"nib": {"type": "remote", "url": "http://x"}}, "permissions": {"x": 1}}`)
 	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (its mcp.nib is not a local server in OpenCode 1's form, so it stays as it is; its \"permissions\" is not a list, so OpenCode's own tools stay on)")
+}
+
+func executable(t *testing.T, path string) {
+	t.Helper()
+	writeFile(t, path, "#!/bin/sh\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, string(data))
+}
+
+type claudeCall struct {
+	Dir  string
+	Args []string
+}
+
+func TestStaleClaudeRegistrationsAreReplaced(t *testing.T) {
+	home := t.TempDir()
+	mine, other, link := filepath.Join(home, "bin/nib"), filepath.Join(home, "other/nib"), filepath.Join(home, "link/nib")
+	executable(t, mine)
+	executable(t, other)
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mine, link); err != nil {
+		t.Fatal(err)
+	}
+	project, same, remote, gone := filepath.Join(home, "project"), filepath.Join(home, "same"), filepath.Join(home, "remote"), filepath.Join(home, "gone")
+	for _, dir := range []string{project, same, remote} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(home, "old/src/main.ts")
+	registry := filepath.Join(home, "claude/.claude.json")
+	local := func(server map[string]any) map[string]any {
+		return map[string]any{"mcpServers": map[string]any{"nib": server}}
+	}
+	// 1. What the Bun nib left: the user's server runs a main.ts that is gone, a project's runs another nib, and three projects stay as they
+	// are: one runs this nib through a link, one is remote, and one is for a folder that is gone.
+	writeJSON(t, registry, map[string]any{
+		"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "bun", "args": []any{script}, "alwaysLoad": true}},
+		"projects": map[string]any{
+			project: local(map[string]any{"type": "stdio", "command": other, "args": []any{}}),
+			same:    local(map[string]any{"type": "stdio", "command": link, "args": []any{}}),
+			remote:  local(map[string]any{"type": "http", "url": "http://x"}),
+			gone:    local(map[string]any{"type": "stdio", "command": "bun", "args": []any{script}}),
+		},
+	})
+	var calls []claudeCall
+	env := map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(home, "claude")}
+	options := Options{User: true, Command: []string{mine}, Home: home, Env: func(k string) string { return env[k] }, Claude: func(dir string, args []string) (int, string) {
+		calls = append(calls, claudeCall{dir, args})
+		return 0, ""
+	}}
+	userStale := "the stale nib registration for this user (bun " + script + ")"
+	projectStale := "the stale nib registration in ~/project (" + other + ")"
+	// 2. A dry run names both, and runs nothing.
+	options.DryRun = true
+	equal(t, Setup(options)[1:], []string{"claude mcp: would replace " + userStale, "claude mcp: would replace " + projectStale})
+	equal(t, len(calls), 0)
+	// 3. Each is removed and added again at its own scope, in its folder for a local one, pointed at this nib, with its other keys kept.
+	options.DryRun = false
+	equal(t, Setup(options)[1:], []string{"claude mcp: replaced " + userStale, "claude mcp: replaced " + projectStale})
+	equal(t, calls, []claudeCall{
+		{"", []string{"mcp", "remove", "--scope", "user", "nib"}},
+		{"", []string{"mcp", "add-json", "--scope", "user", "nib", `{"alwaysLoad":true,"args":[],"command":"` + mine + `","type":"stdio"}`}},
+		{project, []string{"mcp", "remove", "--scope", "local", "nib"}},
+		{project, []string{"mcp", "add-json", "--scope", "local", "nib", `{"args":[],"command":"` + mine + `","type":"stdio"}`}},
+	})
+	// 4. Registrations that start this nib, by any path to it, are left alone.
+	calls = nil
+	writeJSON(t, registry, map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": link}}, "projects": map[string]any{same: local(map[string]any{"command": mine})}})
+	equal(t, Setup(options)[1:], []string{"claude mcp: nib is already registered for this user"})
+	equal(t, len(calls), 0)
+	// 5. A failed removal adds nothing.
+	writeJSON(t, registry, map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"command": other}}})
+	options.Claude = func(dir string, args []string) (int, string) {
+		calls = append(calls, claudeCall{dir, args})
+		return 1, "No user-scoped MCP server found with name: nib\n"
+	}
+	equal(t, Setup(options)[1:], []string{"claude mcp remove failed for this user: No user-scoped MCP server found with name: nib"})
+	equal(t, len(calls), 1)
+}
+
+func TestAStaleProjectServerIsRepointed(t *testing.T) {
+	home := t.TempDir()
+	directory := filepath.Join(home, "project")
+	script := filepath.Join(home, "old/src/main.ts")
+	writeJSON(t, filepath.Join(directory, ".mcp.json"), map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "bun", "args": []any{script}, "env": map[string]any{"NIB_SANDBOX": "1"}}}})
+	// A local-scope registration for the folder would win over .mcp.json, so a stale one is replaced too.
+	writeJSON(t, filepath.Join(home, ".claude.json"), map[string]any{"projects": map[string]any{directory: map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"command": "bun", "args": []any{script}}}}}})
+	var calls []claudeCall
+	options := Options{Directory: directory, Command: nib, Home: home, Env: func(string) string { return "" }, Claude: func(dir string, args []string) (int, string) {
+		calls = append(calls, claudeCall{dir, args})
+		return 0, ""
+	}}
+	stale := "nib's command, replacing a stale one (bun " + script + ")"
+	local := "the stale nib registration in ~/project (bun " + script + ")"
+	// 1. A dry run says what it would change, and changes nothing.
+	options.DryRun = true
+	report := Setup(options)
+	equal(t, []string{report[0], report[len(report)-1]}, []string{".mcp.json: would add " + stale, "claude mcp: would replace " + local})
+	equal(t, readJSON(t, filepath.Join(directory, ".mcp.json"))["mcpServers"].(map[string]any)["nib"].(map[string]any)["command"], "bun")
+	equal(t, len(calls), 0)
+	// 2. The entry is pointed at nib with its environment kept, and the local registration is replaced in the folder.
+	options.DryRun = false
+	report = Setup(options)
+	equal(t, []string{report[0], report[len(report)-1]}, []string{".mcp.json: added " + stale, "claude mcp: replaced " + local})
+	equal(t, readJSON(t, filepath.Join(directory, ".mcp.json")), map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "nib", "args": []any{}, "env": map[string]any{"NIB_SANDBOX": "1"}}}})
+	equal(t, calls, []claudeCall{{directory, []string{"mcp", "remove", "--scope", "local", "nib"}}, {directory, []string{"mcp", "add-json", "--scope", "local", "nib", `{"args":[],"command":"nib"}`}}})
+	// 3. A matching entry stays as it is.
+	writeJSON(t, filepath.Join(home, ".claude.json"), map[string]any{})
+	equal(t, Setup(options)[0], ".mcp.json: already set up")
 }
