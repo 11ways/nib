@@ -1,24 +1,24 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/11ways/nib/internal/js"
+	"github.com/11ways/nib/internal/syntax"
 )
 
 // symbolPart is one name of a symbol selector; a name never starts with a digit, so it never reads as a line range.
 const symbolPart = `[A-Za-z_$][\w$]*`
 
-var symbolSelector = regexp.MustCompile(`^` + symbolPart + `(?:\.` + symbolPart + `)*$`)
-
 // templateTag matches a Hawkeye tag that opens or closes a named block or snippet: {% block "name" %}, {% snippet name(...) %}, {% /block %}.
 var templateTag = regexp.MustCompile(`\{%-?\s*(/?)(block|snippet)\b\s*(?:"([^"]*)"|(` + symbolPart + `))?`)
 
-// symbolRanges are the lines of each declaration of symbol in lines, as Outer.inner names an inner declared inside Outer's block. Each range
-// takes the doc comment and annotations above its declaration; overloads, declarations at the same least depth, all count.
+// symbolRanges are the lines of each declaration of symbol in lines, as the file's syntax tree has them (Outer.inner names inner declared
+// in Outer); a Hawkeye template's are its blocks and snippets. A file nib has no grammar for, or a declaration that did not parse cleanly,
+// is refused rather than guessed at.
 func symbolRanges(display string, lines []string, symbol string) ([]lineRange, error) {
 	names := strings.Split(symbol, ".")
 	if strings.EqualFold(filepath.Ext(display), ".hwk") {
@@ -27,80 +27,18 @@ func symbolRanges(display string, lines []string, symbol string) ([]lineRange, e
 		}
 		return templateRanges(display, lines, symbol)
 	}
-	scopes := []lineRange{{1, len(lines)}}
-	for depth, name := range names {
-		var found []lineRange
-		for _, scope := range scopes {
-			from := scope.start
-			// Inside an outer declaration, its own line is not a member of it.
-			if depth > 0 {
-				from++
-			}
-			found = append(found, declarationsIn(lines, name, from, scope.end)...)
-		}
-		if len(found) == 0 {
-			within := ""
-			if depth > 0 {
-				within = " inside " + strings.Join(names[:depth], ".")
-			}
-			return nil, fmt.Errorf("%s declares no %s%s; read %s for its outline, or grep it", display, name, within, display)
-		}
-		scopes = found
+	found, err := syntax.Find(display, []byte(strings.Join(lines, "\n")), symbol)
+	if errors.Is(err, syntax.ErrNoGrammar) {
+		return nil, fmt.Errorf("%s: nib reads declarations by parsing and has no grammar for %s files; grep %s instead", display, filepath.Ext(display), names[len(names)-1])
 	}
-	return scopes, nil
-}
-
-// declarationsIn are the declarations of name between lines from and to, those at the least indentation, each with its block.
-func declarationsIn(lines []string, name string, from, to int) []lineRange {
-	quoted := insideStrings(lines)
-	word := regexp.MustCompile(`(^|[^\w$])` + regexp.QuoteMeta(name) + `($|[^\w$])`)
-	least := -1
-	var openers []int
-	for line := from; line <= to; line++ {
-		content := lines[line-1]
-		if quoted[line-1] || js.Trim(content) == "" || isComment(content) {
-			continue
-		}
-		receiver, declaring := declaringParts(content)
-		if !word.MatchString(declaring) {
-			continue
-		}
-		// Without a declaring word, only a line that opens a block declares: a call ends where it starts.
-		if _, err := blockRange(lines, line); err != nil && !declarationWrd.MatchString(receiver+" "+declaring) {
-			continue
-		}
-		indent := indentOf(content)
-		switch {
-		case least < 0 || indent < least:
-			least, openers = indent, []int{line}
-		case indent == least:
-			openers = append(openers, line)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v; grep %s instead", display, err, names[len(names)-1])
 	}
-	var ranges []lineRange
-	for _, opener := range openers {
-		end := opener
-		if block, err := blockRange(lines, opener); err == nil {
-			end = block
-		}
-		start := opener
-		for start > from && js.Trim(lines[start-2]) != "" && (isComment(lines[start-2]) || decorator.MatchString(lines[start-2])) {
-			start--
-		}
-		ranges = append(ranges, lineRange{start, end})
+	ranges := make([]lineRange, len(found))
+	for i, r := range found {
+		ranges[i] = lineRange{r.Start, r.End}
 	}
-	return ranges
-}
-
-// declaringParts split a line as grep tells definitions from uses: a Go receiver, if any, and after it the part that names what the line
-// declares, up to the first ( = : { < [ , ; or quote.
-func declaringParts(content string) (receiver, declaring string) {
-	receiver = declarationGrp.FindString(content)
-	declaring = content[len(receiver):]
-	if at := declarationEnd.FindStringIndex(declaring); at != nil {
-		declaring = declaring[:at[0]]
-	}
-	return receiver, declaring
+	return ranges, nil
 }
 
 // templateRanges are the lines of each Hawkeye block or snippet named name, from its opening tag to the tag that closes it.

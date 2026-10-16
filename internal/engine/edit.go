@@ -1371,7 +1371,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		}
 	}
 	lessons := append(append(writtenLessons(r.edits), oldRowsLesson(r.edits)...), subs.lessons...)
-	requested, err := resolveBlocks(quotes.edits, basis.Lines)
+	requested, err := resolveBlocks(t.canonical, quotes.edits, basis.Lines)
 	if err == nil {
 		requested, err = orderEdits(requested)
 	}

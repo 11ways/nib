@@ -53,13 +53,17 @@ async function fixture(content = "one\ntwo\nthree\n") {
 
 describe("read", () => {
   test("a declared name reads its lines, doc comment and overloads, as anchors an edit can use", async () => {
-    const f = await fixture(["class Repo {", "  // Saves one.", "  save(r) {", "    this.store.save(r)", "  }", "", "  load() {", "    return 1", "  }", "}", ""].join("\n"))
-    const r = await f.read(":Repo.save")
-    expect(r.text).toBe(`[file.txt#${r.tag}]\n2:  // Saves one.\n3:  save(r) {\n4:    this.store.save(r)\n5:  }\n[10 lines total]`)
-    await f.patch(`[file.txt#${r.tag}]\nPUT 3*:\n+  save(r) {\n+    this.store.put(r)\n+  }`)
-    expect(await readFile(f.filePath, "utf8")).toContain("  // Saves one.\n  save(r) {\n    this.store.put(r)\n  }\n")
-    expect((await f.read(":save,load")).text).toContain("\n7:  load() {\n8:    return 1\n9:  }")
-    expect((await f.read(":fetch")).text).toBe("[file.txt declares no fetch; read file.txt for its outline, or grep it]")
+    const f = await fixture()
+    const file = path.join(path.dirname(f.filePath), "repo.ts")
+    await writeFile(file, ["class Repo {", "  // Saves one.", "  save(r) {", "    this.store.save(r)", "  }", "", "  load() {", "    return 1", "  }", "}", ""].join("\n"))
+    const r = await f.read(":Repo.save", { file })
+    expect(r.text).toBe(`[repo.ts#${r.tag}]\n2:  // Saves one.\n3:  save(r) {\n4:    this.store.save(r)\n5:  }\n[10 lines total]`)
+    await f.patch(`[repo.ts#${r.tag}]\nPUT 3*:\n+  save(r) {\n+    this.store.put(r)\n+  }`)
+    expect(await readFile(file, "utf8")).toContain("  // Saves one.\n  save(r) {\n    this.store.put(r)\n  }\n")
+    expect((await f.read(":save,load", { file })).text).toContain("\n7:  load() {\n8:    return 1\n9:  }")
+    expect((await f.read(":fetch", { file })).text).toBe("[repo.ts: nib found no declaration of fetch; grep fetch instead]")
+    // A file nib has no grammar for is refused rather than guessed at.
+    expect((await f.read(":save")).text).toBe("[file.txt: nib reads declarations by parsing and has no grammar for .txt files; grep save instead]")
   })
 
   test("tagged header, relative display path, selectors and continuation hints", async () => {

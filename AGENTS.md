@@ -4,7 +4,7 @@ nib is a stdio MCP server that gives coding agents hashline file tools: `read`, 
 
 ## Stack
 
-- Go, one binary (`cmd/nib`). Dependencies: `mvdan.cc/sh/v3` (the shell's parser and interpreter), `github.com/modelcontextprotocol/go-sdk` and `modernc.org/sqlite` (pure Go, for reading OpenCode's database read-only), pinned in `go.mod`.
+- Go, one binary (`cmd/nib`). Dependencies: `mvdan.cc/sh/v3` (the shell's parser and interpreter), `github.com/modelcontextprotocol/go-sdk`, `modernc.org/sqlite` (pure Go, for reading OpenCode's database read-only) and `github.com/odvcencio/gotreesitter` (pure-Go tree-sitter; only the grammar packages `internal/syntax` imports are linked), pinned in `go.mod`.
 - `rg` (ripgrep) must be on `PATH` for `grep`, `find`, nibash's recursive searches and their tests; `bwrap` for nibash's programs in sandbox mode and for the benchmark.
 - The black-box tests and the benchmark are TypeScript on Bun (`@modelcontextprotocol/sdk`, `diff`).
 
@@ -31,6 +31,7 @@ gofmt -l .      # must print nothing
 | `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib --version` |
 | `internal/server/` | MCP tool registration, model-facing descriptions and lean schemas, argument recovery with notes, roots and elicitation |
 | `internal/engine/` | reads (selectors, outlines, skip rules, budget, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging (checks, SUB, blocks, MV, CP), refusals and reapply tokens, row maps, atomic publication, writes, workspace checks, the API nibash's commands read files through |
+| `internal/syntax/` | tree-sitter parsing: the grammars by file extension (the one home of that mapping), each language's declaration rules, what a file declares (`path:Name` reads), where a block ends (`PUT N*:`), and the decoded-grammar cache limits |
 | `internal/nibash/` | the shell: per-session interpreter, classification of nib's own commands, record links between them, the commands, the terminal sink and rendering, the cut and the assembly of a decider's choice, real programs in process groups, jobs, the sandbox |
 | `internal/decider/` | which rows of a cut nibash output the model sees: the decider kinds and every `NIB_DECIDER_*` variable, keywords, the OpenRouter decision model, its answer cache |
 | `internal/names/` | named directories (`~name/`): `nib.json`, JVM source roots, the names agents define at runtime (`hash -d`) and the inheritance of them by later subagents, per-agent views, expansion, display, the instructions table |

@@ -15,6 +15,7 @@ import (
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/server"
+	"github.com/11ways/nib/internal/snapshots"
 )
 
 // fixture is a shell session in a temporary directory, with the engine its commands share.
@@ -131,6 +132,16 @@ func TestPlainOutputShapedLikeRowsIsSetApartFromAFilesRows(t *testing.T) {
 	// Plain output not shaped like rows needs nothing between.
 	out = f.run("sed -n 5p a.txt; echo done")
 	expect(t, out, fmt.Sprintf("[a.txt#%s]\n5:five\ndone", tagOf(t, out)))
+}
+
+func TestAViewTheStoreDroppedStillAnchors(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"})
+	// A store that holds one file: showing two drops the first one's view, which is still the version its tag names.
+	f.engine.Store = snapshots.NewStoreWith(snapshots.Limits{Paths: 1, Versions: 1, Units: 1 << 30})
+	out := f.run("cat a.txt b.txt")
+	if strings.Contains(out, "changed since") || !strings.Contains(out, "\n1:alpha\n") || !strings.Contains(out, "\n1:beta") {
+		t.Fatalf("got:\n%s", out)
+	}
 }
 
 func TestGrepFollowsGnuFormsBetweenNibCommands(t *testing.T) {

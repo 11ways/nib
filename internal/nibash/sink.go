@@ -370,18 +370,20 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 	return rows
 }
 
-// header is a file's [DISPLAY#TAG] line, or [DISPLAY] when nib could not hold it as one version.
+// header is a file's [DISPLAY#TAG] line, or [DISPLAY] when nib could not hold it as one version. A version the session no longer holds,
+// dropped as the command showed more files than the store keeps, is still the one the tag names, so only a newer one makes it stale.
 func header(e *engine.Engine, ctx *engine.Context, source *engine.Source) string {
 	if source.View == nil {
 		return fmt.Sprintf("[%s] (not anchorable: over 2 MiB, binary or changing)", source.Display)
 	}
-	if latest := e.Latest(ctx, source.Canonical); latest == nil || latest.Key != source.View.Key {
+	if latest := e.Latest(ctx, source.Canonical); latest != nil && latest.Key != source.View.Key {
 		return fmt.Sprintf("[%s] (changed since this command read it; read it again to edit)", source.Display)
 	}
 	return fmt.Sprintf("[%s#%s]", source.Display, source.View.Tag)
 }
 
-// lineOf is a source line's text and whether the session still holds that version as the latest, which makes the row an anchor.
+// lineOf is a source line's text and whether that version is still the latest the session holds, or the session holds none, which makes
+// the row an anchor.
 func lineOf(e *engine.Engine, ctx *engine.Context, source *engine.Source, line int) (string, bool) {
 	if source.View == nil {
 		text := ""
@@ -399,7 +401,7 @@ func lineOf(e *engine.Engine, ctx *engine.Context, source *engine.Source, line i
 	}
 	content := source.View.Lines[line-1]
 	latest := e.Latest(ctx, source.Canonical)
-	return content, latest != nil && latest.Key == source.View.Key
+	return content, latest == nil || latest.Key == source.View.Key
 }
 
 // fixedCut keeps the first headRows and last tailRows rows, with a note between them that may carry why no decider chose (because), and

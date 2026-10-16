@@ -77,8 +77,6 @@ describe("x", () => {
 		{"x.go", golang, "Limit", "7-7"},
 		{"x.ts", ts, "formatAge", "1-4"},
 		{"x.ts", ts, "UNITS", "6-6"},
-		// A call that opens a block counts, as nothing tells it from a declaration.
-		{"x.ts", ts, "describe", "8-10"},
 		{"x.py", python, "Repo.save", "2-3"},
 		{"x.py", python, "load", "5-6"},
 	} {
@@ -97,8 +95,8 @@ describe("x", () => {
 	}
 	for symbol, want := range map[string]string{
 		"store":      "",
-		"Repo.flush": "Repo.java declares no flush inside Repo",
-		"missing":    "Repo.java declares no missing; read Repo.java for its outline, or grep it",
+		"Repo.flush": "Repo.java: nib found no declaration of Repo.flush; grep flush instead",
+		"missing":    "Repo.java: nib found no declaration of missing; grep missing instead",
 	} {
 		_, err := symbolRanges("Repo.java", java, symbol)
 		if want == "" {
@@ -110,6 +108,16 @@ describe("x", () => {
 		if err == nil || !strings.HasPrefix(err.Error(), want) {
 			t.Errorf("%s: got %v, want %q", symbol, err, want)
 		}
+	}
+}
+
+func TestACallIsNotADeclaration(t *testing.T) {
+	lines := strings.Split("describe(\"x\", () => {\n  test(\"y\", () => {})\n})\n", "\n")
+	if _, err := symbolRanges("x.ts", lines, "describe"); err == nil || !strings.Contains(err.Error(), "no declaration of describe") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := symbolRanges("notes.txt", lines, "describe"); err == nil || !strings.Contains(err.Error(), "has no grammar for .txt files") {
+		t.Fatalf("got %v", err)
 	}
 }
 

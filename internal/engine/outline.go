@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/snapshots"
+	"github.com/11ways/nib/internal/syntax"
 )
 
 // jsSpace is JavaScript's \s as an RE2 class.
@@ -336,15 +338,24 @@ func blockRange(lines []string, line int) (int, error) {
 	return last + 1, nil
 }
 
-// resolveBlocks gives block edits their resolved end: a block replace or cut spans the whole block, a block insert goes after it.
-func resolveBlocks(edits []snapshots.LineEdit, lines []string) ([]snapshots.LineEdit, error) {
+// resolveBlocks gives block edits their resolved end: a block replace or cut spans the whole block, a block insert goes after it. In a
+// language nib has a grammar for, the syntax tree says where the block ends; in any other file, indentation does.
+func resolveBlocks(path string, edits []snapshots.LineEdit, lines []string) ([]snapshots.LineEdit, error) {
 	resolved := make([]snapshots.LineEdit, len(edits))
 	for i, edit := range edits {
 		if !edit.Block {
 			resolved[i] = edit
 			continue
 		}
-		end, err := blockRange(lines, edit.Start)
+		end, err := syntax.Block(path, []byte(strings.Join(lines, "\n")), edit.Start)
+		switch {
+		case errors.Is(err, syntax.ErrNoGrammar):
+			end, err = blockRange(lines, edit.Start)
+		case errors.Is(err, syntax.ErrNotABlock):
+			err = fmt.Errorf("Line %d does not start a multi-line block; use PUT N.=M: or CUT N.=M instead", edit.Start)
+		case err != nil:
+			err = fmt.Errorf("%v; use PUT N.=M: or CUT N.=M instead", err)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -423,6 +434,17 @@ func layout(lines []string) laidOut {
 		}
 	}
 	return laidOut{candidates, code, depth}
+}
+
+// declaringParts split a line as grep tells definitions from uses: a Go receiver, if any, and after it the part that names what the line
+// declares, up to the first ( = : { < [ , ; or quote.
+func declaringParts(content string) (receiver, declaring string) {
+	receiver = declarationGrp.FindString(content)
+	declaring = content[len(receiver):]
+	if at := declarationEnd.FindStringIndex(declaring); at != nil {
+		declaring = declaring[:at[0]]
+	}
+	return receiver, declaring
 }
 
 // definitionLines are the lines among matched whose first match sits in their declaring part on a line an outline would list.
