@@ -154,11 +154,11 @@ func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	}
 }
 
-func TestStateExitStatusAndChangedFiles(t *testing.T) {
+func TestEveryCallStartsFreshExitStatusAndChangedFiles(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	expect(t, f.run("cd /tmp && export FOO=bar"), "(no output)")
-	expect(t, f.run("pwd; echo $FOO"), "/tmp\nbar")
-	expect(t, f.run("cd "+f.directory+"; false"), "[exit 1]")
+	expect(t, f.run("pwd; echo ${FOO-unset}"), f.directory+"\nunset")
+	expect(t, f.run("false"), "[exit 1]")
 	f.run("cat a.txt")
 	out := f.run("echo six >> a.txt")
 	if !strings.HasPrefix(out, "[changed by this command: a.txt#") || !strings.Contains(out, "(was #") {
@@ -214,24 +214,67 @@ func TestJobsRunDetachedAndReportWhenDone(t *testing.T) {
 	f.run("true")
 }
 
-func TestTimeoutsKillTheProcessGroupAndClosingEndsJobs(t *testing.T) {
+func TestATimedOutCommandGoesOnAsAJob(t *testing.T) {
 	f := newFixture(t, nil)
 	limit := 300
 	start := time.Now()
-	out := f.call(server.ShellCall{Command: "sleep 30.123 & sleep 30.124", Timeout: &limit})
-	if time.Since(start) > 5*time.Second || !strings.Contains(out, "stopped after the 300ms timeout") {
+	out := f.call(server.ShellCall{Command: "echo before; sleep 0.8; echo after", Timeout: &limit})
+	if time.Since(start) > 2*time.Second || !strings.HasPrefix(out, "before\n[nibash: still running after 300ms; it goes on as job %1, output: ") {
 		t.Fatalf("took %s: %s", time.Since(start), out)
 	}
-	alive := func(pattern string) bool { return exec.Command("pgrep", "-f", pattern).Run() == nil }
-	if alive("^sleep 30.124$") {
-		t.Fatal("the timed-out program is still running")
+	log := strings.TrimSuffix(strings.SplitN(strings.SplitN(out, "output: ", 2)[1], ";", 2)[0], "]")
+	expect(t, f.run("wait %1; echo $?"), "0")
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !alive("^sleep 30.123$") {
-		t.Fatal("the job should run on until the session ends")
+	expect(t, string(data), "before\nafter\n")
+	if out := f.run("true"); !strings.HasPrefix(out, "[job %1 finished, exit 0; output: "+log+"]") {
+		t.Fatalf("got %s", out)
+	}
+}
+
+func TestCallsRunInParallelAndCancellingStopsAWaitingCall(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan string)
+	go func() {
+		result, _ := f.shell.Run(ctx, "session", server.ShellCall{Command: "sleep 30.125"}, f.tools())
+		stopped <- result.Text
+	}()
+	alive := func(pattern string) bool { return exec.Command("pgrep", "-f", pattern).Run() == nil }
+	for deadline := time.Now().Add(2 * time.Second); !alive("^sleep 30.125$"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first call never started its program")
+		}
+	}
+	start := time.Now()
+	expect(t, f.run("echo beside"), "beside")
+	if time.Since(start) > time.Second {
+		t.Fatalf("a call waited %s behind another", time.Since(start))
+	}
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not end the call")
+	}
+	if alive("^sleep 30.125$") {
+		t.Fatal("a cancelled call's program is still running")
+	}
+}
+
+func TestClosingEndsJobsAndCallsThatWentOnAsJobs(t *testing.T) {
+	f := newFixture(t, nil)
+	limit := 200
+	f.call(server.ShellCall{Command: "sleep 30.123 & sleep 30.124", Timeout: &limit})
+	alive := func(pattern string) bool { return exec.Command("pgrep", "-f", pattern).Run() == nil }
+	if !alive("^sleep 30.123$") || !alive("^sleep 30.124$") {
+		t.Fatal("neither the job nor the timed-out program may be stopped")
 	}
 	f.shell.Close("session")
-	time.Sleep(100 * time.Millisecond)
-	if alive("^sleep 30.123$") {
+	time.Sleep(200 * time.Millisecond)
+	if alive("^sleep 30.123$") || alive("^sleep 30.124$") {
 		t.Fatal("closing the session must end its jobs")
 	}
 }
@@ -282,7 +325,7 @@ func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		classify(file, nil, 0)
+		classify(file, 0)
 		var got []string
 		syntax.Walk(file, func(node syntax.Node) bool {
 			if lit, ok := node.(*syntax.Lit); ok {

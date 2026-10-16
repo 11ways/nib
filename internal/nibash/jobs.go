@@ -18,7 +18,8 @@ import (
 	"github.com/11ways/nib/internal/engine"
 )
 
-// job is work running detached from the calls: a whole command run with background: true, or a statement run with &.
+// job is work running detached from the calls: a whole command run with background: true, a statement run with &, or a call still running
+// at its timeout.
 type job struct {
 	id       int
 	command  string
@@ -110,8 +111,10 @@ func (t *jobTable) all() []*job {
 
 // finished reports, once each, the jobs that ended since the last call.
 func (t *jobTable) finished() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var lines []string
-	for _, j := range t.all() {
+	for _, j := range t.jobs {
 		if j.running() || j.reported {
 			continue
 		}
@@ -149,66 +152,71 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal.
-func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context) (*job, error) {
-	path, err := sess.logs.file("job")
+// open adds a new job, ended through cancel, with a new log for its output; finish ends it.
+func (t *jobTable) open(logs *logDirectory, command string, cancel context.CancelFunc) (*job, *cappedWriter, error) {
+	path, err := logs.file("job")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	logFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	j := &job{id: t.next, command: command, log: path, cancel: cancel, done: make(chan struct{}), groups: map[int]bool{}}
+	t.next++
+	t.jobs = append(t.jobs, j)
+	return j, &cappedWriter{file: logFile}, nil
+}
+
+// finish records how the job's run ended, closes its log and marks it done.
+func (j *job) finish(err error, out *cappedWriter) {
+	j.mu.Lock()
+	killed := j.killed
+	j.mu.Unlock()
+	var exit interp.ExitStatus
+	switch {
+	case killed != 0:
+		j.exit = 128 + int(killed)
+	case errors.As(err, &exit):
+		j.exit = int(exit)
+	case err != nil:
+		fmt.Fprintf(out, "nibash: %v\n", err)
+		j.exit = 1
+	}
+	out.file.Close()
+	close(j.done)
+}
+
+// launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal.
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer) (*job, error) {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
-		logFile.Close()
 		return nil, err
 	}
-	out := &cappedWriter{file: logFile}
-	if err := interp.StdIO(devnull, out, out)(runner); err != nil {
-		logFile.Close()
+	base, cancel := context.WithCancel(context.Background())
+	j, out, err := sess.jobs.open(sess.shell.logs, command, cancel)
+	if err != nil {
+		cancel()
 		devnull.Close()
 		return nil, err
 	}
-	sess.jobs.mu.Lock()
-	j := &job{id: sess.jobs.next, command: command, log: path, done: make(chan struct{}), groups: map[int]bool{}}
-	sess.jobs.next++
-	sess.jobs.jobs = append(sess.jobs.jobs, j)
-	sess.jobs.mu.Unlock()
-	jobTools := *tools
-	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, links: &links{}, logs: sess.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}}
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callKey{}, c))
-	jobTools.Ctx = ctx
-	j.cancel = cancel
-	go func() {
-		defer close(j.done)
-		defer devnull.Close()
-		defer logFile.Close()
-		err := runner.Run(ctx, node)
-		var exit interp.ExitStatus
-		j.mu.Lock()
-		killed := j.killed
-		j.mu.Unlock()
-		switch {
-		case killed != 0:
-			j.exit = 128 + int(killed)
-		case errors.As(err, &exit):
-			j.exit = int(exit)
-		case err != nil:
-			fmt.Fprintf(out, "nibash: %v\n", err)
-			j.exit = 1
-		}
-	}()
-	return j, nil
-}
-
-// startJob runs a whole command as a job, for background: true.
-func (sess *session) startJob(file *syntax.File, command string, tools *engine.Context, dir string) (*job, error) {
-	runner := sess.runner.Subshell()
-	if err := interp.Dir(dir)(runner); err != nil {
+	if err := interp.StdIO(devnull, out, out)(runner); err != nil {
+		cancel()
+		devnull.Close()
+		j.finish(err, out)
 		return nil, err
 	}
-	return sess.launch(runner, file, command, tools)
+	jobTools := *tools
+	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, runner: runner, names: names, links: &links{}, logs: sess.shell.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}}
+	ctx := context.WithValue(base, callKey{}, c)
+	jobTools.Ctx = ctx
+	go func() {
+		defer devnull.Close()
+		j.finish(runner.Run(ctx, node), out)
+	}()
+	return j, nil
 }
 
 // startJob starts the statement an & put away as a job, in a copy of the shell as it is now, and prints the job's spec for $!.
@@ -219,13 +227,13 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	if err != nil || stmt == nil {
 		return interp.ExitStatus(1)
 	}
-	runner := c.session.runner.Subshell()
+	runner := c.runner.Subshell()
 	if err := interp.Dir(hc.Dir)(runner); err != nil {
 		return err
 	}
 	var text strings.Builder
 	syntax.NewPrinter().Print(&text, stmt)
-	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools)
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
 		return interp.ExitStatus(1)

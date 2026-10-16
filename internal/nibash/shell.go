@@ -1,5 +1,6 @@
-// Package nibash is nib's shell: a bash interpreter (mvdan.cc/sh) whose own cat, head, tail, grep, rg, sed -n and wc pass file lines on with
-// their origin, so what reaches the model can carry edit anchors, while every other command is a real program.
+// Package nibash is nib's shell: a bash interpreter (mvdan.cc/sh) whose calls each start afresh and whose own cat, head, tail, grep, rg,
+// sed -n and wc pass file lines on with their origin, so what reaches the model can carry edit anchors, while every other command is a real
+// program.
 package nibash
 
 import (
@@ -9,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -29,16 +31,17 @@ const (
 )
 
 // description is the nibash tool's description, with %s for how long output is cut; a test holds every variant under 2048 characters.
-const description = `Run a command in nibash, nib's shell: a bash interpreter (bash dialect) whose directory, variables and functions persist between calls; calls run one at a time. Programs run as real processes; stdin is empty.
-cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output comes to you or into another of them, and their options are implemented: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from (grep matches as *N:), with facts like [lines 1-20 of 1,234]. Elsewhere, with other options, or written as a path (/usr/bin/grep), the system program runs; type and command -v name that one.
-Output is shaped: colors stripped, repeats collapsed, %s, with the whole kept in a log you can read. A nonzero exit ends with [exit N]; files the command changed are listed with their new tags.
-Unlike bash: cmd & starts a job, and $! is its spec (%%N) for kill, wait and jobs; finished jobs are reported on the next call. A pipeline's last stage runs in this shell (... | read v sets v). ~name/ paths expand only unquoted; hash -d name=dir (zsh) adds one for you and later subagents, hash -d lists them, ${!HOME*} too.`
+const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over); calls run in parallel. Programs are real processes; stdin is empty.
+cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from (grep matches as *N:). Otherwise, or written as a path (/usr/bin/grep), the system program runs; type and command -v name it.
+Output is shaped: colors stripped, repeats collapsed, %s, with the whole kept in a log you can read. A nonzero exit ends with [exit N]; changed files are listed with new tags.
+Unlike bash: a command still running at its timeout goes on as a job, never stopped, like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the call after it ends reports it. ~name/ paths expand only unquoted; hash -d name=dir (zsh) adds one for later calls and subagents, hash -d lists them, ${!HOME*} too. A pipeline's last stage runs in the shell (... | read v sets v).`
 
-// Shell is nibash for an MCP server: one shell session per key the server passes, one per agent of each client.
+// Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
 	engine   *engine.Engine
 	sandbox  bool
 	decider  decider.Decider
+	logs     *logDirectory
 	mu       sync.Mutex
 	sessions map[any]*session
 }
@@ -46,7 +49,7 @@ type Shell struct {
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
 // expand the named directories of the caller's view that each call's tools carry.
 func New(e *engine.Engine, sandbox bool) *Shell {
-	return &Shell{engine: e, sandbox: sandbox, sessions: map[any]*session{}}
+	return &Shell{engine: e, sandbox: sandbox, logs: newLogDirectory(), sessions: map[any]*session{}}
 }
 
 // Deciding sets the decider that chooses what long output shows; nil is the fixed cut. Call it before serving.
@@ -64,80 +67,21 @@ func (s *Shell) Description() string {
 	return fmt.Sprintf(description, kind.Cut())
 }
 
-// session is one agent's shell: its interpreter, jobs and logs. Calls hold mu, so they run one at a time.
+// session is one agent's jobs, which outlive the calls that start them; nothing else of a shell carries over from one call to the next.
 type session struct {
-	mu     sync.Mutex
-	runner *interp.Runner
-	jobs   *jobTable
-	logs   *logDirectory
-	shell  *Shell
-	// settled is the shell as its last call left it, for a fork to start from without waiting for a call that is running; settling guards it.
-	settling sync.Mutex
-	settled  *settled
-	// names are the caller's named directories, set as each call starts; nil when the server passes none.
-	names namer
+	jobs  *jobTable
+	shell *Shell
 }
 
-// settled is what of a shell a fork takes over: its directory, its variables, unset ones included, and its functions.
-type settled struct {
-	dir   string
-	vars  frozen
-	funcs map[string]*syntax.Stmt
-}
-
-// frozen are a shell's variables, the base environment of a shell forked from it.
-type frozen map[string]expand.Variable
-
-func (f frozen) Get(name string) expand.Variable { return f[name] }
-
-func (f frozen) Each(yield func(name string, vr expand.Variable) bool) {
-	for name, vr := range f {
-		if !yield(name, vr) {
-			return
-		}
-	}
-}
-
-func (s *Shell) session(key any, directory string) (*session, error) {
+func (s *Shell) session(key any) *session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if found := s.sessions[key]; found != nil {
-		return found, nil
+		return found
 	}
-	sess := &session{jobs: newJobTable(), logs: newLogDirectory(), shell: s}
-	runner, err := sess.newRunner(directory, expand.ListEnviron(environment(os.Environ())...))
-	if err != nil {
-		return nil, err
-	}
-	sess.runner = runner
+	sess := &session{jobs: newJobTable(), shell: s}
 	s.sessions[key] = sess
-	return sess, nil
-}
-
-// Fork starts the shell under to as the one under from was when its last call ended, with none of its jobs. Aliases are not carried over.
-func (s *Shell) Fork(from, to any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	parent := s.sessions[from]
-	if parent == nil || s.sessions[to] != nil {
-		return
-	}
-	parent.settling.Lock()
-	last := parent.settled
-	parent.settling.Unlock()
-	if last == nil {
-		return
-	}
-	sess := &session{jobs: newJobTable(), logs: newLogDirectory(), shell: s}
-	runner, err := sess.newRunner(last.dir, last.vars)
-	if err != nil {
-		return
-	}
-	// Run resets a runner only the first time, which would drop the functions set here.
-	runner.Reset()
-	runner.Funcs = maps.Clone(last.funcs)
-	sess.runner = runner
-	s.sessions[to] = sess
+	return sess
 }
 
 // Close kills a session's jobs and forgets it.
@@ -168,10 +112,10 @@ func environment(pairs []string) []string {
 	return env
 }
 
-// newRunner makes the session's interpreter on env. It lives as long as the session: Run starts each call afresh, also after exit or a timeout.
-func (sess *session) newRunner(directory string, env expand.Environ) (*interp.Runner, error) {
-	runner, err := interp.New(
-		interp.Env(named{env, sess}),
+// newRunner makes a call's interpreter, in directory with the process environment and the caller's named directories.
+func (sess *session) newRunner(directory string, names namer) (*interp.Runner, error) {
+	return interp.New(
+		interp.Env(named{expand.ListEnviron(environment(os.Environ())...), names}),
 		interp.Dir(directory),
 		interp.ExecHandlers(sess.execMiddleware),
 		interp.CallHandler(sess.callHandler),
@@ -179,10 +123,6 @@ func (sess *session) newRunner(directory string, env expand.Environ) (*interp.Ru
 		interp.StatHandler(sess.statHandler),
 		interp.ReadDirHandler2(sess.readDirHandler),
 	)
-	if err != nil {
-		return nil, err
-	}
-	return runner, nil
 }
 
 // call is one nibash call's state, reached from the handlers through the context.
@@ -190,14 +130,18 @@ type call struct {
 	engine  *engine.Engine
 	tools   *engine.Context
 	session *session
-	sink    *sink
-	links   *links
-	logs    *logDirectory
-	jobs    map[int]*syntax.Stmt
-	// job is set for calls that run a job's statement, whose processes join the job.
+	runner  *interp.Runner
+	// names are the caller's named directories; nil when the server passes none.
+	names namer
+	sink  *sink
+	links *links
+	logs  *logDirectory
+	jobs  map[int]*syntax.Stmt
+	// mu guards job, groups and written, which a call's stages and a job it turned into share.
+	mu sync.Mutex
+	// job is set for calls that run a job's statement, and for a call that went on as a job; their processes join it.
 	job *job
-	// groups are the process groups this call started, for killing them on timeout or cancellation.
-	mu     sync.Mutex
+	// groups are the process groups this call started, for killing them when it ends or the client cancels.
 	groups map[int]bool
 	// written are the files a redirect opened for writing, and whether each existed before.
 	written map[string]bool
@@ -239,15 +183,10 @@ func (c *call) wrote(path string, existed bool) {
 	}
 }
 
-// Run runs one nibash call.
+// Run runs one nibash call in a fresh interpreter; a command still running at the call's timeout goes on as a job.
 func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tools *engine.Context) (engine.Result, error) {
-	sess, err := s.session(key, tools.Directory)
-	if err != nil {
-		return engine.Result{}, err
-	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	sess.names, _ = tools.Names.(namer)
+	sess := s.session(key)
+	view, _ := tools.Names.(namer)
 	timeout := defaultTimeout
 	if request.Timeout != nil {
 		timeout = min(time.Duration(*request.Timeout)*time.Millisecond, maxTimeout)
@@ -256,20 +195,19 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	if err != nil {
 		return engine.Result{Text: fmt.Sprintf("nibash: %v\n[exit 2]", err)}, nil
 	}
-	var reports []string
-	reports = append(reports, sess.jobs.finished()...)
+	reports := sess.jobs.finished()
+	runner, err := sess.newRunner(tools.Directory, view)
+	if err != nil {
+		return engine.Result{}, err
+	}
 	if request.Background {
-		j, err := sess.startJob(file, request.Command, tools, sess.runner.Dir)
+		j, err := sess.launch(runner, file, request.Command, tools, view)
 		if err != nil {
 			return engine.Result{}, err
 		}
 		return engine.Result{Text: strings.Join(append(reports, fmt.Sprintf("[job %%%d started; output: %s]", j.id, j.log)), "\n")}, nil
 	}
-	functions := map[string]bool{}
-	for name := range sess.runner.Funcs {
-		functions[name] = true
-	}
-	jobs := classify(file, functions, 0)
+	jobs := classify(file, 0)
 	bodies := heredocs(file)
 	before := map[string]held{}
 	for _, path := range s.engine.Held(tools) {
@@ -279,40 +217,88 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 			}
 		}
 	}
-	c := &call{engine: s.engine, tools: tools, session: sess, sink: &sink{}, links: &links{}, logs: sess.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}}
+	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
+	callTools := *tools
+	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return engine.Result{}, err
 	}
-	defer devnull.Close()
-	if err := interp.StdIO(devnull, c.sink, c.sink)(sess.runner); err != nil {
+	if err := interp.StdIO(devnull, c.sink, c.sink)(runner); err != nil {
+		devnull.Close()
 		return engine.Result{}, err
 	}
-	runCtx, cancel := context.WithTimeout(context.WithValue(ctx, callKey{}, c), timeout)
-	defer cancel()
-	tools.Ctx = runCtx
-	err = sess.runner.Run(runCtx, file)
-	sess.settle()
+	// The run is not tied to the request: the client cancelling stops it only while the call still waits for it.
+	runCtx, cancel := context.WithCancel(context.WithValue(context.WithoutCancel(ctx), callKey{}, c))
+	callTools.Ctx = runCtx
+	done := make(chan error, 1)
+	go func() {
+		defer devnull.Close()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "nib: internal error in nibash: %v\n%s", r, debug.Stack())
+				done <- fmt.Errorf("internal error (%v); please report the command", r)
+			}
+		}()
+		done <- runner.Run(runCtx, file)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		cancel()
+		err = <-done
+	case <-timer.C:
+		return s.detach(ctx, c, request, timeout, cancel, done, before, bodies, reports)
+	}
+	cancel()
 	c.killAll()
 	status := 0
 	var exit interp.ExitStatus
 	switch {
 	case errors.As(err, &exit):
 		status = int(exit)
-	case err != nil && runCtx.Err() == nil:
+	case err != nil && ctx.Err() == nil:
 		fmt.Fprintf(c.sink, "nibash: %v\n", err)
 		status = 1
 	}
-	tools.Ctx = ctx
-	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
-	text := c.sink.render(s.engine, tools, sess.logs, decision{decider: s.decider, command: request.Command, purpose: purpose(request.Description), exit: status, timedOut: timedOut})
+	callTools.Ctx = ctx
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, command: request.Command, purpose: purpose(request.Description), exit: status})
 	var tail []string
-	if timedOut {
-		tail = append(tail, fmt.Sprintf("[nibash: stopped after the %s timeout; run long commands with background: true]", timeout))
-	}
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
 	}
+	return c.result(reports, text, tail, before, bodies), nil
+}
+
+// detach turns a call still running at its timeout into a job: the call returns the output so far, and the job's log gets all of it, that
+// output included, while the run goes on.
+func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, timeout time.Duration, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string) (engine.Result, error) {
+	j, out, err := c.session.jobs.open(s.logs, request.Command, cancel)
+	if err != nil {
+		// Without a log the run cannot go on unseen, so it ends as a call would on cancellation.
+		cancel()
+		<-done
+		c.killAll()
+		return engine.Result{}, err
+	}
+	c.adopt(j)
+	c.sink.detach(out)
+	go func() {
+		err := <-done
+		cancel()
+		c.killAll()
+		j.finish(err, out)
+	}()
+	c.tools.Ctx = ctx
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, command: request.Command, purpose: purpose(request.Description), timedOut: true})
+	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
+	return c.result(reports, text, tail, before, bodies), nil
+}
+
+// result joins the finished jobs' reports, the output and the closing lines with the files the command changed so far.
+func (c *call) result(reports []string, text string, tail []string, before map[string]held, bodies []string) engine.Result {
 	if changed := c.changed(before, bodies); changed != "" {
 		tail = append(tail, changed)
 	}
@@ -322,17 +308,19 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	parts = append(parts, tail...)
 	if len(parts) == 0 {
-		return engine.Result{Text: "(no output)"}, nil
+		return engine.Result{Text: "(no output)"}
 	}
-	return engine.Result{Text: strings.Join(parts, "\n")}, nil
+	return engine.Result{Text: strings.Join(parts, "\n")}
 }
 
-// settle keeps the shell as this call left it, for a fork.
-func (sess *session) settle() {
-	last := &settled{dir: sess.runner.Dir, vars: shellVariables(sess.runner.Vars), funcs: maps.Clone(sess.runner.Funcs)}
-	sess.settling.Lock()
-	sess.settled = last
-	sess.settling.Unlock()
+// adopt makes j the job of this call's processes, those it started already included.
+func (c *call) adopt(j *job) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.job = j
+	for pgid := range c.groups {
+		j.add(pgid)
+	}
 }
 
 // changed lists the files the command created or changed: those the session held versions of, and those it wrote through a redirect.
@@ -348,7 +336,10 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 			paths[path] = candidate{was: h.tag}
 		}
 	}
-	for path, existed := range c.written {
+	c.mu.Lock()
+	written := maps.Clone(c.written)
+	c.mu.Unlock()
+	for path, existed := range written {
 		real, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			continue

@@ -59,23 +59,15 @@ func agentDirectory(t *testing.T) string {
 	return directory
 }
 
-func TestASubagentsShellIsItsOwn(t *testing.T) {
-	directory := agentDirectory(t)
-	run := connectAgents(t, directory, map[string]hookstate.Agent{"toolu_sub_cd": {ID: "a1"}, "toolu_sub_pwd": {ID: "a1"}})
-	run("toolu_main_x", "export WHO=main")
-	run("toolu_sub_cd", "cd sub && export WHO=sub")
-	expect(t, run("toolu_main_pwd", `echo "$PWD $WHO"`), directory+" main")
-	expect(t, run("toolu_sub_pwd", `echo "$PWD $WHO"`), filepath.Join(directory, "sub")+" sub")
-}
-
-func TestAForksShellStartsAsACopyOfItsParents(t *testing.T) {
+func TestEveryCallStartsFreshAndJobsStayWithTheirAgent(t *testing.T) {
 	directory := agentDirectory(t)
 	fork := hookstate.Agent{ID: "f1", Spawned: true, Forked: true}
-	run := connectAgents(t, directory, map[string]hookstate.Agent{"toolu_f1": fork, "toolu_f2": fork, "toolu_f3": fork})
-	run("toolu_main_setup", "cd sub\nexport WHO=main\nLOCAL=kept\nunset PAGER\ngreet() { echo \"hi $1\"; }\nsleep 30 &")
-	expect(t, run("toolu_f1", `echo "$PWD $WHO $LOCAL ${PAGER-unset}"; greet fork; jobs; sh -c 'echo "$WHO ${LOCAL-none}"'`), filepath.Join(directory, "sub")+" main kept unset\nhi fork\nmain none")
-	// From then on the two shells are apart.
-	run("toolu_f2", "cd .. && export WHO=fork")
-	expect(t, run("toolu_main_check", `echo "$PWD $WHO"; jobs | wc -l`), filepath.Join(directory, "sub")+" main\n1")
-	expect(t, run("toolu_f3", `echo "$PWD $WHO"`), directory+" fork")
+	run := connectAgents(t, directory, map[string]hookstate.Agent{"toolu_sub_job": {ID: "a1"}, "toolu_sub_jobs": {ID: "a1"}, "toolu_f1": fork})
+	expect(t, run("toolu_main_x", "cd sub && export WHO=main && greet() { echo hi; }"), "(no output)")
+	expect(t, run("toolu_main_y", `echo "$PWD ${WHO-unset} $(greet 2>/dev/null || echo none)"`), directory+" unset none")
+	run("toolu_sub_job", "sleep 30.41 &")
+	expect(t, run("toolu_sub_jobs", "jobs | wc -l"), "1")
+	expect(t, run("toolu_main_jobs", "jobs | wc -l"), "0")
+	// A fork starts with its parent's seen lines, never with its jobs.
+	expect(t, run("toolu_f1", `echo "$PWD"; jobs | wc -l`), directory+"\n0")
 }

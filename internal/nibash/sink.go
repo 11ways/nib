@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,11 +35,13 @@ const (
 // logLimit caps a log, so a runaway program cannot fill the disk; a variable so a test can reach it.
 var logLimit = 64 * 1024 * 1024
 
-// sink is the terminal: what reaches the model. It takes records from nib commands and bytes from everything else, in the order they come.
+// sink is the terminal: what reaches the model. It takes records from nib commands and bytes from everything else, in the order they come;
+// once detached, what comes goes on to a job's log instead.
 type sink struct {
-	mu      sync.Mutex
-	entries []entry
-	facts   []func() string
+	mu       sync.Mutex
+	entries  []entry
+	facts    []func() string
+	detached *rawLog
 }
 
 type entry struct {
@@ -49,6 +52,10 @@ type entry struct {
 func (s *sink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.detached != nil {
+		s.detached.bytes(p)
+		return len(p), nil
+	}
 	if n := len(s.entries); n > 0 && s.entries[n-1].record == nil {
 		s.entries[n-1].bytes = append(s.entries[n-1].bytes, p...)
 	} else {
@@ -60,8 +67,54 @@ func (s *sink) Write(p []byte) (int, error) {
 func (s *sink) add(r record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.detached != nil {
+		s.detached.record(r.text)
+		return
+	}
 	copied := r
 	s.entries = append(s.entries, entry{record: &copied})
+}
+
+// detach writes what the sink holds to w as its log text and sends all that comes later there too; what it holds stays for render.
+func (s *sink) detach(w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := &rawLog{w: w}
+	for _, en := range s.entries {
+		if en.record == nil {
+			log.bytes(en.bytes)
+		} else {
+			log.record(en.record.text)
+		}
+	}
+	s.detached = log
+}
+
+// rawLog writes the log text of what a sink takes: bytes as they come, and each record on a line of its own.
+type rawLog struct {
+	w io.Writer
+	// newlines counts the line breaks written; open is true while the text written does not end in one.
+	newlines int
+	open     bool
+}
+
+func (l *rawLog) bytes(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	_, _ = l.w.Write(p)
+	l.newlines += bytes.Count(p, []byte("\n"))
+	l.open = p[len(p)-1] != '\n'
+}
+
+// record writes a record's line and returns its line number in the log.
+func (l *rawLog) record(text string) int {
+	if l.open {
+		l.bytes([]byte("\n"))
+	}
+	at := l.newlines + 1
+	l.bytes([]byte(text + "\n"))
+	return at
 }
 
 // fact adds a line computed when the call ends, after every stage has finished.
@@ -173,14 +226,8 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 	entries := s.entries
 	s.mu.Unlock()
 	var items []item
-	// raw is the log: every entry's text, a line break added where a record follows bytes that did not end one, as the rows break there.
 	var raw strings.Builder
-	newlines := 0
-	write := func(text string) {
-		raw.WriteString(text)
-		newlines += strings.Count(text, "\n")
-	}
-	open := func() bool { return raw.Len() > 0 && !strings.HasSuffix(raw.String(), "\n") }
+	log := &rawLog{w: &raw}
 	var plain []engine.PlainLine
 	var plainAt []int
 	flushPlain := func() {
@@ -206,12 +253,12 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 	}
 	for _, en := range entries {
 		if en.record == nil {
-			first := newlines + 1
+			first := log.newlines + 1
 			if bytes.IndexByte(en.bytes, 0) >= 0 {
 				flushPlain()
-				write(string(en.bytes))
-				last := newlines
-				if open() {
+				log.bytes(en.bytes)
+				last := log.newlines
+				if log.open {
 					last++
 				}
 				items = append(items, item{text: fmt.Sprintf("[binary output, %d bytes; not shown]", len(en.bytes)), plain: true, first: first, last: max(first, last)})
@@ -221,15 +268,11 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 				plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: line})
 				plainAt = append(plainAt, first+i)
 			}
-			write(string(en.bytes))
+			log.bytes(en.bytes)
 			continue
 		}
 		r := en.record
-		if open() {
-			write("\n")
-		}
-		at := newlines + 1
-		write(r.text + "\n")
+		at := log.record(r.text)
 		if r.separator {
 			continue
 		}
@@ -371,7 +414,7 @@ func fixedCut(rows []row, log saved, because string) []row {
 	return append(kept, rows[start:]...)
 }
 
-// logDirectory holds a session's logs in a private directory.
+// logDirectory holds the shell's logs in a private directory; one per shell, so its numbering keeps every agent's logs apart.
 type logDirectory struct {
 	mu   sync.Mutex
 	path string

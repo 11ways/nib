@@ -52,12 +52,9 @@ type Options struct {
 type Shell interface {
 	// Description is the nibash tool's description.
 	Description() string
-	// Run executes one nibash call in the shell under key, one per agent of a client; a new key starts a new shell.
+	// Run executes one nibash call for the agent under key, one per agent of a client; jobs it starts stay with that key.
 	Run(ctx context.Context, key any, call ShellCall, tools *engine.Context) (engine.Result, error)
-	// Fork starts the shell under to as a copy of the one under from as its last call left it, without its jobs; it does nothing when to has
-	// a shell already, and leaves to to start afresh when from has none.
-	Fork(from, to any)
-	// Close ends the shell under key and its jobs.
+	// Close kills the jobs under key and forgets it.
 	Close(key any)
 }
 
@@ -70,7 +67,7 @@ type ShellCall struct {
 }
 
 // session is per-client state: its roots, cached until the client says they changed, the directories the user approved writing to, the
-// calls paused to ask the client, under the request state it sends back, and the agents with a shell of their own.
+// calls paused to ask the client, under the request state it sends back, and the agents that called nibash.
 type session struct {
 	mu         sync.Mutex
 	roots      []string
@@ -79,7 +76,7 @@ type session struct {
 	approved   map[string]bool
 	paused     map[string]paused
 	order      []string
-	// shells are the agents with a nibash shell, least recently used first; the main agent's is not among them, so never evicted.
+	// shells are the subagents that called nibash, whose jobs end with the connection; the main agent's are not among them.
 	shells []string
 }
 
@@ -91,9 +88,6 @@ type paused struct {
 
 // pausedLimit bounds the paused calls a session remembers; a client that never sends one again leaves it to be dropped.
 const pausedLimit = 16
-
-// shellLimit bounds the agent shells a session keeps; past it the least recently used one is closed, with its jobs.
-const shellLimit = 16
 
 // shellKey is the nibash shell of one agent of one client; agent "" is the main agent.
 type shellKey struct {
@@ -233,24 +227,18 @@ func (s *Server) state(key *mcp.ServerSession) *session {
 	return state
 }
 
-// shell is the key of the calling agent's shell, marked most recently used; an agent past the limit closes the least recently used one.
-// Making the client's state here also makes sure its shells are closed with its connection.
+// shell is the key of the calling agent's nibash jobs. Making the client's state here also makes sure its jobs end with its connection; they
+// never end sooner, however many subagents come and go.
 func (s *Server) shell(c *call) shellKey {
 	state := s.state(c.key)
 	if c.agent == "" {
 		return shellKey{c.key, ""}
 	}
 	state.mu.Lock()
-	state.shells = append(slices.DeleteFunc(state.shells, func(agent string) bool { return agent == c.agent }), c.agent)
-	var evicted []string
-	if len(state.shells) > shellLimit {
-		evicted = slices.Clone(state.shells[:len(state.shells)-shellLimit])
-		state.shells = slices.Clone(state.shells[len(state.shells)-shellLimit:])
+	if !slices.Contains(state.shells, c.agent) {
+		state.shells = append(state.shells, c.agent)
 	}
 	state.mu.Unlock()
-	for _, agent := range evicted {
-		s.options.Shell.Close(shellKey{c.key, agent})
-	}
 	return shellKey{c.key, c.agent}
 }
 
@@ -322,10 +310,10 @@ func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *ori
 
 // start gives a subagent, on the first call nib sees from it, what it inherits from its parent: every subagent the named directories its
 // parent saw before the subagent's moment, and a fork, which starts with its parent's conversation up to then, a copy of the lines its parent
-// had seen before it and a copy of its parent's shell. An OpenCode session's origin is asked of OpenCode only here, and a parent session that
-// never called nib is started first. A copy, not a share: neither sees what the other reads or defines later. REAPPLY tokens stay the
-// parent's, as each applies once. Without a moment, the parent's lines and names are taken as they are at this call, which may be later than
-// the subagent's start; the shell always is. The caller holds seeding.
+// had seen before it. An OpenCode session's origin is asked of OpenCode only here, and a parent session that never called nib is started
+// first. A copy, not a share: neither sees what the other reads or defines later. REAPPLY tokens and jobs stay the parent's, as each applies
+// once. Without a moment, the parent's lines and names are taken as they are at this call, which may be later than the subagent's start. The
+// caller holds seeding.
 func (s *Server) start(key *mcp.ServerSession, agent string, from *origin, depth int) {
 	if s.started[agent] || (from == nil && !strings.HasPrefix(agent, openCodeSession)) {
 		return
@@ -349,9 +337,6 @@ func (s *Server) start(key *mcp.ServerSession, agent string, from *origin, depth
 		return
 	}
 	s.engine.Store.Copy(s.engineSession(from.parent), s.engineSession(agent), from.at)
-	if s.options.Shell != nil {
-		s.options.Shell.Fork(shellKey{key, from.parent}, s.shell(&call{key: key, agent: agent}))
-	}
 }
 
 // engineSession is the engine session of agent: its name, or for the main agent the server's session.

@@ -22,4 +22,4 @@ const editSchema = `{"type":"object","properties":{"input":{"description":"The c
 
 const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"tag":{"description":"Required to overwrite an existing file","type":"string"}},"required":["path","content"]}`
 
-const nibashSchema = `{"type":"object","properties":{"command":{"type":"string"},"description":{"description":"What it is for, in 5 to 12 words","type":"string"},"timeout":{"description":"Milliseconds; default 120000, at most 600000","type":"integer"},"background":{"description":"Run as a job; returns its id and log at once","type":"boolean"}},"required":["command"]}`
+const nibashSchema = `{"type":"object","properties":{"command":{"type":"string"},"description":{"description":"What it is for, in 5 to 12 words","type":"string"},"timeout":{"description":"Milliseconds before it goes on as a job; default 120000, at most 600000","type":"integer"},"background":{"description":"Run as a job; returns its id and log at once","type":"boolean"}},"required":["command"]}`

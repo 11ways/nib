@@ -44,7 +44,7 @@ func TestCorpus(t *testing.T) {
 			continue
 		}
 		parsed++
-		classify(file, nil, 0)
+		classify(file, 0)
 		found := false
 		syntax.Walk(file, func(node syntax.Node) bool {
 			if lit, ok := node.(*syntax.Lit); ok {

@@ -467,11 +467,10 @@ func TestAPausedSubagentCallKeepsItsAgent(t *testing.T) {
 	}
 }
 
-// fakeShell records which shells are run, forked and closed.
+// fakeShell records which shells are run and closed.
 type fakeShell struct {
 	mu     sync.Mutex
 	ran    []shellKey
-	forked [][2]shellKey
 	closed []shellKey
 }
 
@@ -482,12 +481,6 @@ func (f *fakeShell) Run(_ context.Context, key any, _ ShellCall, _ *engine.Conte
 	defer f.mu.Unlock()
 	f.ran = append(f.ran, key.(shellKey))
 	return engine.Result{Text: "ok"}, nil
-}
-
-func (f *fakeShell) Fork(from, to any) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.forked = append(f.forked, [2]shellKey{from.(shellKey), to.(shellKey)})
 }
 
 func (f *fakeShell) Close(key any) {
@@ -507,7 +500,7 @@ func (f *fakeShell) closedAgents() []string {
 	return agents
 }
 
-func TestEachAgentHasAShellClosedWithTheConnection(t *testing.T) {
+func TestEachAgentHasJobsEndedWithTheConnection(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	r := &records{byUse: map[string]hookstate.Agent{}}
 	shell := &fakeShell{}
@@ -523,20 +516,20 @@ func TestEachAgentHasAShellClosedWithTheConnection(t *testing.T) {
 	if !slices.Equal(agents, []string{"", "agent:a1", "", "agent:a2", "agent:a1"}) || shell.ran[0] != shell.ran[2] || shell.ran[1] == shell.ran[3] {
 		t.Fatalf("each agent must have its own shell, got %v", shell.ran)
 	}
-	// Past the limit, the least recently used subagent's shell is closed; a2 was used before a1's last call.
-	for i := range shellLimit - 1 {
+	// However many subagents come and go, none has its jobs ended before the connection ends.
+	for i := range 20 {
 		c.call(t, r.as(fmt.Sprintf("b%02d", i), command))
 	}
-	if got := shell.closedAgents(); !slices.Equal(got, []string{"agent:a2"}) {
-		t.Fatalf("only the least recently used subagent shell must be closed, got %v", got)
+	if got := shell.closedAgents(); len(got) != 0 {
+		t.Fatalf("no agent's jobs may end while the connection is open, got %v", got)
 	}
 	c.session.Close()
 	deadline := time.Now().Add(5 * time.Second)
-	for len(shell.closedAgents()) < shellLimit+2 && time.Now().Before(deadline) {
+	for len(shell.closedAgents()) < 23 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := shell.closedAgents(); len(got) != shellLimit+2 || got[0] != "" || !slices.Contains(got, "agent:a1") {
-		t.Fatalf("closing the connection must close the main shell and every subagent's, got %v", got)
+	if got := shell.closedAgents(); len(got) != 23 || got[0] != "" || !slices.Contains(got, "agent:a1") {
+		t.Fatalf("closing the connection must end the main agent's jobs and every subagent's, got %v", got)
 	}
 }
 
@@ -575,11 +568,6 @@ func TestAForkWithNoMomentStartsWithACopyOfWhatItsParentSawAtItsFirstCall(t *tes
 	if !refused.IsError || !strings.Contains(text(refused), "never displayed") {
 		t.Fatalf("a fork must not edit a line its parent saw after the fork, got %q", text(refused))
 	}
-	shell.mu.Lock()
-	defer shell.mu.Unlock()
-	if len(shell.forked) != 1 || shell.forked[0][0] != (shellKey{shell.forked[0][0].session, ""}) || shell.forked[0][1].agent != "agent:f1" {
-		t.Fatalf("the fork's shell must be forked from the main agent's once, got %v", shell.forked)
-	}
 }
 
 func TestAForkOfASubagentStartsFromThatSubagent(t *testing.T) {
@@ -597,8 +585,8 @@ func TestAForkOfASubagentStartsFromThatSubagent(t *testing.T) {
 	}
 	shell.mu.Lock()
 	defer shell.mu.Unlock()
-	if len(shell.forked) != 1 || shell.forked[0][0].agent != "agent:a1" || shell.forked[0][1].agent != "agent:f2" || shell.ran[0] != shell.forked[0][1] {
-		t.Fatalf("the fork's shell must be forked from its parent's before it runs, got forked %v ran %v", shell.forked, shell.ran)
+	if shell.ran[0].agent != "agent:f2" {
+		t.Fatalf("the fork must run under its own key, got %v", shell.ran)
 	}
 }
 
@@ -612,8 +600,8 @@ func TestAForkWhoseParentIsUnknownStartsOnItsOwn(t *testing.T) {
 	c.call(t, r.as("", readCall(path)))
 	// The hook files a fork it cannot place like any subagent, which starts with nothing seen.
 	c.call(t, r.as("f3", &mcp.CallToolParams{Name: "nibash", Arguments: map[string]any{"command": "pwd"}}))
-	if got := c.seenBy("agent:f3"); got != "" || len(shell.forked) != 0 || shell.ran[0].agent != "agent:f3" {
-		t.Fatalf("an agent with no known parent must start empty, got %q, forked %v", got, shell.forked)
+	if got := c.seenBy("agent:f3"); got != "" || shell.ran[0].agent != "agent:f3" {
+		t.Fatalf("an agent with no known parent must start empty, got %q", got)
 	}
 }
 
@@ -645,7 +633,7 @@ func TestOpenCodeSessionsAreKeptApart(t *testing.T) {
 	}
 	shell.mu.Lock()
 	defer shell.mu.Unlock()
-	if shell.ran[0].agent != "opencode:ses_main" || shell.ran[0] != shell.ran[2] || shell.ran[1].agent != "opencode:ses_child" || len(shell.forked) != 0 {
+	if shell.ran[0].agent != "opencode:ses_main" || shell.ran[0] != shell.ran[2] || shell.ran[1].agent != "opencode:ses_child" {
 		t.Fatalf("each session must have its own shell, got %v", shell.ran)
 	}
 }
@@ -754,15 +742,6 @@ func TestAnOpenCodeForkStartsWithWhatItsParentSawBeforeItsBoundary(t *testing.T)
 		if f.looked[session] != want {
 			t.Errorf("%s was looked up %d times, want %d", session, f.looked[session], want)
 		}
-	}
-	shell.mu.Lock()
-	defer shell.mu.Unlock()
-	var forked []string
-	for _, pair := range shell.forked {
-		forked = append(forked, pair[0].agent+">"+pair[1].agent)
-	}
-	if !slices.Equal(forked, []string{"opencode:ses_parent>opencode:ses_fork", "opencode:ses_parent>opencode:ses_mid", "opencode:ses_mid>opencode:ses_leaf"}) {
-		t.Fatalf("each fork's shell must be forked from its parent's, got %v", forked)
 	}
 }
 

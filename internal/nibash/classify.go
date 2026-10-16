@@ -49,12 +49,9 @@ type classifier struct {
 }
 
 // classify rewrites file in place: nib commands get a marker name, `X &` becomes `NIBASH_JOB=$(job k)` with X kept in jobs, and $! reads
-// NIBASH_JOB. functions are the names the session already defines, which shadow nib commands.
-func classify(file *syntax.File, functions map[string]bool, firstJob int) map[int]*syntax.Stmt {
+// NIBASH_JOB. Functions the command defines shadow nib commands.
+func classify(file *syntax.File, firstJob int) map[int]*syntax.Stmt {
 	c := &classifier{functions: map[string]bool{}, jobs: map[int]*syntax.Stmt{}, next: firstJob}
-	for name := range functions {
-		c.functions[name] = true
-	}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if f, ok := node.(*syntax.FuncDecl); ok {
 			c.functions[f.Name.Value] = true

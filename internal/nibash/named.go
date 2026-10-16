@@ -3,7 +3,6 @@ package nibash
 import (
 	"context"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,12 +31,12 @@ const homePrefix = "HOME "
 // that copies the environment, a job or a pipeline stage, keeps them: a name in it means what it meant when the subshell started.
 type named struct {
 	expand.Environ
-	session *session
+	names namer
 }
 
 func (n named) Get(name string) expand.Variable {
-	if user, ok := strings.CutPrefix(name, homePrefix); ok && n.session.names != nil {
-		if directory, ok := n.session.names.Home(user); ok {
+	if user, ok := strings.CutPrefix(name, homePrefix); ok && n.names != nil {
+		if directory, ok := n.names.Home(user); ok {
 			return expand.Variable{Set: true, Kind: expand.String, Str: directory}
 		}
 	}
@@ -50,21 +49,14 @@ func (n named) Each(yield func(name string, vr expand.Variable) bool) {
 		stopped = !yield(name, vr)
 		return !stopped
 	})
-	if stopped || n.session.names == nil {
+	if stopped || n.names == nil {
 		return
 	}
-	for _, entry := range n.session.names.Entries() {
+	for _, entry := range n.names.Entries() {
 		if !yield(homePrefix+entry.Name, expand.Variable{Set: true, Kind: expand.String, Str: entry.Directory}) {
 			return
 		}
 	}
-}
-
-// shellVariables are a shell's variables without the named directory lookups, which a fork gets from its own caller's names.
-func shellVariables(vars map[string]expand.Variable) map[string]expand.Variable {
-	kept := maps.Clone(vars)
-	maps.DeleteFunc(kept, func(name string, _ expand.Variable) bool { return strings.HasPrefix(name, homePrefix) })
-	return kept
 }
 
 // namedHash is true for the hash forms that are nibash's: -d with no operand, or -d with name=path operands only. Bash's own hash -d name,
@@ -85,7 +77,7 @@ func namedHash(args []string) bool {
 // ~name/ expanded.
 func (c *call) hash(ctx context.Context, operands []string) error {
 	hc := interp.HandlerCtx(ctx)
-	view := c.session.names
+	view := c.names
 	if view == nil {
 		fmt.Fprintln(hc.Stderr, "hash: named directories are not available here")
 		return interp.ExitStatus(1)
