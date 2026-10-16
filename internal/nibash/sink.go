@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -315,8 +316,15 @@ type row struct {
 	first, last int
 }
 
+// rowShaped matches plain output that reads like one of nib's anchor or row-map rows.
+var rowShaped = regexp.MustCompile(`^\*?\d+[:~]`)
+
+// plainFollows separates a file's rows from plain output shaped like them, which is not an anchor.
+const plainFollows = "[plain program output follows, not anchors]"
+
 // layout groups anchored rows under their file's header and checks each against the latest version, so an N: row is always a real line.
-// A plain row too long to show whole is cut in read's bracketed form, numbered with its log line, so it never looks like an anchor.
+// A plain row too long to show whole is cut in read's bracketed form, numbered with its log line, so it never looks like an anchor; plain
+// output shaped like rows (grep -n through a real program) that follows a file's rows gets a line of nib's own between them.
 func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row {
 	var rows []row
 	var current *engine.Source
@@ -324,6 +332,9 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 	previous := 0
 	for _, it := range items {
 		if it.plain {
+			if current != nil && rowShaped.MatchString(it.text) {
+				rows = append(rows, row{text: plainFollows, header: -1})
+			}
 			current = nil
 			text, capped := it.text, false
 			if js.Len(text) > rowLimit {

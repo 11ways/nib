@@ -64,9 +64,13 @@ type LineEdit struct {
 }
 
 const (
-	maxPaths        = 256
-	maxVersions     = 4
-	maxUnits        = 64 * 1024 * 1024
+	// maxPaths bounds the agent and file pairs held; text is bounded by maxUnits, so it can be generous. Subagents each hold their own, and
+	// nibash records every file its own commands show, so a long session reaches a few hundred quickly.
+	maxPaths    = 4096
+	maxVersions = 4
+	maxUnits    = 64 * 1024 * 1024
+	// maxForgotten bounds the evicted pairs remembered, so a refusal can say its earlier views were dropped.
+	maxForgotten    = 16384
 	diffTimeout     = time.Second
 	evidenceMinRune = 8
 )
@@ -78,6 +82,8 @@ type history struct {
 	id       string
 	versions []*Version
 	units    int
+	// forgotten is set when an earlier history of the same agent and file was evicted: lines seen before then no longer count.
+	forgotten bool
 }
 
 // Store holds per-session file versions with LRU eviction across all sessions and paths. It is safe for concurrent use; a Version's line
@@ -88,6 +94,9 @@ type Store struct {
 	histories map[string]*list.Element
 	order     *list.List
 	units     int
+	forgotten map[string]bool
+	evicted   *list.List
+	taught    map[string]bool
 	// Now is the wall clock lines are stamped with when they become seen or known; it must be comparable with other processes' clocks, as a
 	// fork's moment comes from its harness. Set it before first use.
 	Now func() time.Time
@@ -98,7 +107,7 @@ func NewStore() *Store { return NewStoreWith(Limits{maxPaths, maxVersions, maxUn
 
 // NewStoreWith makes a store with the given limits.
 func NewStoreWith(limits Limits) *Store {
-	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), Now: time.Now}
+	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, Now: time.Now}
 }
 
 func id(session, path string) string { return session + "\x00" + path }
@@ -110,7 +119,8 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	defer s.mu.Unlock()
 	now := s.Now().UnixNano()
 	key := id(session, path)
-	h := &history{id: key}
+	h := &history{id: key, forgotten: s.forgotten[key]}
+	delete(s.forgotten, key)
 	if element, ok := s.histories[key]; ok {
 		h = element.Value.(*history)
 		s.order.Remove(element)
@@ -148,7 +158,7 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	return version
 }
 
-// evict drops least recently used histories until the store is within its limits.
+// evict drops least recently used histories until the store is within its limits, remembering which.
 func (s *Store) evict() {
 	for len(s.histories) > s.limits.Paths || s.units > s.limits.Units {
 		oldest := s.order.Front()
@@ -159,7 +169,34 @@ func (s *Store) evict() {
 		s.units -= old.units
 		s.order.Remove(oldest)
 		delete(s.histories, old.id)
+		s.forgotten[old.id] = true
+		s.evicted.PushBack(old.id)
 	}
+	for s.evicted.Len() > maxForgotten {
+		delete(s.forgotten, s.evicted.Remove(s.evicted.Front()).(string))
+	}
+}
+
+// Forgotten reports whether the store dropped an earlier history of session's views of path, so lines seen before then no longer count.
+func (s *Store) Forgotten(session, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if element, ok := s.histories[id(session, path)]; ok {
+		return element.Value.(*history).forgotten
+	}
+	return s.forgotten[id(session, path)]
+}
+
+// Teach reports whether session has not yet been taught lesson, and marks it taught: a hint a response gives each agent once.
+func (s *Store) Teach(session, lesson string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := id(session, lesson)
+	if s.taught[key] {
+		return false
+	}
+	s.taught[key] = true
+	return true
 }
 
 // stamp adds lines to set, noting now for each line new to it.

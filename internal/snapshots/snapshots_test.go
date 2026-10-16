@@ -49,6 +49,24 @@ func TestStoreDeduplicatesUnionsAndEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
+func TestAnEvictedHistoryIsRememberedAsForgotten(t *testing.T) {
+	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 40})
+	store.Record("a", "/f", view("x"), []int{1}, nil)
+	if store.Forgotten("a", "/f") {
+		t.Fatal("a history never evicted is not forgotten")
+	}
+	store.Record("b", "/f", view("x"), []int{1}, nil)
+	store.Record("b", "/g", view("y"), []int{1}, nil)
+	if !store.Forgotten("a", "/f") || store.Forgotten("b", "/f") {
+		t.Fatal("only the evicted history is forgotten")
+	}
+	// A new history for it stays marked, as the lines seen before it are lost; it only restricts by what was seen since.
+	version := store.Record("a", "/f", view("x"), []int{2}, nil)
+	if !store.Forgotten("a", "/f") || !reflect.DeepEqual(seen(version), []int{2}) {
+		t.Fatalf("got %v %v", store.Forgotten("a", "/f"), seen(version))
+	}
+}
+
 func TestEmptySeenRestrictsAndNilLeavesUnrestricted(t *testing.T) {
 	store := NewStore()
 	if v := store.Record("s", "a", view("x"), nil, nil); v.Seen != nil {

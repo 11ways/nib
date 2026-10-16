@@ -123,6 +123,16 @@ func TestPipelinesOfNibCommandsKeepOriginAndReportFacts(t *testing.T) {
 	expect(t, out, fmt.Sprintf("[a.txt#%s]\n4:four needle\n5:five\n[a.txt: lines 4-5 of 5]", tagOf(t, out)))
 }
 
+func TestPlainOutputShapedLikeRowsIsSetApartFromAFilesRows(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers})
+	// cut makes grep's output a real program's: lines shaped like anchors, which must not read as more of a.txt's rows.
+	out := f.run("sed -n 4,5p a.txt; grep -n needle a.txt | cut -c1-20")
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n4:four needle\n5:five\n[plain program output follows, not anchors]\n2:two needle\n4:four needle", tagOf(t, out)))
+	// Plain output not shaped like rows needs nothing between.
+	out = f.run("sed -n 5p a.txt; echo done")
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n5:five\ndone", tagOf(t, out)))
+}
+
 func TestGrepFollowsGnuFormsBetweenNibCommands(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers, "b.txt": "needle\n"})
 	// The text grep passes on carries its prefixes, so a filter after it sees what GNU grep would print.

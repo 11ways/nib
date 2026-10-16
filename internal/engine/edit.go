@@ -51,6 +51,9 @@ func nonNil(lines []int) []int {
 // unseenError mirrors oh-my-pi's unseen-line guard: reveal what the model would have touched and let a straight retry pass.
 func unseenError(store *snapshots.Store, session string, t *target, current snapshots.View, unseen []int, known map[int]bool) *Refusal {
 	header := fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full (partial read, truncated line, or rows elided from an edit response).", ranges(unseen), t.display, t.display, current.Tag)
+	if store.Forgotten(session, t.canonical) {
+		header = fmt.Sprintf("This edit anchors to lines %s of %s that this agent was not shown since nib dropped its earlier views of the file: nib keeps the views of a limited number of files across all agents, and dropped this one's to make room, so lines read before then no longer count.", ranges(unseen), t.display)
+	}
 	long := len(unseen) > revealLines
 	for _, line := range unseen {
 		content := ""
@@ -511,6 +514,8 @@ const (
 	finalNewlineHint = "PUT >$: with a lone + row adds one"
 	writtenCheck     = "[to anchor a line not shown, put a ~TEXT row with its start under the PUT or CUT; no read needed]"
 	writtenUnmapped  = "[every line is known: grep finds a line's number, and a ~TEXT row with its start under the PUT or CUT anchors it; no read needed]"
+	// movedLesson is told once per agent: a moved line is anchored without a read, by a check of its start at its new number.
+	movedLesson = "[a line you saw or wrote that an edit moved is anchored by a ~TEXT row with its start under the PUT or CUT; no read needed]"
 )
 
 var lfOnly = regexp.MustCompile(`(^|[^\r])\n`)
@@ -717,6 +722,8 @@ type previewed struct {
 	output []string
 	shown  []int
 	marks  []marks
+	// moved is set when a note says lines the agent knew moved.
+	moved bool
 }
 
 func knownLine(version *snapshots.Version, line int) bool {
@@ -878,6 +885,7 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit int) 
 		previous = index
 		previousFull = whole
 	}
+	out.moved = len(notes) > 0
 	return out
 }
 
@@ -1764,6 +1772,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		output = append(output, fmt.Sprintf("[%s now ends with a newline]", shownDisplay))
 	}
 	output = append(output, rowNotes(shownDisplay, rows.marks)...)
+	if rows.moved && store.Teach(ctx.Session, "moved") {
+		output = append(output, movedLesson)
+	}
 	if len(item.warnings) > 0 {
 		output = append(output, "", "Warnings:")
 		output = append(output, item.warnings...)

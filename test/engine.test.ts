@@ -28,6 +28,9 @@ async function workspace() {
   return directory
 }
 
+// movedLesson ends an agent's first edit response whose rows say lines it knew moved.
+const movedLesson = "[a line you saw or wrote that an edit moved is anchored by a ~TEXT row with its start under the PUT or CUT; no read needed]"
+
 async function fixture(content = "one\ntwo\nthree\n") {
   const directory = await workspace()
   const filePath = path.join(directory, "file.txt")
@@ -517,7 +520,7 @@ describe("edit", () => {
     const r = await f.read()
     const first = await f.edit(r.tag, [{ start: 10, content: "inserted a\ninserted b", operation: "after" }])
     // The two inserted lines come back whole between the kept rows around them, and the lines they moved down as one note.
-    expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]`)
+    expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]\n${movedLesson}`)
     expect(first.tag).toBe(fileTag(await readFile(f.filePath, "utf8")))
     const second = await f.edit(first.tag, [{ start: 2, content: "LINE 2", operation: "replace" }, { start: 12, content: "INSERTED B", operation: "replace" }])
     expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n2:LINE 2\n3:line 3\n...\n11:inserted a\n12:INSERTED B\n13:line 11`)
@@ -1786,7 +1789,7 @@ describe("moved lines after an edit", () => {
     const f = await fixture(numbered(1000))
     const r = await f.read(":1-")
     const edited = await f.edit(r.tag, [{ start: 20, content: "a\nb\nc\nd", operation: "after" }])
-    expect(edited.text.split("\n")).toEqual([`[file.txt#${edited.tag}]`, "20:line 20", "21:a", "22:b", "23:c", "24:d", "25:line 21", "[lines 26-1004 are old lines 22-1000, moved down by 4]"])
+    expect(edited.text.split("\n")).toEqual([`[file.txt#${edited.tag}]`, "20:line 20", "21:a", "22:b", "23:c", "24:d", "25:line 21", "[lines 26-1004 are old lines 22-1000, moved down by 4]", movedLesson])
     const unchecked = await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 500.=500:\n+x`))
     expect(unchecked).toContain("This edit anchors to lines 500 of file.txt")
     expect(unchecked).toContain("Lines you wrote, or saw before an edit moved them, can skip this step")
@@ -1801,10 +1804,19 @@ describe("moved lines after an edit", () => {
     expect((await readFile(f.filePath, "utf8")).split("\n")[499]).toBe("LINE 496")
   })
 
+  test("the moved-line lesson comes once per agent", async () => {
+    const f = await fixture(numbered(100))
+    const first = await f.edit((await f.read(":1-")).tag, [{ start: 10, content: "a", operation: "after" }])
+    expect(first.text).toEndWith(movedLesson)
+    const second = await f.edit(first.tag, [{ start: 12, content: "b", operation: "after" }])
+    expect(second.text).toContain("moved down by 1]")
+    expect(second.text).not.toContain(movedLesson)
+  })
+
   test("deleted lines move the rest up, and an edit that moves nothing gets no map", async () => {
     const f = await fixture(numbered(1000))
     const cut = await f.edit((await f.read(":1-")).tag, [{ start: 10, end: 13, content: "", operation: "replace" }])
-    expect(cut.text).toBe(`[file.txt#${cut.tag}]\n9:line 9\n10:line 14\n[lines 11-996 are old lines 15-1000, moved up by 4]`)
+    expect(cut.text).toBe(`[file.txt#${cut.tag}]\n9:line 9\n10:line 14\n[lines 11-996 are old lines 15-1000, moved up by 4]\n${movedLesson}`)
     const same = await f.edit(cut.tag, [{ start: 5, content: "replaced", operation: "replace" }])
     expect(same.text).toBe(`[file.txt#${same.tag}]\n4:line 4\n5:replaced\n6:line 6`)
   })
@@ -1813,7 +1825,7 @@ describe("moved lines after an edit", () => {
     const f = await fixture(numbered(100))
     const edited = await f.edit((await f.read(":1-5")).tag, [{ start: 2, content: "x", operation: "after" }])
     // Old lines 4 and 5 were read, so the stretch they moved in gets a note; the lines past them were never seen.
-    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n2:line 2\n3:x\n4:line 3\n[lines 5-101 are old lines 4-100, moved down by 1]`)
+    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n2:line 2\n3:x\n4:line 3\n[lines 5-101 are old lines 4-100, moved down by 1]\n${movedLesson}`)
     expect(await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 15.=15:\n~line 14\n+y`))).toContain("never displayed in full")
     await f.patch(`[file.txt#${edited.tag}]\nPUT >15:\n~line 14\n+after fourteen`)
     expect((await readFile(f.filePath, "utf8")).split("\n")[15]).toBe("after fourteen")
