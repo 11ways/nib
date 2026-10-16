@@ -80,10 +80,11 @@ type session struct {
 	shells []string
 }
 
-// paused is a paused call's answers so far and the agent making it, whose record the first round took.
+// paused is a paused call's answers so far and the agent making it, with its worktree, whose record the first round took.
 type paused struct {
-	answers mcp.InputResponseMap
-	agent   string
+	answers  mcp.InputResponseMap
+	agent    string
+	worktree string
 }
 
 // pausedLimit bounds the paused calls a session remembers; a client that never sends one again leaves it to be dropped.
@@ -117,6 +118,8 @@ type Server struct {
 	seeding sync.Mutex
 	// started are the agents started already, which happens once, on the first call nib sees from each.
 	started map[string]bool
+	// children are the agents started from a known parent; greeted are the subagents told their directory and names on their first call.
+	children, greeted map[string]bool
 	// defined are the named directories agents defined with nibash's hash -d.
 	defined *names.Defined
 }
@@ -138,16 +141,25 @@ func Instructions(options Options) string {
 	if options.Shell != nil {
 		text = shellInstructions
 	}
+	shell := options.Shell != nil
 	if options.Names == nil || len(options.Names.Entries) == 0 {
-		return text
+		return text + named(nil, shell)
 	}
-	header := "\n" + namedHeader
-	lines := options.Names.Lines(instructionLimit - len(text) - len(header) - 1)
+	lines := options.Names.Lines(instructionLimit - len(text) - len(named([]string{""}, shell)))
 	options.Names.Keep(lines)
-	if len(lines) == 0 {
-		return text
+	return text + named(lines, shell)
+}
+
+// named is what an agent is told of its named directories after its other guidance: one line each, and with nibash how to add one.
+func named(lines []string, shell bool) string {
+	text := ""
+	if len(lines) > 0 {
+		text = "\n" + namedHeader + "\n" + strings.Join(lines, "\n")
 	}
-	return text + header + "\n" + strings.Join(lines, "\n")
+	if shell {
+		text += "\n" + namedHint
+	}
+	return text
 }
 
 // New builds the server.
@@ -156,7 +168,7 @@ func New(options Options) *Server {
 	if e == nil {
 		e = engine.New()
 	}
-	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, defined: names.NewDefined()}
+	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, defined: names.NewDefined()}
 	instructions := Instructions(options)
 	s.Server = mcp.NewServer(&mcp.Implementation{Name: "nib", Version: options.Version}, &mcp.ServerOptions{
 		Instructions: instructions,
@@ -242,12 +254,14 @@ func (s *Server) shell(c *call) shellKey {
 	return shellKey{c.key, c.agent}
 }
 
-// call is one tool call's exchange with its client: the agent making it, and the answers it carries, from this round and the earlier rounds
-// of the same call.
+// call is one tool call's exchange with its client: the agent making it, the worktree it works in ("" for the server's directory), whether
+// this is its first call as a subagent, and the answers it carries, from this round and the earlier rounds of the same call.
 type call struct {
-	key     *mcp.ServerSession
-	agent   string
-	answers mcp.InputResponseMap
+	key      *mcp.ServerSession
+	agent    string
+	worktree string
+	first    bool
+	answers  mcp.InputResponseMap
 }
 
 // question is what a paused call asks the client, under an id its answer comes back with.
@@ -266,7 +280,7 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		state.mu.Lock()
 		if earlier, ok := state.paused[token]; ok {
 			maps.Copy(c.answers, earlier.answers)
-			c.agent, resumed = earlier.agent, true
+			c.agent, c.worktree, resumed = earlier.agent, earlier.worktree, true
 			delete(state.paused, token)
 			state.order = slices.DeleteFunc(state.order, func(t string) bool { return t == token })
 		}
@@ -274,30 +288,58 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 	}
 	if !resumed {
 		var from *origin
-		c.agent, from = s.identify(request)
+		c.agent, from, c.worktree = s.identify(request)
 		s.seeding.Lock()
 		s.start(c.key, c.agent, from, originDepth)
+		if c.agent != "" && !s.greeted[c.agent] && (strings.HasPrefix(c.agent, claudeAgent) || s.children[c.agent]) {
+			s.greeted[c.agent], c.first = true, true
+		}
 		s.seeding.Unlock()
 	}
 	maps.Copy(c.answers, request.Params.InputResponses)
 	return c
 }
 
+// greeting starts a subagent's first call: subagents are not given the server instructions, so this is where one learns where it works and
+// which named directories it has.
+func (s *Server) greeting(c *call) string {
+	var text string
+	if c.worktree != "" {
+		text = fmt.Sprintf("You work in your worktree %s: relative paths in every nib tool mean it, and nibash calls start there.", c.worktree)
+	}
+	view := s.options.Names.For(s.defined, s.engineSession(c.agent)).In(c.worktree)
+	table := &names.Table{Base: s.directory(c), Entries: view.Entries()}
+	if base, err := filepath.EvalSymlinks(table.Base); err == nil {
+		table.Base = base
+	}
+	shell := s.options.Shell != nil
+	text += named(table.Lines(instructionLimit-len(text)-len(named([]string{""}, shell))), shell)
+	return strings.TrimPrefix(text, "\n")
+}
+
+// directory is where the agent making a call works: its worktree, else the server's directory.
+func (s *Server) directory(c *call) string {
+	if c.worktree != "" {
+		return c.worktree
+	}
+	return s.options.Directory
+}
+
 // identify names the agent making a first round: an OpenCode session by the id OpenCode sends in the call's _meta, a Claude Code subagent by
 // the record nib's hook filed under the tool_use id Claude Code sends there, else the main agent. from is set for a Claude Code subagent
-// whose parent is known; an OpenCode session's origin is looked up when it starts.
-func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *origin) {
+// whose parent is known, and worktree for one Claude Code spawned in a worktree; an OpenCode session's origin is looked up when it starts.
+func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *origin, worktree string) {
 	meta := request.Params.Meta
 	if id, _ := meta["ai.opencode/sessionID"].(string); openCodeID.MatchString(id) {
-		return openCodeSession + id, nil
+		return openCodeSession + id, nil, ""
 	}
 	toolUse, _ := meta["claudecode/toolUseId"].(string)
 	if s.options.Agent == nil || toolUse == "" {
-		return "", nil
+		return "", nil, ""
 	}
 	found := s.options.Agent(toolUse)
 	if found.ID == "" {
-		return "", nil
+		return "", nil, ""
 	}
 	if found.Spawned {
 		from = &origin{fork: found.Forked, at: found.At}
@@ -305,7 +347,7 @@ func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *ori
 			from.parent = claudeAgent + found.Parent
 		}
 	}
-	return claudeAgent + found.ID, from
+	return claudeAgent + found.ID, from, found.Worktree
 }
 
 // start gives a subagent, on the first call nib sees from it, what it inherits from its parent: every subagent the named directories its
@@ -332,6 +374,7 @@ func (s *Server) start(key *mcp.ServerSession, agent string, from *origin, depth
 			s.start(key, from.parent, nil, depth-1)
 		}
 	}
+	s.children[agent] = true
 	s.defined.Inherit(s.engineSession(agent), s.engineSession(from.parent), from.at)
 	if !from.fork {
 		return
@@ -356,7 +399,7 @@ func (s *Server) pause(c *call, q question) *mcp.CallToolResult {
 	state := s.state(c.key)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.paused[token] = paused{c.answers, c.agent}
+	state.paused[token] = paused{c.answers, c.agent, c.worktree}
 	state.order = append(state.order, token)
 	for len(state.order) > pausedLimit {
 		delete(state.paused, state.order[0])
@@ -496,7 +539,7 @@ func (s *Server) authorize(c *call) func(context.Context, string, string) error 
 func (s *Server) context(ctx context.Context, c *call, roots []string) *engine.Context {
 	e := &engine.Context{
 		Ctx:       ctx,
-		Directory: s.options.Directory,
+		Directory: s.directory(c),
 		Session:   s.engineSession(c.agent),
 		Sandbox:   s.options.Sandbox,
 	}
@@ -508,7 +551,7 @@ func (s *Server) context(ctx context.Context, c *call, roots []string) *engine.C
 	} else {
 		e.Authorize = func(context.Context, string, string) error { return nil }
 	}
-	e.Names = s.options.Names.For(s.defined, s.engineSession(c.agent))
+	e.Names = s.options.Names.For(s.defined, s.engineSession(c.agent)).In(c.worktree)
 	return e
 }
 
@@ -527,6 +570,11 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 			}
 		}
 		c := s.open(request)
+		if c.first {
+			if greeting := s.greeting(c); greeting != "" {
+				notes = append(notes, greeting)
+			}
+		}
 		var roots []string
 		result, err := protect(func() (engine.Result, error) {
 			if s.options.Sandbox || (s.options.ConfirmOutsideRoots && writes) {

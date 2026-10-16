@@ -142,11 +142,16 @@ func TestASubagentIsFiledWithItsParent(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	project := t.TempDir()
 	transcript := filepath.Join(project, "f223c386.jsonl")
-	// Meta files as Claude Code 2.1.301 writes them, for a fork of the main agent, a fork of a subagent and a subagent.
+	// Meta files as Claude Code 2.1.301 writes them, for a fork of the main agent, a fork of a subagent and a subagent, and as it writes them
+	// for a subagent spawned in a worktree; one whose worktree is gone, and one not spawned in the worktree it names, work in nib's directory.
+	worktree := t.TempDir()
 	metas := map[string]string{
 		"a3f5b656e725f8dc1": `{"agentType":"fork","isFork":true,"description":"fork probe","toolUseId":"toolu_01WkMMezPxWeDix8eW2wzJ8c","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"inherit","finished":true}`,
 		"a30cd37a40afff1e9": `{"agentType":"fork","isFork":true,"description":"nested fork","toolUseId":"toolu_017RLR5dvnUJ9grghEhsKCwB","parentAgentId":"a83334bbe36e1e7ac","spawnDepth":2,"requestShape":"foreground","requestNonInteractive":true,"model":"inherit","finished":true}`,
 		"a83334bbe36e1e7ac": `{"agentType":"general-purpose","launchedWithDefaults":true,"description":"sub probe","toolUseId":"toolu_01NeFzhEw5GoZvXGDPExHSLC","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"finished":true}`,
+		"a5cdeb96678c0dc2c": `{"agentType":"general-purpose","worktreePath":"` + worktree + `","spawnedWithWorktree":true,"worktreeBranch":"worktree-agent-a5cdeb96678c0dc2c","description":"web_act: no scroll when visible","toolUseId":"toolu_016N4K69XZDzPi67xGyLivgm","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"opus"}`,
+		"a5cdeb96678c0dc2d": `{"agentType":"general-purpose","worktreePath":"` + filepath.Join(worktree, "gone") + `","spawnedWithWorktree":true,"spawnDepth":1}`,
+		"a5cdeb96678c0dc2e": `{"agentType":"general-purpose","worktreePath":"` + worktree + `","spawnDepth":1}`,
 		"a0000000000000001": `{"agentType":"fork","isFork":true,"spawnDepth":2}`,
 		"a0000000000000002": `{"agentType":"fork","isFork":true,"parentAgentId":"../x","spawnDepth":2}`,
 	}
@@ -167,6 +172,9 @@ func TestASubagentIsFiledWithItsParent(t *testing.T) {
 		{"a3f5b656e725f8dc1", "fork", transcript, hookstate.Agent{ID: "a3f5b656e725f8dc1", Spawned: true, Forked: true}},
 		{"a30cd37a40afff1e9", "fork", transcript, hookstate.Agent{ID: "a30cd37a40afff1e9", Spawned: true, Forked: true, Parent: "a83334bbe36e1e7ac"}},
 		{"a83334bbe36e1e7ac", "general-purpose", transcript, hookstate.Agent{ID: "a83334bbe36e1e7ac", Spawned: true}},
+		{"a5cdeb96678c0dc2c", "general-purpose", transcript, hookstate.Agent{ID: "a5cdeb96678c0dc2c", Spawned: true, Worktree: worktree}},
+		{"a5cdeb96678c0dc2d", "general-purpose", transcript, hookstate.Agent{ID: "a5cdeb96678c0dc2d", Spawned: true}},
+		{"a5cdeb96678c0dc2e", "general-purpose", transcript, hookstate.Agent{ID: "a5cdeb96678c0dc2e", Spawned: true}},
 		// A meta file that disagrees with the hook input about being a fork is not trusted.
 		{"a3f5b656e725f8dc1", "general-purpose", transcript, hookstate.Agent{ID: "a3f5b656e725f8dc1"}},
 		// What the hook cannot tell leaves the agent on its own: no meta file, a deeper agent naming no parent or a bad one, no transcript.

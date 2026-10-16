@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -107,11 +108,38 @@ type View struct {
 	static  *Table
 	defined *Defined
 	agent   string
+	// server is the server's table as loaded, whose names no agent may define, also those a worktree lacks.
+	server *Table
 }
 
 // For is the view of agent, whose definitions go to defined.
 func (t *Table) For(defined *Defined, agent string) *View {
-	return &View{static: t, defined: defined, agent: agent}
+	return &View{static: t, defined: defined, agent: agent, server: t}
+}
+
+// In is the view of an agent working in directory, a git worktree of the server's directory: each of the server's names inside that
+// directory names the same place in the worktree, and one the worktree lacks is left out rather than naming the server's copy. Names agents
+// defined keep the directory they were given. directory "" or the server's own leaves the view as it is.
+func (v *View) In(directory string) *View {
+	if v.static == nil || directory == "" {
+		return v
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil || canonical == v.static.Base {
+		return v
+	}
+	moved := &Table{Base: canonical}
+	for _, entry := range v.static.Entries {
+		relative, err := filepath.Rel(v.static.Base, entry.Directory)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, "../") {
+			moved.Entries = append(moved.Entries, entry)
+			continue
+		}
+		if there, err := filepath.EvalSymlinks(filepath.Join(canonical, relative)); err == nil {
+			moved.Entries = append(moved.Entries, Entry{entry.Name, there})
+		}
+	}
+	return &View{static: moved, defined: v.defined, agent: v.agent, server: v.server}
 }
 
 // table is the static table with the agent's names added.
@@ -148,7 +176,7 @@ func (v *View) Define(name, directory string) error {
 	switch {
 	case !valid.MatchString(name):
 		return errors.New("a name is lowercase letters, digits and dashes, starting with a letter")
-	case v.static != nil && slices.ContainsFunc(v.static.Entries, func(e Entry) bool { return e.Name == name }):
+	case v.server != nil && slices.ContainsFunc(v.server.Entries, func(e Entry) bool { return e.Name == name }):
 		return fmt.Errorf("~%s is one of nib's own named directories, which cannot be redefined", name)
 	case isUser(name):
 		return fmt.Errorf("%s is a user on this machine, whose home ~%s already names", name, name)

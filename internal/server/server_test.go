@@ -17,6 +17,7 @@ import (
 
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/hookstate"
+	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/opencode"
 )
 
@@ -766,7 +767,56 @@ func TestEveryToolUsesTheCallersNamedDirectories(t *testing.T) {
 	if err := c.server.options.Names.For(c.server.defined, "opencode:ses_parent").Define("mine", filepath.Join(directory, "deep")); err != nil {
 		t.Fatal(err)
 	}
+	// A child session is not given the server instructions, so its first call says which names it has.
+	if got := text(c.call(t, inSession("ses_child", readCall("~mine/inside/a.txt")))); !strings.HasPrefix(got, namedHeader+"\n~mine = deep\n\n[~mine/inside/a.txt#") {
+		t.Fatalf("a child session must see its parent's names, and be told of them, got %q", got)
+	}
 	if got := text(c.call(t, inSession("ses_child", readCall("~mine/inside/a.txt")))); !strings.HasPrefix(got, "[~mine/inside/a.txt#") {
-		t.Fatalf("a child session must see its parent's names, got %q", got)
+		t.Fatalf("only a subagent's first call is told its names, got %q", got)
+	}
+}
+
+func TestAWorktreeSubagentsFileToolsWorkInItsWorktree(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	worktree := filepath.Join(directory, ".claude", "worktrees", "agent-w1")
+	file(t, filepath.Join(directory, "a.txt"), "main\n")
+	file(t, filepath.Join(worktree, "a.txt"), "worktree\n")
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	c := connect(t, Options{Directory: directory, Agent: r.take}, []string{directory}, nil, false)
+	w1 := hookstate.Agent{ID: "w1", Spawned: true, Worktree: worktree}
+	got := text(c.call(t, r.by(w1, readCall("a.txt"))))
+	if !strings.HasPrefix(got, "You work in your worktree "+worktree+": ") || !strings.Contains(got, "\n\n[a.txt#") || !strings.HasSuffix(got, "1:worktree") {
+		t.Fatalf("a worktree subagent reads its own copy, shown relative to its worktree, got %q", got)
+	}
+	tag := tagPatternText.FindStringSubmatch(got)[1]
+	if edited := c.call(t, r.by(w1, editCall(fmt.Sprintf("[a.txt#%s]\nPUT 1:\n+WORKTREE", tag)))); edited.IsError {
+		t.Fatalf("got %q", text(edited))
+	}
+	if created := c.call(t, r.by(w1, &mcp.CallToolParams{Name: "write", Arguments: map[string]any{"path": "new.txt", "content": "x\n"}})); created.IsError {
+		t.Fatalf("got %q", text(created))
+	}
+	for path, want := range map[string]string{filepath.Join(worktree, "a.txt"): "WORKTREE\n", filepath.Join(directory, "a.txt"): "main\n", filepath.Join(worktree, "new.txt"): "x\n"} {
+		if data, _ := os.ReadFile(path); string(data) != want {
+			t.Errorf("%s holds %q, want %q", path, data, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(directory, "new.txt")); err == nil {
+		t.Error("a worktree subagent's relative write must not land in nib's directory")
+	}
+	if got := text(c.call(t, readCall("a.txt"))); !strings.HasPrefix(got, "[a.txt#") || !strings.HasSuffix(got, "1:main") {
+		t.Fatalf("the main agent reads nib's directory, got %q", got)
+	}
+}
+
+func TestInstructionsSayHowToNameADirectoryWhenTheShellIsOffered(t *testing.T) {
+	if got := Instructions(Options{}); strings.Contains(got, "hash -d") || strings.Contains(got, namedHeader) {
+		t.Fatalf("without the shell or names, nothing is said of names, got %q", got)
+	}
+	if got := Instructions(Options{Shell: &fakeShell{}}); !strings.HasSuffix(got, "\n"+namedHint) || strings.Contains(got, namedHeader) {
+		t.Fatalf("with the shell and no names, the hint closes the instructions, got %q", got)
+	}
+	table := &names.Table{Base: "/p", Entries: []names.Entry{{Name: "core", Directory: "/p/lib/core"}}}
+	if got := Instructions(Options{Shell: &fakeShell{}, Names: table}); !strings.HasSuffix(got, "\n"+namedHeader+"\n~core = lib/core\n"+namedHint) || len(got) > instructionLimit {
+		t.Fatalf("names come before the hint, got %q", got)
 	}
 }

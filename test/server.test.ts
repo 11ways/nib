@@ -104,7 +104,7 @@ describe("MCP server", () => {
     await writeFile(path.join(deep, "Repo.java"), "class Repo {}\n")
     await writeFile(path.join(directory, "nib.json"), JSON.stringify({ directories: { orm: "modules/server/src/main/java/be/example/server/orm" }, autoDirectories: false }))
     const { client, call } = await connect(directory, { env: { NIB_SHELL: "1" } })
-    expect(client.getInstructions()).toEndWith("\n~orm = modules/server/src/main/java/be/example/server/orm")
+    expect(client.getInstructions()).toEndWith("\n~orm = modules/server/src/main/java/be/example/server/orm\nName a directory you will use again with hash -d name=dir in nibash: ~name/ then works in every tool, for you and the subagents you start.")
     expect((await call("read", { paths: ["~orm/Repo.java"] })).text).toStartWith("[~orm/Repo.java#")
     expect((await call("nibash", { command: "cat ~orm/Repo.java" })).text).toStartWith("[~orm/Repo.java#")
     expect((await call("nibash", { command: "ls ~orm; echo '~orm'; env | grep -c 'HOME orm' || true" })).text).toBe("Repo.java\n~orm\n0")

@@ -110,29 +110,36 @@ func (f folder) prune(now time.Time) {
 
 // Agents are the agent records in one state folder, one file per tool call named by its tool_use id and holding the agent's id, followed for
 // an agent whose parent is known by a line "fork" for a fork or "spawn" for any other subagent, with the parent's id after it unless that is
-// the main agent, and by a line "at" with the spawn moment in Unix nanoseconds when that is known.
+// the main agent, by a line "at" with the spawn moment in Unix nanoseconds when that is known, and by a line "in" with the worktree it was
+// spawned in, if any.
 type Agents struct{ folder }
 
 // Agent is the agent a call was filed for. Spawned is set when its parent is known, Parent being "" for the main agent, and Forked when it
 // is a fork, which starts with its parent's conversation. At is the spawn moment, the first moment its parent's work may be missing from
-// what the agent was given; zero when not known.
+// what the agent was given; zero when not known. Worktree is the absolute path of the git worktree Claude Code spawned it in, "" for none.
 type Agent struct {
-	ID      string
-	Spawned bool
-	Forked  bool
-	Parent  string
-	At      time.Time
+	ID       string
+	Spawned  bool
+	Forked   bool
+	Parent   string
+	At       time.Time
+	Worktree string
 }
 
 // OpenAgents are the agent records under state, a folder from Directory.
 func OpenAgents(state string) Agents { return Agents{folder{filepath.Join(state, "agents")}} }
 
-// recordLimit bounds what Take reads of a record: two ids, the word spawn and a moment.
-const recordLimit = 2*128 + 8 + 32
+// recordLimit bounds what Take reads of a record: two ids, the word spawn, a moment and a path.
+const recordLimit = 2*128 + 8 + 32 + 4 + 4096
+
+// IsWorktree is true for a path a record can hold as a worktree: clean, absolute, on one line and at most 4096 bytes.
+func IsWorktree(path string) bool {
+	return len(path) <= 4096 && filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsAny(path, "\n\r\x00")
+}
 
 // Record files agent under toolUse.
 func (a Agents) Record(toolUse string, agent Agent, now time.Time) error {
-	if !identifier.MatchString(agent.ID) || (agent.Forked && !agent.Spawned) || (agent.Parent != "" && (!agent.Spawned || !identifier.MatchString(agent.Parent))) || (!agent.At.IsZero() && !agent.Spawned) {
+	if !identifier.MatchString(agent.ID) || (agent.Forked && !agent.Spawned) || (agent.Parent != "" && (!agent.Spawned || !identifier.MatchString(agent.Parent))) || (!agent.At.IsZero() && !agent.Spawned) || (agent.Worktree != "" && (!agent.Spawned || !IsWorktree(agent.Worktree))) {
 		return errors.New("not a Claude Code id")
 	}
 	text := agent.ID
@@ -145,12 +152,16 @@ func (a Agents) Record(toolUse string, agent Agent, now time.Time) error {
 		if !agent.At.IsZero() {
 			text += "\nat " + strconv.FormatInt(agent.At.UnixNano(), 10)
 		}
+		if agent.Worktree != "" {
+			text += "\nin " + agent.Worktree
+		}
 	}
 	return a.put(toolUse, text, now)
 }
 
 // Take is the agent filed under toolUse, removing its record, or the zero Agent when there is none: the main agent's calls, or a hook not
-// installed. A parent line it cannot read leaves the agent's parent unknown, and a moment it cannot read leaves the spawn moment unknown.
+// installed. A parent line it cannot read leaves the agent's parent unknown, a moment it cannot read the spawn moment unknown, and a worktree
+// it cannot read the agent in the server's directory.
 func (a Agents) Take(toolUse string) Agent {
 	text, ok := a.get(toolUse, recordLimit, true)
 	lines := strings.Split(text, "\n")
@@ -168,8 +179,15 @@ func (a Agents) Take(toolUse string) Agent {
 			agent.Parent = words[1]
 		}
 	}
-	if len(lines) == 3 && agent.Spawned {
-		agent.At = moment(lines[2], "at ")
+	for _, line := range lines[2:] {
+		if !agent.Spawned {
+			break
+		}
+		if at := moment(line, "at "); !at.IsZero() {
+			agent.At = at
+		} else if path, ok := strings.CutPrefix(line, "in "); ok && IsWorktree(path) {
+			agent.Worktree = path
+		}
 	}
 	return agent
 }

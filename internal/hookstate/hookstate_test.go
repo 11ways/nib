@@ -40,7 +40,7 @@ func TestARecordIsTakenOnce(t *testing.T) {
 func TestARecordNamesTheParentAndMoment(t *testing.T) {
 	agents := OpenAgents(private(t))
 	spawned := time.Unix(0, 1792097515642000000)
-	for i, agent := range []Agent{{ID: "a1", Spawned: true, Forked: true}, {ID: "a2", Spawned: true, Forked: true, Parent: "a83334bbe36e1e7ac"}, {ID: "a3"}, {ID: "a4", Spawned: true, Forked: true, At: spawned}, {ID: "a5", Spawned: true, Forked: true, Parent: "a1", At: spawned}, {ID: "a6", Spawned: true}, {ID: "a7", Spawned: true, Parent: "a1", At: spawned}} {
+	for i, agent := range []Agent{{ID: "a1", Spawned: true, Forked: true}, {ID: "a2", Spawned: true, Forked: true, Parent: "a83334bbe36e1e7ac"}, {ID: "a3"}, {ID: "a4", Spawned: true, Forked: true, At: spawned}, {ID: "a5", Spawned: true, Forked: true, Parent: "a1", At: spawned}, {ID: "a6", Spawned: true}, {ID: "a7", Spawned: true, Parent: "a1", At: spawned}, {ID: "a8", Spawned: true, Worktree: "/p/.claude/worktrees/agent-a8 x"}, {ID: "a9", Spawned: true, Parent: "a1", At: spawned, Worktree: "/w"}} {
 		toolUse := fmt.Sprintf("toolu_%d", i)
 		if err := agents.Record(toolUse, agent, time.Now()); err != nil {
 			t.Fatal(err)
@@ -49,14 +49,20 @@ func TestARecordNamesTheParentAndMoment(t *testing.T) {
 			t.Fatalf("got %+v, want %+v", got, agent)
 		}
 	}
-	if agents.Record("toolu_x", Agent{ID: "a4", Parent: "a1"}, time.Now()) == nil || agents.Record("toolu_x", Agent{ID: "a4", At: spawned}, time.Now()) == nil || agents.Record("toolu_x", Agent{ID: "a4", Forked: true}, time.Now()) == nil {
-		t.Fatal("a parent, a moment or a fork without a known spawn must be refused")
+	if agents.Record("toolu_x", Agent{ID: "a4", Parent: "a1"}, time.Now()) == nil || agents.Record("toolu_x", Agent{ID: "a4", At: spawned}, time.Now()) == nil || agents.Record("toolu_x", Agent{ID: "a4", Forked: true}, time.Now()) == nil || agents.Record("toolu_x", Agent{ID: "a4", Worktree: "/w"}, time.Now()) == nil {
+		t.Fatal("a parent, a moment, a fork or a worktree without a known spawn must be refused")
 	}
-	// A parent line nib cannot read leaves the agent its own; a moment it cannot read leaves it with no moment.
+	for _, worktree := range []string{"w", "/w/../x", "/w/", "/w\nat 5"} {
+		if agents.Record("toolu_x", Agent{ID: "a4", Spawned: true, Worktree: worktree}, time.Now()) == nil {
+			t.Errorf("worktree %q must be refused", worktree)
+		}
+	}
+	// A parent line nib cannot read leaves the agent its own; a moment or worktree it cannot read leaves it with none.
 	for text, want := range map[string]Agent{
 		"a5\nfork ../x": {ID: "a5"}, "a5\nspoon a1": {ID: "a5"}, "a5\nfork a1 a2": {ID: "a5"},
 		"a5\nfork\nat soon": {ID: "a5", Spawned: true, Forked: true}, "a5\nfork\nat -5": {ID: "a5", Spawned: true, Forked: true}, "a5\nspoon\nat 5": {ID: "a5"},
 		"a5\nspawn a1 a2": {ID: "a5"}, "a5\nspawn\nat 5": {ID: "a5", Spawned: true, At: time.Unix(0, 5)},
+		"a5\nspawn\nin w": {ID: "a5", Spawned: true}, "a5\nspoon\nin /w": {ID: "a5"}, "a5\nspawn\nin /w": {ID: "a5", Spawned: true, Worktree: "/w"},
 	} {
 		if err := os.WriteFile(filepath.Join(agents.directory, "toolu_bad"), []byte(text), 0o600); err != nil {
 			t.Fatal(err)

@@ -1,8 +1,8 @@
 // Package hook is nib's Claude Code PreToolUse hook. With nibash owning the shell and setup denying the other built-in file tools, only the
 // built-in Read is left, which stays for PDFs and notebooks: the hook refuses it for any other file, naming the exact nib read to send instead.
-// For nib's own tools it only reports: a subagent's call is filed under its tool_use id, with the agent that spawned it, when, and whether it
-// is a fork, so the server keeps that agent's state apart and starts it with what it inherits: a fork its parent's seen lines, every subagent
-// the named directories its parent had defined when it was spawned.
+// For nib's own tools it only reports: a subagent's call is filed under its tool_use id, with the agent that spawned it, when, whether it is
+// a fork and the worktree it was spawned in, so the server keeps that agent's state apart, works in its worktree, and starts it with what it
+// inherits: a fork its parent's seen lines, every subagent the named directories its parent had defined when it was spawned.
 package hook
 
 import (
@@ -47,11 +47,12 @@ type Input struct {
 // metaLimit bounds the read of a subagent's meta file, a few hundred bytes in Claude Code 2.1.
 const metaLimit = 64 * 1024
 
-// origin is where a subagent comes from: its parent, "" for the main agent, the tool_use id of the parent's Agent call that spawned it, and
-// whether it is a fork.
+// origin is where a subagent comes from: its parent, "" for the main agent, the tool_use id of the parent's Agent call that spawned it,
+// whether it is a fork, and the worktree Claude Code spawned it in, "" for none.
 type origin struct {
 	parent, call string
 	fork         bool
+	worktree     string
 }
 
 // originOf is where the subagent making a call comes from; ok is false when its parent is not known. Hook input does not name it: Claude Code
@@ -67,10 +68,12 @@ func originOf(input Input) (found origin, ok bool) {
 	}
 	defer file.Close()
 	var meta struct {
-		IsFork        bool   `json:"isFork"`
-		ParentAgentID string `json:"parentAgentId"`
-		SpawnDepth    int    `json:"spawnDepth"`
-		ToolUseID     string `json:"toolUseId"`
+		IsFork              bool   `json:"isFork"`
+		ParentAgentID       string `json:"parentAgentId"`
+		SpawnDepth          int    `json:"spawnDepth"`
+		ToolUseID           string `json:"toolUseId"`
+		SpawnedWithWorktree bool   `json:"spawnedWithWorktree"`
+		WorktreePath        string `json:"worktreePath"`
 	}
 	if json.NewDecoder(io.LimitReader(file, metaLimit)).Decode(&meta) != nil || meta.IsFork != (input.AgentType == "fork") {
 		return origin{}, false
@@ -78,12 +81,17 @@ func originOf(input Input) (found origin, ok bool) {
 	if !hookstate.IsID(meta.ToolUseID) {
 		meta.ToolUseID = ""
 	}
+	// A worktree that is not a directory now is one nib cannot work in; the agent then stays in the server's directory.
+	worktree := ""
+	if info, err := os.Stat(meta.WorktreePath); meta.SpawnedWithWorktree && hookstate.IsWorktree(meta.WorktreePath) && err == nil && info.IsDir() {
+		worktree = meta.WorktreePath
+	}
 	// A subagent of the main agent is spawned at depth 1 and names no parent; a deeper one must name its parent.
 	switch {
 	case meta.SpawnDepth == 1 && meta.ParentAgentID == "":
-		return origin{"", meta.ToolUseID, meta.IsFork}, true
+		return origin{"", meta.ToolUseID, meta.IsFork, worktree}, true
 	case meta.SpawnDepth > 1 && hookstate.IsID(meta.ParentAgentID):
-		return origin{meta.ParentAgentID, meta.ToolUseID, meta.IsFork}, true
+		return origin{meta.ParentAgentID, meta.ToolUseID, meta.IsFork, worktree}, true
 	}
 	return origin{}, false
 }
@@ -325,7 +333,7 @@ func Run(stdin []byte, state string) string {
 			now := time.Now()
 			agent := hookstate.Agent{ID: input.AgentID}
 			if found, ok := originOf(input); ok {
-				agent.Spawned, agent.Forked, agent.Parent, agent.At = true, found.fork, found.parent, spawnedAt(input, found, state, now)
+				agent.Spawned, agent.Forked, agent.Parent, agent.At, agent.Worktree = true, found.fork, found.parent, spawnedAt(input, found, state, now), found.worktree
 			}
 			_ = hookstate.OpenAgents(state).Record(input.ToolUseID, agent, now)
 		}
