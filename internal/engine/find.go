@@ -184,12 +184,12 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		}
 		return Result{Text: fmt.Sprintf("No files found (none of the %d listed pass the filters)", len(names))}, nil
 	}
-	rows := make([]string, len(page))
+	rows := make([]listedRow, len(page))
 	for i, item := range page {
-		display := ctx.relativeDisplay(item.name)
+		rows[i].path = ctx.relativeDisplay(item.name)
 		age := formatAge(item.modified)
 		if item.size == 0 {
-			rows[i] = fmt.Sprintf("%s (empty, %s)", display, age)
+			rows[i].after = fmt.Sprintf(" (empty, %s)", age)
 			continue
 		}
 		facts := formatSize(item.size) + ", " + age
@@ -198,7 +198,7 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 			data, _ = os.ReadFile(item.name)
 		}
 		if data == nil {
-			rows[i] = fmt.Sprintf("%s (%s)", display, facts)
+			rows[i].after = fmt.Sprintf(" (%s)", facts)
 			continue
 		}
 		// Like git, a file counts as binary by its start; reading every byte of every listed file would cost more than the listing is worth.
@@ -209,7 +209,7 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 			if attachment == "" {
 				attachment = "binary"
 			}
-			rows[i] = fmt.Sprintf("%s (%s, %s)", display, attachment, facts)
+			rows[i].after = fmt.Sprintf(" (%s, %s)", attachment, facts)
 			continue
 		}
 		lines := 1
@@ -221,7 +221,7 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		if lines == 1 {
 			word = "line"
 		}
-		rows[i] = fmt.Sprintf("%s (%d %s, %s)", display, lines, word, facts)
+		rows[i].after = fmt.Sprintf(" (%d %s, %s)", lines, word, facts)
 	}
 	var conditions []string
 	if minSize != nil {
@@ -251,12 +251,17 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		reserved += len(note) + 2
 	}
 	left -= reserved
+	// Grouping only shortens rows, so the page is measured as they are whole.
 	shown := 0
-	for shown < len(rows) && len(rows[shown])+1 <= left {
-		left -= len(rows[shown]) + 1
+	for shown < len(rows) && len(rows[shown].path+rows[shown].after)+1 <= left {
+		left -= len(rows[shown].path+rows[shown].after) + 1
 		shown++
 	}
-	parts := []string{head, strings.Join(rows[:shown], "\n")}
+	under, lines := grouped(rows[:shown])
+	if under != "" {
+		head += " under " + under
+	}
+	parts := []string{head, strings.Join(lines, "\n")}
 	if skip+shown < total {
 		parts = append(parts, more(shown))
 	}

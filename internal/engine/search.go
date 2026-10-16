@@ -880,15 +880,19 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 		if len(page) == 0 {
 			return Result{Text: fmt.Sprintf("No more results (%d matching files; skip %d is past the end)", len(names), skip)}, nil
 		}
-		rows := make([]string, len(page))
+		rows := make([]listedRow, len(page))
 		for i, name := range page {
-			if mode == "files" {
-				rows[i] = display(name)
-			} else {
-				rows[i] = fmt.Sprintf("%d %s", len(files[name]), display(name))
+			rows[i] = listedRow{path: display(name)}
+			if mode == "count" {
+				rows[i].before = fmt.Sprintf("%d ", len(files[name]))
 			}
 		}
-		parts := []string{fmt.Sprintf("%d matches in %d files", total, len(names)), strings.Join(rows, "\n")}
+		under, lines := grouped(rows)
+		head := fmt.Sprintf("%d matches in %d files", total, len(names))
+		if under != "" {
+			head += " under " + under
+		}
+		parts := []string{head, strings.Join(lines, "\n")}
 		if skip+len(page) < len(names) {
 			parts = append(parts, fmt.Sprintf("[%d matching files; continue with skip %d]", len(names), skip+len(page)))
 		}

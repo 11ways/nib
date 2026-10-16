@@ -12,6 +12,6 @@ const readDescription = "Read text files as a [PATH#TAG] header plus LINE:TEXT r
 
 const grepDescription = "Search file contents with ripgrep (Rust regex; .gitignore respected, hidden files included). Matches are grouped per file under [PATH#TAG] headers as *LINE:TEXT rows with LINE:TEXT context rows, all edit anchors. 20 files per page, 20 matches per file (100 for a single file, all with replace). Files over 2 MiB or still growing give N|TEXT rows, which are not anchors. replace previews each changed line as a >N| row and returns a token; edit with REAPPLY TOKEN applies exactly those changes."
 
-const findDescription = "List files recursively, like find or fd (.gitignore respected, hidden files included). Each row gives the path with its line count, size and age, like src/app.ts (120 lines, 3.4 KiB, 2h ago). 200 rows per page."
+const findDescription = "List files recursively, like find or fd (.gitignore respected, hidden files included). Each row gives the path with its line count, size and age, like src/app.ts (120 lines, 3.4 KiB, 2h ago). Paths continue the head's under DIR/, if any; a DIR/ row's files follow it, indented. 200 files per page."
 
 const writeDescription = "Write a whole file, creating missing parent directories; overwriting an existing file needs the tag of its latest read or edit. Prefer edit for partial changes. The response maps the file with N~TEXT rows that edit can anchor on."

@@ -1664,10 +1664,11 @@ describe("grep options", () => {
     for (let index = 0; index < 205; index++) await writeFile(path.join(f.directory, "many", `f${String(index).padStart(3, "0")}.txt`), "hit\n")
     const parts = (await f.engine.grep(f.ctx, { pattern: "hit", mode: "files" })).text.split("\n\n")
     expect(parts[0]).toBe("207 matches in 206 files")
-    expect(parts[1]!.split("\n")).toHaveLength(200)
-    expect(parts[1]!.split("\n").slice(0, 2)).toEqual(["file.txt", "many/f000.txt"])
+    // The folder of 199 files on this page is named once, its files indented under it.
+    expect(parts[1]!.split("\n")).toHaveLength(201)
+    expect(parts[1]!.split("\n").slice(0, 4)).toEqual(["file.txt", "many/ (199)", "  f000.txt", "  f001.txt"])
     expect(parts[2]).toBe("[206 matching files; continue with skip 200]")
-    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "files", skip: 200 })).text.split("\n\n")[1]!.split("\n")).toHaveLength(6)
+    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "files", skip: 200 })).text.split("\n\n").slice(0, 2)).toEqual(["207 matches in 206 files under many/", "f199.txt\nf200.txt\nf201.txt\nf202.txt\nf203.txt\nf204.txt"])
     expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", paths: ["file.txt", "many/f000.txt"] })).text).toBe("3 matches in 2 files\n\n2 file.txt\n1 many/f000.txt")
   })
 
@@ -1687,7 +1688,7 @@ describe("grep options", () => {
       "[grep one folder for its files' counts]",
     ].join("\n\n"))
     // skip still pages the files one by one.
-    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", skip: 44 })).text).toBe("47 matches in 46 files\n\n1 src/b/x8/f.txt\n1 src/b/x9/f.txt")
+    expect((await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", skip: 44 })).text).toBe("47 matches in 46 files under src/b/\n\n1 x8/f.txt\n1 x9/f.txt")
   })
 
   test("a count that cannot be split by folder pages the files; a folder's own count splits below it", async () => {
@@ -1698,7 +1699,7 @@ describe("grep options", () => {
     // Every match sits in src/, so a sum by folder would be one row: the files are listed instead, from the root and from src alike.
     for (const paths of [undefined, ["src"]]) {
       const text = (await f.engine.grep(f.ctx, { pattern: "hit", mode: "count", paths })).text
-      expect(text).toStartWith("41 matches in 41 files\n\n1 src/f00.txt\n1 src/f01.txt")
+      expect(text).toStartWith("41 matches in 41 files under src/\n\n1 f00.txt\n1 f01.txt")
       expect(text).not.toContain("by folder")
     }
     for (let index = 0; index < 20; index++) {
