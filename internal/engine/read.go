@@ -23,19 +23,26 @@ type lineRange struct {
 	end   int // 0 means open
 }
 
-// selection is a line selector: ranges, or tail > 0 for the last tail lines; neither means the whole file.
+// selection is a line selector: ranges, or tail > 0 for the last tail lines, or symbols, names whose declarations give the ranges; none of
+// them means the whole file.
 type selection struct {
-	ranges []lineRange
-	tail   int
+	ranges  []lineRange
+	tail    int
+	symbols []string
 }
 
 var selectorPattern = regexp.MustCompile(`^(.*?):((?:[1-9]\d*(?:-(?:[1-9]\d*)?|\+[1-9]\d*)?|-[1-9]\d*)(?:,[1-9]\d*(?:-(?:[1-9]\d*)?|\+[1-9]\d*)?)*)$`)
 var rangePart = regexp.MustCompile(`^(\d+)(?:([-+])(\d*))?$`)
 
+var symbolList = regexp.MustCompile(`^(.*):(` + symbolPart + `(?:\.` + symbolPart + `)*(?:,` + symbolPart + `(?:\.` + symbolPart + `)*)*)$`)
+
 // splitSelector splits path:selector; an existing literal path wins over selector parsing.
 func splitSelector(entry string, ctx *Context) (string, selection, error) {
 	match := selectorPattern.FindStringSubmatch(entry)
 	if match == nil {
+		if symbols := symbolList.FindStringSubmatch(entry); symbols != nil && symbols[1] != "" && !exists(ctx.resolve(entry)) {
+			return symbols[1], selection{symbols: strings.Split(symbols[2], ",")}, nil
+		}
 		return entry, selection{}, nil
 	}
 	if exists(ctx.resolve(entry)) {
@@ -676,12 +683,15 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 			return Result{}, err
 		}
 		input, since := splitSince(selected, ctx)
-		narrowed := sel.ranges != nil || sel.tail > 0
+		narrowed := sel.ranges != nil || sel.tail > 0 || sel.symbols != nil
 		if since != "" && (narrowed || args.Info || args.Plain) {
 			return Result{}, fmt.Errorf("%s: path#TAG shows what changed since that tag, so it takes no line selector, info or plain", entry)
 		}
 		if args.Info && narrowed {
 			return Result{}, fmt.Errorf("%s: info describes whole files, so it takes no line selector", entry)
+		}
+		if args.Plain && sel.symbols != nil {
+			return Result{}, fmt.Errorf("%s: a symbol is read as numbered rows, so it takes no plain", entry)
 		}
 		single = len(args.Paths) == 1 && len(sel.ranges) == 1 && sel.ranges[0].end == sel.ranges[0].start
 		t, err := resolveTarget(input, ctx, false)
@@ -1249,6 +1259,13 @@ func (e *Engine) plainBlock(ctx *Context, t *target, file *os.File, sel selectio
 // textBlock reads a file as numbered rows; explicit is whether the agent chose maxLineLength, since without it a minified file is cut at minifiedColumns.
 func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection, maxLineLength int, explicit bool) (*block, error) {
 	anchored := viewOf(source)
+	for _, symbol := range sel.symbols {
+		found, err := symbolRanges(t.display, anchored.Lines, symbol)
+		if err != nil {
+			return noteBlock("[" + err.Error() + "]"), nil
+		}
+		sel.ranges = append(sel.ranges, found...)
+	}
 	total := len(anchored.Lines)
 	size := len(source.body)
 	squeezed := !explicit && maxLineLength > minifiedColumns && slices.ContainsFunc(anchored.Lines, func(l string) bool { return js.Len(l) > minifiedColumns }) &&

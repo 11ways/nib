@@ -22,6 +22,8 @@ import (
 type checked struct {
 	edits   []snapshots.LineEdit
 	refusal *Refusal
+	// lessons are what nib read differently than sent, for the response.
+	lessons []string
 }
 
 // together is one refusal for all of a section's problems; the patch may be sent again unchanged only if each of them allows it.
@@ -171,6 +173,8 @@ func confirmChecks(named, display string, lines []string, edits []snapshots.Line
 }
 
 // resolveSubs turns SUB edits into one replace per line; each old text must occur exactly once in that line, and two on one line must not overlap.
+// Old text that starts where a line's indentation ends, replaced by rows whose first one repeats that indentation, gets it once, with a lesson:
+// SUB keeps the text around its old text, which models forget.
 func resolveSubs(named, display string, lines []string, edits []snapshots.LineEdit, record recorder) (checked, error) {
 	if !slices.ContainsFunc(edits, func(e snapshots.LineEdit) bool { return e.Sub != nil }) {
 		return checked{edits: edits}, nil
@@ -183,6 +187,7 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 	done := map[int]bool{}
 	var doneOrder []int
 	var resolved []snapshots.LineEdit
+	var lessons []string
 	failedLine := func(line int) bool {
 		return slices.ContainsFunc(failures, func(f failure) bool { return f.line == line })
 	}
@@ -219,7 +224,12 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 			case strings.Contains(content[at+1:], old):
 				failures = append(failures, failure{line, fmt.Sprintf("SUB %d: %s occurs more than once on line %d; quote more of the line", line, js.Quote(old), line)})
 			default:
-				spans = append(spans, spanned{at, old, other.Content})
+				replacement := other.Content
+				if indent := content[:at]; at > 0 && strings.Trim(indent, " \t") == "" && len(replacement) > 0 && strings.HasPrefix(replacement[0], indent) {
+					replacement = append([]string{replacement[0][len(indent):]}, replacement[1:]...)
+					lessons = append(lessons, fmt.Sprintf("SUB %d: the + rows repeated the line's indentation, which SUB keeps around its old text, so it was written once; quote only the old text and its replacement.", line))
+				}
+				spans = append(spans, spanned{at, old, replacement})
 			}
 		}
 		if failedLine(line) {
@@ -247,7 +257,7 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 		resolved = append(resolved, snapshots.LineEdit{Start: line, End: line, Operation: snapshots.Replace, Content: strings.Split(composed.String(), "\n"), Quoted: true})
 	}
 	if len(failures) == 0 {
-		return checked{edits: resolved}, nil
+		return checked{edits: resolved, lessons: lessons}, nil
 	}
 	var marked []int
 	for _, line := range doneOrder {
@@ -266,7 +276,7 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 	message = append(message, "", fmt.Sprintf("Lines of %s around them (* marks them):", named))
 	message = append(message, f.rows...)
 	message = append(message, rowNotes(display, f.marks)...)
-	return checked{edits: resolved, refusal: &Refusal{message: strings.Join(message, "\n")}}, nil
+	return checked{edits: resolved, refusal: &Refusal{message: strings.Join(message, "\n")}, lessons: lessons}, nil
 }
 
 func trailing(line string) string { return strings.TrimRight(line, " \t\r") }
@@ -591,6 +601,38 @@ func bracketsOf(lines []string) []brackets {
 	return counts
 }
 
+// templateBrackets counts each line's brackets in a Hawkeye template, leaving out its comments, {# #} and <!-- -->, which may span lines. A
+// template's text is prose, so a quote opens no string there: an apostrophe in "today's" would hide every bracket after it from bracketsOf.
+func templateBrackets(lines []string) []brackets {
+	counts := make([]brackets, len(lines))
+	closer := ""
+	for index, line := range lines {
+		for at := 0; at < len(line); at++ {
+			switch {
+			case closer != "":
+				end := strings.Index(line[at:], closer)
+				if end < 0 {
+					at = len(line)
+					continue
+				}
+				at += end + len(closer) - 1
+				closer = ""
+			case strings.HasPrefix(line[at:], "{#"):
+				closer, at = "#}", at+1
+			case strings.HasPrefix(line[at:], "<!--"):
+				closer, at = "-->", at+3
+			default:
+				if kind := strings.IndexByte("([{", line[at]); kind >= 0 {
+					counts[index][kind]++
+				} else if kind := strings.IndexByte(")]}", line[at]); kind >= 0 {
+					counts[index][kind]--
+				}
+			}
+		}
+	}
+	return counts
+}
+
 // describe says how a bracket count is off from balance, like "1 more } than {".
 func (b brackets) describe() string {
 	var parts []string
@@ -605,18 +647,33 @@ func (b brackets) describe() string {
 	return strings.Join(parts, " and ")
 }
 
+// sourceLines are a file's lines before an edit, without their line endings.
+func sourceLines(source *text) []string {
+	lines := make([]string, len(source.lines))
+	for i, line := range source.lines {
+		lines[i] = lineContent(line)
+	}
+	return lines
+}
+
+// appliedLines are a file's lines after an edit, without their line endings.
+func appliedLines(result applied) []string {
+	lines := make([]string, len(result.rows))
+	for i, r := range result.rows {
+		lines[i] = lineContent(r.raw)
+	}
+	return lines
+}
+
 // unbalanced warns when an edit leaves a file whose brackets balanced unbalanced, naming the hunks whose new rows changed the count; a closing
 // line left just outside a replaced range is too short for offByOne to compare. Files that never balanced, like shell case labels, are left alone.
-func unbalanced(source *text, edits []snapshots.LineEdit, result applied) []string {
-	before := make([]string, len(source.lines))
-	for i, line := range source.lines {
-		before[i] = lineContent(line)
+func unbalanced(file string, source *text, edits []snapshots.LineEdit, result applied) []string {
+	before, after := sourceLines(source), appliedLines(result)
+	count := bracketsOf
+	if strings.EqualFold(filepath.Ext(file), ".hwk") {
+		count = templateBrackets
 	}
-	after := make([]string, len(result.rows))
-	for i, r := range result.rows {
-		after[i] = lineContent(r.raw)
-	}
-	old, now := bracketsOf(before), bracketsOf(after)
+	old, now := count(before), count(after)
 	var total, changed brackets
 	for _, b := range old {
 		total = total.add(b)
@@ -1189,7 +1246,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		if err != nil {
 			return nil, err
 		}
-		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, warnings: slices.Concat(warnings, offByOne(source, edits, result), unbalanced(source, edits, result))}, nil
+		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, warnings: slices.Concat(warnings, offByOne(source, edits, result), unbalanced(h.target.canonical, source, edits, result), jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)))}, nil
 	}
 	// A tagless section only appends, which depends on nothing but where the file ends.
 	if r.tag == nil {
@@ -1305,7 +1362,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 			problems = append(problems, refusal)
 		}
 	}
-	lessons := append(writtenLessons(r.edits), oldRowsLesson(r.edits)...)
+	lessons := append(append(writtenLessons(r.edits), oldRowsLesson(r.edits)...), subs.lessons...)
 	requested, err := resolveBlocks(quotes.edits, basis.Lines)
 	if err == nil {
 		requested, err = orderEdits(requested)
@@ -1412,7 +1469,7 @@ func stageCreate(ctx *Context, store *snapshots.Store, h *handle) (*staged, erro
 		if err != nil {
 			return nil, err
 		}
-		return &staged{kind: stagedCreate, handle: h, bytes: data, created: viewOf(decoded), replace: current, kept: kept}, nil
+		return &staged{kind: stagedCreate, handle: h, bytes: data, created: viewOf(decoded), replace: current, kept: kept, warnings: jsonWarnings(h.target.canonical, viewOf(old).Lines, viewOf(decoded).Lines)}, nil
 	}
 	decoded, err := decodeText(data)
 	if err != nil {
@@ -1423,7 +1480,7 @@ func stageCreate(ctx *Context, store *snapshots.Store, h *handle) (*staged, erro
 	} else if !missing(err) {
 		return nil, err
 	}
-	return &staged{kind: stagedCreate, handle: h, bytes: data, created: viewOf(decoded)}, nil
+	return &staged{kind: stagedCreate, handle: h, bytes: data, created: viewOf(decoded), warnings: jsonWarnings(h.target.canonical, nil, viewOf(decoded).Lines)}, nil
 }
 
 func destinationFree(h *handle) error {
@@ -1619,6 +1676,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		}
 		out := append([]string{fmt.Sprintf("%s [%s#%s] (%s%s)", verb, display, item.created.Tag, m.summary, kept)}, m.rows...)
 		out = append(out, hint...)
+		if len(item.warnings) > 0 {
+			out = append(append(out, "", "Warnings:"), item.warnings...)
+		}
 		return response{strings.Join(out, "\n"), func() {
 			seen := m.seen
 			if trusted {

@@ -703,6 +703,9 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 	}
 	for _, entry := range entries {
 		file, sel, err := splitSelector(entry, ctx)
+		if err == nil && sel.symbols != nil {
+			err = fmt.Errorf("%s: grep takes line ranges after a path, not a symbol; read the symbol, or grep its file", entry)
+		}
 		if err != nil {
 			return Result{}, err
 		}

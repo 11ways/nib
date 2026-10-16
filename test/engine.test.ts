@@ -49,6 +49,16 @@ async function fixture(content = "one\ntwo\nthree\n") {
 }
 
 describe("read", () => {
+  test("a declared name reads its lines, doc comment and overloads, as anchors an edit can use", async () => {
+    const f = await fixture(["class Repo {", "  // Saves one.", "  save(r) {", "    this.store.save(r)", "  }", "", "  load() {", "    return 1", "  }", "}", ""].join("\n"))
+    const r = await f.read(":Repo.save")
+    expect(r.text).toBe(`[file.txt#${r.tag}]\n2:  // Saves one.\n3:  save(r) {\n4:    this.store.save(r)\n5:  }\n[10 lines total]`)
+    await f.patch(`[file.txt#${r.tag}]\nPUT 3*:\n+  save(r) {\n+    this.store.put(r)\n+  }`)
+    expect(await readFile(f.filePath, "utf8")).toContain("  // Saves one.\n  save(r) {\n    this.store.put(r)\n  }\n")
+    expect((await f.read(":save,load")).text).toContain("\n7:  load() {\n8:    return 1\n9:  }")
+    expect((await f.read(":fetch")).text).toBe("[file.txt declares no fetch; read file.txt for its outline, or grep it]")
+  })
+
   test("tagged header, relative display path, selectors and continuation hints", async () => {
     const f = await fixture("one\r\ntwo\r\nthree")
     const tag = fileTag("one\r\ntwo\r\nthree")
@@ -1454,6 +1464,19 @@ describe("SUB", () => {
     expect(start.text).toContain("\n[1 cut at 2000 of 3511 chars]|first word word")
   })
 
+  test("SUB rows that repeat the line's indentation get it once, with a lesson", async () => {
+    const f = await fixture("class A {\n    run(a, b);\n\tstop();\n}\n")
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nSUB 2: run(a, b);\n+    run(a);\n+    log(a);\nSUB 3: stop\n+\thalt`)
+    expect(await readFile(f.filePath, "utf8")).toBe("class A {\n    run(a);\n    log(a);\n\thalt();\n}\n")
+    expect(result.text).toContain("SUB 2: the + rows repeated the line's indentation, which SUB keeps around its old text, so it was written once")
+    expect(result.text).toContain("SUB 3: the + rows repeated")
+    // Rows that do not repeat it, and old text that takes the indentation along, are written as sent.
+    const plain = await f.patch(`[file.txt#${result.tag}]\nSUB 2: run(a);\n+go();\nSUB 5: }\n+  }`)
+    expect(await readFile(f.filePath, "utf8")).toBe("class A {\n    go();\n    log(a);\n\thalt();\n  }\n")
+    expect(plain.text).not.toContain("indentation")
+  })
+
   test("a stale tag rebases SUB like any other edit", async () => {
     const f = await fixture("alpha one\nbeta two\ngamma three\n")
     const r = await f.read()
@@ -2417,6 +2440,36 @@ describe("bracket balance after an edit", () => {
     const h = await fixture("case $1 in\n  start) run ;;\nesac\n")
     const t = await h.read()
     expect((await h.patch(`[file.txt#${t.tag}]\nPUT >2:\n+  stop) halt ;;`)).text).not.toContain("Warnings:")
+  })
+
+  test("in a Hawkeye template, comments and the apostrophes of its text hide no brackets", async () => {
+    const directory = await workspace()
+    const file = path.join(directory, "page.hwk")
+    const template = "{% if (items.length) %}\n  <ul>{% each items as item %}<li>{{ item.name }}</li>{% /each %}</ul>\n{% /if %}\n"
+    await writeFile(file, template)
+    const engine = new Engine()
+    const ctx: Context = { directory, session: "session", signal: new AbortController().signal }
+    const tag = /#([0-9A-F]{4})\]/.exec((await engine.read(ctx, { paths: [file] })).text)![1]
+    // A comment spanning lines, with an apostrophe and a lone bracket, and an HTML comment with one, change nothing.
+    const added = await engine.patch(ctx, `[${file}#${tag}]\nPUT >1:\n+  {#- Today's list (the open ones only:\n+      the rest wait } -#}\n+  <!-- a ( in markup's comment -->`)
+    expect(added.text).not.toContain("Brackets")
+    const tag2 = /#([0-9A-F]{4})\]/.exec(added.text)![1]
+    // A real stray closer in the template is still named.
+    expect((await engine.patch(ctx, `[${file}#${tag2}]\nPUT >4:\n+  <p>don't stop)</p>`)).text).toContain("Brackets no longer balance: before this edit they did, and now the file has 1 more ) than (")
+  })
+
+  test("an edit or write that leaves a sound .json file unsound says where", async () => {
+    const directory = await workspace()
+    const file = path.join(directory, "en.json")
+    await writeFile(file, '{\n  "save": "Save",\n  "open": "Open"\n}\n')
+    const engine = new Engine()
+    const ctx: Context = { directory, session: "session", signal: new AbortController().signal }
+    const tag = /#([0-9A-F]{4})\]/.exec((await engine.read(ctx, { paths: [file] })).text)![1]
+    const edited = await engine.patch(ctx, `[${file}#${tag}]\nPUT 3:\n+  "open": "Open",\n+  "save": "Store"`)
+    expect(edited.text).toContain('Warnings:\nThe file is not valid JSON now: line 4: key "save" repeats in its object (first on line 2).')
+    const written = await engine.write(ctx, { path: path.join(directory, "nl.json"), content: '{\n  "save": "Opslaan",\n}\n' })
+    expect(written.text).toContain("Warnings:\nThe file is not valid JSON now: line 3: invalid character '}' looking for beginning of object key string.")
+    expect((await engine.write(ctx, { path: path.join(directory, "fr.json"), content: '{"save": "Enregistrer"}\n' })).text).not.toContain("Warnings:")
   })
 })
 

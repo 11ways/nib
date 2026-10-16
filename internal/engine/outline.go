@@ -449,24 +449,9 @@ func definitionLines(display string, lines []string, matched []int, spans map[in
 		}
 		start := s[0].start
 		content := lines[line-1]
-		group := declarationGrp.FindStringSubmatch(content)
-		from := 0
-		groupWord := ""
-		if group != nil {
-			from = js.Len(group[0])
-			groupWord = group[1]
-		}
-		head := js.Slice(content, from, js.Len(content))
-		end := -1
-		if loc := declarationEnd.FindStringIndex(head); loc != nil {
-			end = js.UnitsOf(head, loc[0])
-		}
-		at := start - from
-		declaring := head
-		if end >= 0 {
-			declaring = js.Slice(head, 0, end)
-		}
-		if at >= 0 && (end < 0 || at < end) && (!needsWord || declarationWrd.MatchString(groupWord+" "+declaring)) {
+		receiver, declaring := declaringParts(content)
+		from := js.Len(receiver)
+		if start >= from && start < from+js.Len(declaring) && (!needsWord || declarationWrd.MatchString(receiver+" "+declaring)) {
 			found[line] = true
 		}
 	}
