@@ -12,8 +12,9 @@ const groupCount = 10
 type listedRow struct{ before, path, after string }
 
 // grouped lays out a listing's rows without repeating folders: the folder every row lies in is returned as under, for the head to name once,
-// and each run of rows directly in one folder becomes a "folder/" row followed by the rows with only their file names, indented two spaces,
-// where that is shorter. An indented row never holds a slash, so its path is under, its folder row and its name joined.
+// and runs of rows in one folder become a "folder/" row followed by the rest of each row's path, indented two spaces, so an indented row's
+// path is under, its folder row and the row joined. Of all such layouts it takes the shortest, keeping a row whole where grouping saves
+// nothing.
 func grouped(rows []listedRow) (under string, lines []string) {
 	paths := make([]string, len(rows))
 	for i, row := range rows {
@@ -34,27 +35,45 @@ func grouped(rows []listedRow) (under string, lines []string) {
 			paths[i] = paths[i][len(under):]
 		}
 	}
-	for i := 0; i < len(rows); {
-		folder := paths[i][:strings.LastIndex(paths[i], "/")+1]
-		end := i + 1
-		for end < len(rows) && strings.HasPrefix(paths[end], folder) && !strings.Contains(paths[end][len(folder):], "/") {
-			end++
-		}
-		n := end - i
-		head := folder
-		if n >= groupCount {
-			head += fmt.Sprintf(" (%d)", n)
-		}
-		if folder == "" || n < 2 || n*len(folder) <= len(head)+1+2*n {
-			for ; i < end; i++ {
-				lines = append(lines, rows[i].before+paths[i]+rows[i].after)
+	// best[i] is the length of the shortest layout of rows i on; folder[i] and end[i] are its first group, "" for row i kept whole.
+	n := len(rows)
+	best := make([]int, n+1)
+	folder := make([]string, n)
+	end := make([]int, n)
+	for i := n - 1; i >= 0; i-- {
+		best[i] = len(paths[i]) + 1 + best[i+1]
+		end[i] = i + 1
+		for cut := strings.LastIndex(paths[i], "/"); cut > 0; cut = strings.LastIndex(paths[i][:cut], "/") {
+			candidate := paths[i][:cut+1]
+			rest := 0
+			for j := i; j < n && strings.HasPrefix(paths[j], candidate); j++ {
+				rest += 2 + len(paths[j]) - len(candidate) + 1
+				if j == i {
+					continue
+				}
+				if cost := len(groupHead(candidate, j+1-i)) + 1 + rest + best[j+1]; cost < best[i] {
+					best[i], folder[i], end[i] = cost, candidate, j+1
+				}
 			}
+		}
+	}
+	for i := 0; i < n; i = end[i] {
+		if folder[i] == "" {
+			lines = append(lines, rows[i].before+paths[i]+rows[i].after)
 			continue
 		}
-		lines = append(lines, head)
-		for ; i < end; i++ {
-			lines = append(lines, "  "+rows[i].before+paths[i][len(folder):]+rows[i].after)
+		lines = append(lines, groupHead(folder[i], end[i]-i))
+		for j := i; j < end[i]; j++ {
+			lines = append(lines, "  "+rows[j].before+paths[j][len(folder[i]):]+rows[j].after)
 		}
 	}
 	return under, lines
+}
+
+// groupHead is the folder row of a group of n rows.
+func groupHead(folder string, n int) string {
+	if n >= groupCount {
+		return fmt.Sprintf("%s (%d)", folder, n)
+	}
+	return folder
 }

@@ -21,7 +21,8 @@ func TestListingsNameEachFolderOnce(t *testing.T) {
 	if under != root {
 		t.Fatalf("the folder every row lies in is named once, got %q", under)
 	}
-	want := []string{"README.md", "bench/", "  run.ts", "  runners.ts", "docs/design-decider.md", "internal/decider/", "  config.go", "  decider_test.go", "  openrouter.go", "internal/decider/testdata/jev-1.14-response.json", "internal/nibash/testdata/captures/decider/ (12)"}
+	// A folder row takes its subfolders' files too; internal/ is not a row, as the two groups below it save more.
+	want := []string{"README.md", "bench/", "  run.ts", "  runners.ts", "docs/design-decider.md", "internal/decider/", "  config.go", "  decider_test.go", "  openrouter.go", "  testdata/jev-1.14-response.json", "internal/nibash/testdata/captures/decider/ (12)"}
 	for i := range 12 {
 		want = append(want, fmt.Sprintf("  %064x.json", i))
 	}
@@ -44,6 +45,8 @@ func TestListingsGroupOnlyWhereThatIsShorter(t *testing.T) {
 		{[]string{"x.go", "a/b.go", "a/c.go"}, "", "x.go\na/b.go\na/c.go"},
 		// Named directories group like any folder.
 		{[]string{"~core/workflow/Repo.java", "~core/workflow/Table.java", "~core/web/App.java"}, "~core/", "workflow/\n  Repo.java\n  Table.java\nweb/App.java"},
+		// Indented rows may continue into subfolders.
+		{[]string{"README.md", "src/main/java/a/A.java", "src/main/java/b/B.java"}, "", "README.md\nsrc/main/java/\n  a/A.java\n  b/B.java"},
 	} {
 		var rows []listedRow
 		for _, path := range c.paths {

@@ -914,7 +914,8 @@ describe("grep", () => {
     expect(found).not.toContain("build")
     expect(found).not.toContain("copy")
     const listed = (await f.engine.find(f.ctx, {})).text
-    expect(listed).toContain("\napps/app/src/A.java (1 line")
+    expect(listed).toContain("\napps/app/\n  .gitignore (2 lines, 13 bytes, ")
+    expect(listed).toContain("\n  src/A.java (1 line")
     expect(listed).toContain("\nmod/src/A.java (1 line")
     expect(listed).not.toContain("build/")
     // An .ignore that already lets ripgrep into a repository changes nothing.
