@@ -437,8 +437,10 @@ describe("edit", () => {
     const r = await f.read()
     const other = await f.read("", { file: path.join(f.directory, "other.txt") })
     const wrong = r.tag === "0000" ? "0001" : "0000"
+    // Resolved first: awaiting it inside the matcher's argument would leave the edit's rejection unhandled meanwhile.
+    const otherPath = await realpathOf(f.directory, "other.txt")
     await expect(f.edit(wrong, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow(`tag #${wrong} was not issued for this file`)
-    await expect(f.edit(other.tag, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow(`Tag #${other.tag} was issued for ${await realpathOf(f.directory, "other.txt")}`)
+    await expect(f.edit(other.tag, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow(`Tag #${other.tag} was issued for ${otherPath}`)
     await expect(f.edit(r.tag, [{ start: 4, content: "x", operation: "replace" }])).rejects.toThrow("Line 4 does not exist in file.txt (file has 3 lines)")
     expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\n")
   })
@@ -472,8 +474,9 @@ describe("edit", () => {
       f.edit(r.tag, [{ start: 1, content: "winner", operation: "replace" }]),
       f.edit(r.tag, [{ start: 1, end: 3, content: "loser", operation: "replace" }], "file.txt.link"),
     ])
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
-    expect(await readFile(alias, "utf8")).toBe("winner\ntwo\nthree\n")
+    // Calls run concurrently, so either may come first; the other must be refused rather than applied over it.
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"])
+    expect(await readFile(alias, "utf8")).toBe(results[0].status === "fulfilled" ? "winner\ntwo\nthree\n" : "loser\n")
   })
 
   test("hardlinked targets are rejected", async () => {

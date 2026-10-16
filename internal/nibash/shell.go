@@ -32,9 +32,9 @@ const (
 
 // description is the nibash tool's description, with %s for how long output is cut; a test holds every variant under 2048 characters.
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over); calls run in parallel. Programs are real processes; stdin is empty.
-cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from (grep matches as *N:). Otherwise, or written as a path (/usr/bin/grep), the system program runs; type and command -v name it.
-Output is shaped: colors stripped, repeats collapsed, %s, with the whole kept in a log you can read. A nonzero exit ends with [exit N]; changed files are listed with new tags.
-Unlike bash: a command still running at its timeout goes on as a job, never stopped, like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the call after it ends reports it. ~name/ paths expand only unquoted; hash -d name=dir (zsh) adds one for later calls and subagents, hash -d lists them, ${!HOME*} too. A pipeline's last stage runs in the shell (... | read v sets v).`
+cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from. Otherwise, or written as a path (/usr/bin/grep), the system program runs; type and command -v name it.
+Output is shaped: colors stripped, repeats collapsed, %s, with the whole kept in a log you can read. Changed files are listed with new tags.
+Unlike bash: a program does not start in a deleted directory; a command still running at its timeout goes on as a job, never stopped, like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the call after it ends reports it. ~name/ paths expand only unquoted; hash -d name=dir (zsh) adds one for later calls and subagents, hash -d lists them, ${!HOME*} too. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {

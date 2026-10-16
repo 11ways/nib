@@ -171,6 +171,11 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 		fmt.Fprintln(hc.Stderr, err)
 		return interp.ExitStatus(127)
 	}
+	// A new process cannot start in a directory that is gone, where bash's child would inherit it; say so rather than a bare ENOENT.
+	if info, err := os.Stat(hc.Dir); err != nil || !info.IsDir() {
+		fmt.Fprintf(hc.Stderr, "nibash: %s: not run, since the working directory %s no longer exists; cd to one that does\n", args[0], hc.Dir)
+		return interp.ExitStatus(126)
+	}
 	argv := append([]string{path}, args[1:]...)
 	if c.tools.Sandbox {
 		wrapped, err := c.sandboxed(hc.Dir, argv)

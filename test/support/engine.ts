@@ -6,6 +6,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ElicitRequestSchema, ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { mkdir, rename, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -25,13 +26,23 @@ export type Result = { text: string; images?: { data: string; mimeType: string }
 const REPO = path.join(import.meta.dir, "../..")
 let built: Promise<string> | undefined
 
-/** Builds the nib binary once per test run. */
+/**
+ * Builds the nib binary once per test run, into one path per user that every run reuses, so runs leave nothing behind; the build goes to a
+ * name of its own and is renamed into place, so a binary another run is executing is never overwritten.
+ */
 export function binary() {
   return built ??= (async () => {
-    const output = path.join(tmpdir(), `nib-test-${process.pid}`, "nib")
-    const child = Bun.spawn(["go", "build", "-o", output, "./cmd/nib"], { cwd: REPO, stdout: "pipe", stderr: "pipe" })
+    const directory = path.join(tmpdir(), `nib-test-${process.getuid?.() ?? "user"}`)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const output = path.join(directory, "nib")
+    const staged = `${output}.${process.pid}`
+    const child = Bun.spawn(["go", "build", "-o", staged, "./cmd/nib"], { cwd: REPO, stdout: "pipe", stderr: "pipe" })
     const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
-    if (exit !== 0) throw new Error(`go build failed: ${stderr}`)
+    if (exit !== 0) {
+      await rm(staged, { force: true })
+      throw new Error(`go build failed: ${stderr}`)
+    }
+    await rename(staged, output)
     return output
   })()
 }

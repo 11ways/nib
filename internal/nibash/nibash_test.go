@@ -173,6 +173,16 @@ func TestEveryCallStartsFreshExitStatusAndChangedFiles(t *testing.T) {
 	}
 }
 
+func TestAProgramInADeletedDirectoryIsRefusedWithTheReason(t *testing.T) {
+	f := newFixture(t, nil)
+	out := f.run("mkdir gone && cd gone && rmdir ../gone && mkdir -p " + f.directory + "/made; cd .. 2>/dev/null; echo still")
+	if !strings.Contains(out, "nibash: mkdir: not run, since the working directory "+filepath.Join(f.directory, "gone")+" no longer exists; cd to one that does") || !strings.HasSuffix(out, "still") {
+		t.Fatalf("got %s", out)
+	}
+	// The next call starts in the project directory again.
+	expect(t, f.run("mkdir -p made && echo ok"), "ok")
+}
+
 func TestOutputIsShapedAndCutWithALog(t *testing.T) {
 	f := newFixture(t, nil)
 	expect(t, f.run(`printf '\033[31mred\033[0m\nx\rdone\n'`), "red\ndone")
