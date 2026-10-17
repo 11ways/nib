@@ -28,6 +28,11 @@ const (
 	learnedLimit = 16
 	// fullAgain is how many calls showing paths pass before a note is told in full again, as the first one may have left the agent's context.
 	fullAgain = 25
+	// nameMax caps a name nib makes, its number included: a name is typed and printed often, and two initials plus a folder's word of up
+	// to stemMax letters say enough.
+	nameMax = 12
+	// stemMax caps the part of a name taken from the named folder itself.
+	stemMax = 10
 )
 
 // Automatic turns on naming the directories an agent's shown paths keep running through, and keeps every name agents get, theirs and
@@ -117,7 +122,7 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		}
 		names.counts[directory]++
 		count := names.counts[directory]
-		saved := count * (len(prefix) - len(slug(filepath.Base(directory))) - 3)
+		saved := count * (len(prefix) - len(stem(filepath.Base(directory))) - 3)
 		worth := len(prefix) >= autoAtOnce || (count >= autoUses && saved >= len(note("x", prefix, count)))
 		if worth && saved > saving {
 			best, saving = directory, saved
@@ -161,17 +166,37 @@ func slug(folder string) string {
 	return strings.Trim(unslugged.ReplaceAllString(strings.ToLower(folder), "-"), "-")
 }
 
+// camel marks where a lowercase letter or digit meets an uppercase one, so camelCase folders split into their words.
+var camel = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+// stem is the part of a name a folder gives: its slug when that is at most stemMax long, else its last word that is not a hash or a
+// version, as nib for -home-skerit-projects-nib; a word is cut to stemMax.
+func stem(folder string) string {
+	if whole := slug(folder); len(whole) <= stemMax {
+		return whole
+	}
+	words := strings.Split(slug(camel.ReplaceAllString(folder, "$1-$2")), "-")
+	word := words[len(words)-1]
+	for i := len(words) - 1; i >= 0; i-- {
+		if !meaningless.MatchString(words[i]) {
+			word = words[i]
+			break
+		}
+	}
+	return word[:min(len(word), stemMax)]
+}
+
 // meaningless matches a folder whose name says nothing of what it holds: a hash, or a version.
 var meaningless = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8,}|v?[0-9]+(?:\.[0-9]+)*)$`)
 
 // autoName is a free name for directory: the first letters of the two folders above it that say something (a hash or a version does not),
-// outer first, then its own folder, as ~bptypes for bundled-skills/2.1.302/<hash>/plugin-authoring/types; with a number after where that
-// is taken; "" when none can be made.
+// outer first, then its own folder's stem, as ~bptypes for bundled-skills/2.1.302/<hash>/plugin-authoring/types and ~cpnib for
+// claude/projects/-home-skerit-projects-nib; with a number after where that is taken, never past nameMax; "" when none can be made.
 func autoName(directory string, table *Table) string {
 	taken := func(name string) bool {
 		return !valid.MatchString(name) || isUser(name) || slices.ContainsFunc(table.Entries, func(e Entry) bool { return e.Name == name })
 	}
-	last := slug(filepath.Base(directory))
+	last := stem(filepath.Base(directory))
 	if last == "" {
 		return ""
 	}
@@ -187,7 +212,8 @@ func autoName(directory string, table *Table) string {
 		return base
 	}
 	for n := 2; n < 100; n++ {
-		if candidate := base + strconv.Itoa(n); !taken(candidate) {
+		number := strconv.Itoa(n)
+		if candidate := strings.TrimRight(base[:min(len(base), nameMax-len(number))], "-") + number; !taken(candidate) {
 			return candidate
 		}
 	}

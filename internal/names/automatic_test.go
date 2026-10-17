@@ -158,6 +158,29 @@ func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	}
 }
 
+func TestNamesNibMakesStayShort(t *testing.T) {
+	table := &Table{Base: "/w"}
+	for _, c := range []struct{ directory, want string }{
+		{"/h/claude-configs/nib/claude/projects/-home-skerit-projects-nib", "cpnib"},
+		{"/t/bundled-skills/2.1.302/fc11d6128293e2a1c2935a66fffdd589/plugin-authoring/types", "bptypes"},
+		{"/z/java/be/elevenways/widgets", "bewidgets"},
+		{"/m/github.com/modelcontextprotocol/go-sdk@v1.8.0", "gmsdk"},
+		{"/a/src/main/PluginAuthoringReference", "smreference"},
+		{"/a/src/main/release.notes.archive", "smarchive"},
+		{"/a/src/main/supercalifragilistic", "smsupercalif"},
+		{"/a/src/main/__pycache__", "smpycache"},
+	} {
+		if got := autoName(c.directory, table); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.directory, got, c.want)
+		}
+	}
+	// A number for a taken name keeps it within nameMax, cutting the stem rather than growing past it.
+	table.Entries = []Entry{{"smsupercalif", "/other"}}
+	if got := autoName("/a/src/main/supercalifragilistic", table); got != "smsupercali2" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestNamesAnAgentDefinesAreLearnedToo(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	widgets := deep(t, root, "widgets")
