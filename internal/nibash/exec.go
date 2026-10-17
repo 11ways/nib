@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -86,6 +87,20 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 	return args, nil
 }
 
+// ranAsSystem notes once per call that a nib command ran as the system program, whose output reached the model as plain text.
+func (c *call) ranAsSystem(name string, err error) {
+	why := "nib's own does not implement this form of it"
+	if errors.Is(err, errUntranslatable) {
+		why = "its pattern needs a feature nib's own cannot run exactly"
+	}
+	note := fmt.Sprintf("[%s ran as the system program: %s, so its lines are plain output, not edit anchors]", name, why)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !slices.Contains(c.system, note) {
+		c.system = append(c.system, note)
+	}
+}
+
 // runNib runs one of nibash's own commands with the input and output its classification set up.
 func (c *call) runNib(ctx context.Context, mode, name string, args []string) error {
 	hc := interp.HandlerCtx(ctx)
@@ -93,10 +108,11 @@ func (c *call) runNib(ctx context.Context, mode, name string, args []string) err
 	prepare := commands[name]
 	p, err := prepare(name, args[1:])
 	if err != nil {
-		// An option that came from an expansion, which the classification could not see. With no other nib command reading or writing
-		// its records, the system program runs, as it would have; joined to one, it cannot stand in, so the command says why.
+		// An option the command line or an expansion gave it that nib's own lacks. With no other nib command reading or writing its records,
+		// the system program runs, as it would have, and says so when its output reaches the model; joined to one, it cannot stand in, so the
+		// command says why.
 		if out, isFile := hc.Stdout.(*os.File); mode != fromLink && !(isFile && c.links.get(out) != nil) {
-			return c.runReal(ctx, args)
+			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err) })
 		}
 		fmt.Fprintf(hc.Stderr, "%s: an option nibash does not implement reached it through an expansion, inside a pipeline of nib's own commands; write the option literally, or the command as /usr/bin/%s\n", name, name)
 		// The stages it was joined to must still see it end, or they would wait for it.
@@ -165,6 +181,11 @@ func environ(env expand.Environ) []string {
 // runReal runs a real program: its own process group, killed on timeout or cancellation; output meant for the model is drained into the
 // sink before the handler returns, so it keeps its place among the commands around it.
 func (c *call) runReal(ctx context.Context, args []string) error {
+	return c.runProgram(ctx, args, nil)
+}
+
+// runProgram is runReal calling printed, when not nil, once the program's standard output brings the sink anything.
+func (c *call) runProgram(ctx context.Context, args []string, printed func()) error {
 	hc := interp.HandlerCtx(ctx)
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
@@ -198,7 +219,7 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 	}
 	var drains sync.WaitGroup
 	var pipes []*os.File
-	attach := func(w io.Writer) (io.Writer, error) {
+	attach := func(w io.Writer, printed func()) (io.Writer, error) {
 		s, ok := w.(*sink)
 		if !ok {
 			return w, nil
@@ -216,6 +237,10 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 			for {
 				n, err := reader.Read(buffer)
 				if n > 0 {
+					if printed != nil {
+						printed()
+						printed = nil
+					}
 					s.Write(buffer[:n])
 				}
 				if err != nil {
@@ -225,14 +250,14 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 		}()
 		return writer, nil
 	}
-	stdout, err := attach(hc.Stdout)
+	stdout, err := attach(hc.Stdout, printed)
 	if err != nil {
 		return err
 	}
 	cmd.Stdout = stdout
 	if hc.Stderr == hc.Stdout {
 		cmd.Stderr = stdout
-	} else if cmd.Stderr, err = attach(hc.Stderr); err != nil {
+	} else if cmd.Stderr, err = attach(hc.Stderr, nil); err != nil {
 		return err
 	}
 	cmd.WaitDelay = drainDelay

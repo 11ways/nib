@@ -32,7 +32,7 @@ const (
 
 // description is the nibash tool's description, with %s for how long output is cut; a test holds every variant under 2048 characters.
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over); calls run in parallel. Programs are real processes; stdin is empty.
-cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from. Otherwise, or written as a path (/usr/bin/grep), the system program runs; type and command -v name it.
+cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from. Otherwise the system program runs, with a note when it printed to you; written as a path (/usr/bin/grep), it runs without one; type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, %s, with the whole kept in a log you can read. Changed files are listed with new tags.
 Unlike bash: a program does not start in a deleted directory; a command still running at its timeout goes on as a job, never stopped, like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the call after it ends reports it. ~name/ paths expand only unquoted; hash -d name=dir (zsh) adds one for later calls and subagents, hash -d lists them, ${!HOME*} too. A pipeline's last stage runs in the shell (... | read v sets v).`
 
@@ -137,7 +137,7 @@ type call struct {
 	links *links
 	logs  *logDirectory
 	jobs  map[int]*syntax.Stmt
-	// mu guards job, groups and written, which a call's stages and a job it turned into share.
+	// mu guards job, groups, written and system, which a call's stages and a job it turned into share.
 	mu sync.Mutex
 	// job is set for calls that run a job's statement, and for a call that went on as a job; their processes join it.
 	job *job
@@ -145,6 +145,8 @@ type call struct {
 	groups map[int]bool
 	// written are the files a redirect opened for writing, and whether each existed before.
 	written map[string]bool
+	// system are the notes on nib commands that ran as the system program with output to the model, in the order they first ran.
+	system []string
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version.
@@ -306,6 +308,9 @@ func (c *call) result(reports []string, text string, tail []string, before map[s
 	if text != "" {
 		parts = append(parts, text)
 	}
+	c.mu.Lock()
+	parts = append(parts, c.system...)
+	c.mu.Unlock()
 	parts = append(parts, tail...)
 	if len(parts) == 0 {
 		return engine.Result{Text: "(no output)"}

@@ -11,10 +11,12 @@ import (
 // command line could shadow. No real program name can start with ESC.
 const marker = "\x1bnib:"
 
-// Reader modes in a marker: a nib command reading another nib command's records, or plain bytes.
+// Reader modes in a marker: a nib command reading another nib command's records, or plain bytes; or a command that would be nib's own but
+// for an option or pattern it lacks, which runs the system program and says so, as its output reaches the model.
 const (
 	fromLink  = "L"
 	fromBytes = "B"
+	asSystem  = "S"
 )
 
 // internal commands nibash adds for builtins mvdan does not run for real processes, and for starting a job.
@@ -191,7 +193,11 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 		}
 		s := list[i]
 		if call, ok := s.Cmd.(*syntax.CallExpr); ok && !s.Background && !redirectsOutput(s) {
-			nib[i] = c.check(call, stageOut)
+			var system bool
+			nib[i], system = c.check(call, stageOut)
+			if system {
+				rename(call, asSystem)
+			}
 			continue
 		}
 		c.stmt(s, toOther)
@@ -222,23 +228,27 @@ func redirectsInput(s *syntax.Stmt) bool {
 
 // call classifies a command outside a pipeline.
 func (c *classifier) call(call *syntax.CallExpr, out destination, _ bool) {
-	if c.check(call, out) {
+	switch nib, system := c.check(call, out); {
+	case nib:
 		rename(call, fromBytes)
+	case system:
+		rename(call, asSystem)
 	}
 }
 
 // check reports whether a command runs as nib's own: a literal nib name no function shadows, every word literal, options it implements, and
-// output that goes to the model or to another nib command.
-func (c *classifier) check(call *syntax.CallExpr, out destination) bool {
+// output that goes to the model or to another nib command. system is true for such a command whose output goes to the model but whose
+// options or pattern nib's own does not implement.
+func (c *classifier) check(call *syntax.CallExpr, out destination) (nib, system bool) {
 	if out == toOther || len(call.Args) == 0 {
-		return false
+		return false, false
 	}
 	words := make([]string, len(call.Args))
 	for i, word := range call.Args {
 		value, ok := wordLiteral(word)
 		if !ok {
 			if i == 0 {
-				return false
+				return false, false
 			}
 			// An expansion is an operand here, as it is to the tool at run time unless it expands to an option, which the command then
 			// reports instead of running as the system program.
@@ -249,13 +259,15 @@ func (c *classifier) check(call *syntax.CallExpr, out destination) bool {
 	name := words[0]
 	prepare, ok := commands[name]
 	if !ok || c.functions[name] || len(call.Args[0].Parts) != 1 {
-		return false
+		return false, false
 	}
 	if _, isLit := call.Args[0].Parts[0].(*syntax.Lit); !isLit {
-		return false
+		return false, false
 	}
-	_, err := prepare(name, words[1:])
-	return err == nil
+	if _, err := prepare(name, words[1:]); err != nil {
+		return false, out == toTerminal
+	}
+	return true, false
 }
 
 func rename(call *syntax.CallExpr, mode string) {

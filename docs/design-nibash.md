@@ -114,6 +114,8 @@ Before running, nibash parses the command with mvdan's parser and marks each sim
 
 Everything else is real. Because nib commands only ever write to the model or to another nib command, their byte form never reaches a file or a program, so GNU byte parity is never required.
 
+A command that meets every condition but the options (an option, count, script or pattern nib's own does not implement, written literally or reached through an expansion) runs the system program; when its output reaches the model and it printed anything, the call ends with one note per such command, `[grep ran as the system program: ..., so its lines are plain output, not edit anchors]`, saying whether an option or form, or a pattern RE2 cannot run exactly, was the reason. A command written as a path is not noted, as its caller chose the system program.
+
 **Links:** where two nib stages are joined by a pipe, the writer sends **records** to the reader over a bounded Go channel and writes no bytes. The link is keyed by the pipe's `(dev, ino)`, which both ends share.
 - A record is a line of text plus, optionally, its origin: the canonical path, the 1-based line number, the snapshot version it was read from, and whether it is a grep match. A record's text is the file line itself, never a prefixed form like `12:text`. Whether the user asked for `-n` changes only how the line would print, and the terminal prints anchored rows anyway.
 - **The channel is bounded** (1,024 records), so the writer waits for the reader.

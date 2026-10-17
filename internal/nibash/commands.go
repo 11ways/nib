@@ -733,6 +733,9 @@ func prepareGrep(name string, args []string) (plan, error) {
 	}
 	p.operands = operands
 	if p.matcher, err = newMatcher(p.patterns, p.dialect, p.ignoreCase, p.word, p.line); err != nil {
+		if errors.Is(err, errUntranslatable) {
+			return nil, err
+		}
 		return nil, errUnsupported
 	}
 	if p.recursive {

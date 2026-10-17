@@ -162,10 +162,14 @@ func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	// Into a real program, into a file, inside $(...), with an option nibash lacks, or by path: plain bytes, as bash gives.
 	expect(t, f.run("cat a.txt | tr a-z A-Z | head -1"), "ONE")
 	expect(t, f.run("echo $(head -1 a.txt)"), "one")
-	expect(t, f.run("head -c 3 a.txt"), "one")
+	// A command that would be nib's own but for an option or pattern says why its output is plain, once and only when it printed.
+	system := "[head ran as the system program: nib's own does not implement this form of it, so its lines are plain output, not edit anchors]"
+	expect(t, f.run("head -c 3 a.txt; head -c 3 a.txt"), "oneone\n"+system)
+	expect(t, f.run("grep '\\<one' a.txt"), "one\n[grep ran as the system program: its pattern needs a feature nib's own cannot run exactly, so its lines are plain output, not edit anchors]")
+	expect(t, f.run("head -c 0 a.txt"), "(no output)")
 	expect(t, f.run("/usr/bin/head -1 a.txt"), "one")
 	// An option only an expansion supplies runs the system program, unless the command is joined to another nib command.
-	expect(t, f.run("F=-c; head $F 3 a.txt"), "one")
+	expect(t, f.run("F=-c; head $F 3 a.txt"), "one\n"+system)
 	if out := f.run("F=-c; head $F 3 a.txt | wc -l"); !strings.Contains(out, "head: an option nibash does not implement reached it through an expansion") {
 		t.Fatalf("got %s", out)
 	}
@@ -337,16 +341,17 @@ func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 	// Each command line, with the commands that run as nibash's own and how they read.
 	cases := map[string][]string{
 		"grep -n x a":           {"B:grep"},
-		"grep -P x a":           nil,
+		"grep -P x a":           {"S:grep"},
 		"grep x a > out":        nil,
 		"grep x a | tr a b":     nil,
 		"grep x a | head -1":    {"B:grep", "L:head"},
 		"echo $(grep x a)":      nil,
 		"grep() { :; }; grep x": nil,
 		"/bin/grep x a":         nil,
-		"head -c 5 a":           nil,
+		"head -c 5 a":           {"S:head"},
+		"head -c 5 a | wc":      {"B:wc"},
 		"sed -n 1,5p a":         {"B:sed"},
-		"sed -i s/a/b/ a":       nil,
+		"sed -i s/a/b/ a":       {"S:sed"},
 		"cat a |& head":         {"B:head"},
 		"cat a | head < b":      {"B:head"},
 		"tr a b < f | head -2":  {"B:head"},
