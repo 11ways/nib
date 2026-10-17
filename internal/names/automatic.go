@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -67,10 +68,11 @@ func (d *Defined) Announced(agent string) []string {
 	return notes
 }
 
-// observe counts the directories a path shown to the agent runs through, below the deepest named one holding it, and names the one that
-// saves the most among those with a printed prefix of autoChars or more that autoAtOnce or the characters saved so far make worth a note.
-func (d *Defined) observe(agent string, table *Table, canonical string) {
-	if d == nil || !d.automatic {
+// observe counts the directories from directory up, below the deepest named one holding it, and names the one that saves the most among
+// those with a printed prefix of autoChars or more that autoAtOnce or the characters saved so far make worth a note. A directory whose name
+// holds a control character is never named.
+func (d *Defined) observe(agent string, table *Table, directory string) {
+	if d == nil || !d.automatic || strings.ContainsFunc(directory, unicode.IsControl) {
 		return
 	}
 	shown := func(directory string) string {
@@ -104,7 +106,7 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 		}
 	}
 	best, saving := "", 0
-	for directory := filepath.Dir(canonical); directory != filepath.Dir(directory); directory = filepath.Dir(directory) {
+	for ; directory != filepath.Dir(directory); directory = filepath.Dir(directory) {
 		// A named directory, or the server's own for a path inside it, prints no further up: nothing above it is ever shown.
 		if directory == table.Base || slices.ContainsFunc(table.Entries, func(e Entry) bool { return e.Directory == directory }) {
 			break

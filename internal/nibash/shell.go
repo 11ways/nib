@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -212,17 +213,59 @@ func (c *call) wrote(path string, existed bool) {
 }
 
 // observePaths counts the absolute paths a command line spells toward the directories nib names for the agent: a path given to a real
-// program is never printed by nib, yet costs the agent the same characters each time it is typed.
-func observePaths(file *syntax.File, view namer) {
+// program is never printed by nib, yet costs the agent the same characters each time it is typed. Paths the sandbox refuses are left out.
+func observePaths(file *syntax.File, view namer, refused func(string) bool) {
 	if view == nil {
 		return
 	}
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if lit, ok := node.(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "/") {
-			view.Observe(lit.Value)
+		if word, ok := node.(*syntax.Word); ok {
+			for _, path := range wordPaths(word) {
+				if refused == nil || !refused(path) {
+					view.Observe(path)
+				}
+			}
 		}
 		return true
 	})
+}
+
+// unknown stands in a word's text for an expansion, whose value is not known before the command runs.
+const unknown = 0
+
+// wordPaths are the absolute paths in a word's literal text: runs of characters a path holds as written that start with a slash, at the
+// word's start or after a character that ends one, so a path inside code for another program (python -c) counts up to its closing quote,
+// while a run that touches an expansion ($HOME/x, /a/$b) is not a path anyone typed.
+func wordPaths(word *syntax.Word) []string {
+	var text strings.Builder
+	var literal func(parts []syntax.WordPart)
+	literal = func(parts []syntax.WordPart) {
+		for _, part := range parts {
+			switch part := part.(type) {
+			case *syntax.Lit:
+				text.WriteString(part.Value)
+			case *syntax.SglQuoted:
+				text.WriteString(part.Value)
+			case *syntax.DblQuoted:
+				literal(part.Parts)
+			default:
+				text.WriteByte(unknown)
+			}
+		}
+	}
+	literal(word.Parts)
+	var paths []string
+	for _, run := range strings.FieldsFunc(text.String(), func(r rune) bool { return !pathRune(r) }) {
+		if strings.HasPrefix(run, "/") && len(run) > 1 && !strings.ContainsAny(run, "$\x00") {
+			paths = append(paths, run)
+		}
+	}
+	return paths
+}
+
+// pathRune is true for a character a path holds as written in a command; $, ~ and unknown belong to a run so that it is seen whole and refused.
+func pathRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("/._-+@%$~", r) || r == unknown
 }
 
 // Run runs one nibash call in a fresh interpreter; a command still running at the call's timeout goes on as a job.
@@ -237,7 +280,14 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	if err != nil {
 		return engine.Result{Text: fmt.Sprintf("nibash: %v\n[exit 2]", err)}, nil
 	}
-	observePaths(file, view)
+	var refused func(string) bool
+	if tools.Sandbox {
+		refused = func(path string) bool {
+			why, err := tools.Refused(path)
+			return err != nil || why != ""
+		}
+	}
+	observePaths(file, view, refused)
 	reports := sess.jobs.finished()
 	runner, err := sess.newRunner(tools.Directory, view)
 	if err != nil {

@@ -183,12 +183,24 @@ func (v *View) Expand(input string) (string, bool) { return v.table().Expand(inp
 // toward naming a directory it runs through; a name made then takes effect once Announced tells of it, so one response prints every path the
 // same way.
 func (v *View) Display(canonical string) (string, bool) {
-	v.defined.observe(v.agent, v.table(), canonical)
+	v.defined.observe(v.agent, v.table(), filepath.Dir(canonical))
 	return v.table().Display(canonical)
 }
 
-// Observe counts path, an absolute path the agent used, toward naming a directory it runs through, as a path shown to it counts.
-func (v *View) Observe(path string) { v.defined.observe(v.agent, v.table(), filepath.Clean(path)) }
+// Observe counts path, an absolute path the agent used, toward naming a directory it runs through, as a path shown to it counts: from the
+// deepest directory of it that exists, canonical, so text after a path or a file's own name never ends up in a name.
+func (v *View) Observe(path string) {
+	directory := filepath.Clean(path)
+	for info, err := os.Stat(directory); err != nil || !info.IsDir(); info, err = os.Stat(directory) {
+		if directory == filepath.Dir(directory) {
+			return
+		}
+		directory = filepath.Dir(directory)
+	}
+	if canonical, err := filepath.EvalSymlinks(directory); err == nil {
+		v.defined.observe(v.agent, v.table(), canonical)
+	}
+}
 
 // Home is the directory of name; ok is false when it names none.
 func (v *View) Home(name string) (string, bool) { return v.table().Home(name) }

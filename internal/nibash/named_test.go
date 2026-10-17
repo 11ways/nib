@@ -134,6 +134,32 @@ func TestAVeryLongPathACommandSpellsIsNamedAtOnce(t *testing.T) {
 	}
 }
 
+func TestOnlyCleanPathsACommandSpellsCountTowardNames(t *testing.T) {
+	f := newFixture(t, nil)
+	skill := filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")
+	if err := os.MkdirAll(skill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := filepath.EvalSymlinks(skill)
+	defined := names.NewDefined()
+	defined.Automatic("", f.directory)
+	f.names = (&names.Table{Base: f.directory}).For(defined, "s")
+	// A path after an expansion is a fragment of another path, and one that does not exist names nothing.
+	f.run("d=x; /usr/bin/true \"$d" + filepath.Join(skill, "api.d.ts") + "\" " + filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "missing", "x.txt"))
+	if notes := defined.Announced("s"); len(notes) != 0 {
+		t.Fatalf("notes %v", notes)
+	}
+	// A path inside code given to another program counts up to where the path ends, and never names the file.
+	f.run("/usr/bin/true -c \"f='" + filepath.Join(skill, "api.d.ts") + "'\nimport json\nprint(sum(delta)/len(y))\"")
+	notes := defined.Announced("s")
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bptypes = ") {
+		t.Fatalf("notes %v", notes)
+	}
+	if got, _ := f.names.Home("bptypes"); got != canonical {
+		t.Fatalf("~bptypes is %q, want %q", got, canonical)
+	}
+}
+
 func TestNamesExpandInBackgroundJobsAndPipelines(t *testing.T) {
 	f := newFixture(t, map[string]string{"d/a.txt": "x\n"})
 	f.names = (&names.Table{Base: f.directory}).For(names.NewDefined(), "s")
