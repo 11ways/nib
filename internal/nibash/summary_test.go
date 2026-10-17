@@ -52,10 +52,13 @@ func TestASummaryShowsTheLinesItPointsAtAndReadsTheRest(t *testing.T) {
 		t.Fatalf("budget:\n%s", out)
 	}
 	last := rows[len(rows)-1]
-	for _, want := range []string{"quotes checked against the log", "1 named lines or ranges not in the log dropped", ":100-130 plain:true", "of 1,000 log lines", "whole output: "} {
+	for _, want := range []string{":100-130 plain:true", "of 1,000 log lines", "whole output: "} {
 		if !strings.Contains(last, want) {
 			t.Errorf("closing lacks %q: %s", want, last)
 		}
+	}
+	if strings.Contains(last, "quotes") || strings.Contains(last, "dropped") {
+		t.Errorf("closing names checks the agent need not read: %s", last)
 	}
 	for _, r := range rows {
 		if gap := gapNote.FindStringSubmatch(r); gap == nil && strings.HasPrefix(r, "[nibash: log") {
@@ -67,6 +70,36 @@ func TestASummaryShowsTheLinesItPointsAtAndReadsTheRest(t *testing.T) {
 	if len(in.Log) != 1000 || in.Purpose != "find the failure" || !slices.Contains(in.Excerpt, 30) || slices.Contains(in.Excerpt, 31) ||
 		!slices.Contains(in.Excerpt, 621) || !slices.Contains(in.Excerpt, 641) || slices.Contains(in.Excerpt, 642) || !slices.Contains(in.Excerpt, 901) {
 		t.Fatalf("asked %d lines, excerpt %v", len(in.Log), in.Excerpt)
+	}
+}
+
+func TestAnOutputThatFitsTheExcerptGoesWholeWithNoDecider(t *testing.T) {
+	// 350 lines of 110 bytes pass the byte budget while staying within excerptLines.
+	wide := func() *sink {
+		var lines strings.Builder
+		for i := 1; i <= 350; i++ {
+			fmt.Fprintf(&lines, "line %d %s\n", i, strings.Repeat("x", 100))
+		}
+		s := &sink{}
+		s.Write([]byte(lines.String()))
+		return s
+	}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Line 200 fails.", Ranges: [][2]int{{200, 200}}}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	out := renderSink(t, wide(), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(choose.asked) != 0 || !strings.Contains(out, "<summary>Line 200 fails.</summary>") || !strings.Contains(out, "line 200 x") {
+		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
+	}
+	if in := summary.asked[0]; len(in.Excerpt) != 350 || in.Excerpt[0] != 1 || in.Excerpt[349] != 350 {
+		t.Fatalf("excerpt %d lines", len(in.Excerpt))
+	}
+	// When the summary fails, the decider chooses after all.
+	summary.summarize = func(decider.SummaryInput) decider.Summary { return decider.Summary{Failure: "m: down"} }
+	out = renderSink(t, wide(), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(choose.asked) != 1 || !strings.Contains(out, "no summary") {
+		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
 	}
 }
 

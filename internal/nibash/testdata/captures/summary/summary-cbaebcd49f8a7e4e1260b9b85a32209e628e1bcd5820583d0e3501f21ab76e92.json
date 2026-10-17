@@ -1,1 +1,0 @@
-"{\"summary\": \"The package list shows go installed at version 2:1.27.1-1 and ripgrep installed at version 15.2.0-1. Both are present in the pacman -Q output.\", \"evidence\": [{\"line\": 122, \"text\": \"go 2:1.27.1-1\"}, {\"line\": 547, \"text\": \"ripgrep 15.2.0-1\"}], \"ranges\": [[122, 122], [547, 547]]}"

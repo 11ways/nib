@@ -1,0 +1,1 @@
+"{\"summary\": \"2 tests failed and 186 passed. test_extension_map_covers_kotlin failed because the extension map is {'.java': 'java', '.py': 'python'} and .kt maps to None. test_shape_hash_is_order_free failed with 'shape hash depends on statement order', comparing two different hashes.\", \"ranges\": [[198, 211], [371, 374], [16, 16], [143, 143], [6, 6]]}"

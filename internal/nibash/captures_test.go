@@ -92,7 +92,7 @@ func TestCaptures(t *testing.T) {
 	summaries, _ := filepath.Abs("testdata/captures/summary")
 	model := decider.Config{Kind: decider.OpenRouter, Key: "offline", Models: []string{decider.DefaultModel}, URL: decider.DefaultURL, Timeout: 10 * time.Second, Cache: cache,
 		Client: &http.Client{Transport: offline{}}}
-	summary := decider.Config{Key: "offline", Summary: []decider.SummaryEntry{{Spec: summaryEntry, Model: summaryEntry, Reasoning: "off", Input: "whole"}},
+	summary := decider.Config{Key: "offline", Summary: []decider.SummaryEntry{{Spec: summaryEntry, Model: summaryEntry, Reasoning: "off"}},
 		SummaryURL: decider.DefaultSummaryURL, SummaryTimeout: 10 * time.Second, Cache: summaries, Client: &http.Client{Transport: offline{}}}
 	recording := os.Getenv("NIB_DECIDER_RECORD") == "1"
 	if recording {
@@ -168,8 +168,8 @@ func check(t *testing.T, c capture, arms []arm) float64 {
 				t.Errorf("%s: no summary (%s); record it again", c.Name, s.last.Failure)
 			} else {
 				u := s.last.Usage
-				line += fmt.Sprintf("; summary by %s, %d ranges, %d dropped, excerpt %v; %d requests, %d cached, %d tokens, $%.5f, %s", s.last.Who, len(s.last.Ranges),
-					s.last.Dropped, s.last.Excerpt, u.Requests, u.Cached, u.InputTokens, u.Cost, u.Elapsed.Round(time.Millisecond))
+				line += fmt.Sprintf("; summary by %s, %d ranges, %d dropped; %d requests, %d cached, %d tokens, $%.5f, %s", s.last.Who, len(s.last.Ranges),
+					s.last.Dropped, u.Requests, u.Cached, u.InputTokens, u.Cost, u.Elapsed.Round(time.Millisecond))
 				cost += u.Cost
 			}
 		}

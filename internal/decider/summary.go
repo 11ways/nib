@@ -18,8 +18,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/11ways/nib/internal/snapshots"
 )
 
 const (
@@ -27,23 +25,17 @@ const (
 	DefaultSummaryTimeout = 30 * time.Second
 	// claudePrefix marks an entry run by Claude Code's own `claude -p`, on the user's login.
 	claudePrefix = "claude-p:"
-	// WholeChars is the most numbered output a summarizer reads whole; past it, it reads the excerpt.
-	WholeChars = 400_000
-	// summaryRowChars cuts each numbered row a summarizer reads; evidence it copies is checked as a part of the whole line.
+	// summaryRowChars cuts each numbered row a summarizer reads.
 	summaryRowChars = 300
 	// maxRanges and maxRangeLines bound what an answer may point at; longer ranges are dropped, not shortened.
 	maxRanges     = 5
 	maxRangeLines = 60
-	maxEvidence   = 3
 	// summaryVersion changes with the prompt, so cached answers to another prompt are not reused.
-	summaryVersion = 1
+	summaryVersion = 2
 )
 
 // The values an entry's reasoning option takes; "off" is the default, "default" sends none and leaves it to the model.
 var reasonings = []string{"off", "default", "minimal", "low", "medium", "high"}
-
-// The values an entry's input option takes: whole reads the whole output while it fits WholeChars, excerpt always the excerpt.
-var inputs = []string{"whole", "excerpt"}
 
 // SummaryEntry is one summarizer of NIB_DECIDER_SUMMARY: an OpenRouter chat model, or `claude-p:MODEL`, with its options.
 type SummaryEntry struct {
@@ -52,10 +44,9 @@ type SummaryEntry struct {
 	Claude    bool
 	Model     string
 	Reasoning string
-	Input     string
 }
 
-// parseSummary reads a comma separated list of entries, each MODEL or claude-p:MODEL followed by @reasoning=VALUE and @input=VALUE options.
+// parseSummary reads a comma separated list of entries, each MODEL or claude-p:MODEL, an OpenRouter one optionally followed by @reasoning=VALUE.
 func parseSummary(list string) ([]SummaryEntry, error) {
 	var entries []SummaryEntry
 	for _, spec := range strings.Split(list, ",") {
@@ -64,24 +55,20 @@ func parseSummary(list string) ([]SummaryEntry, error) {
 			continue
 		}
 		parts := strings.Split(spec, "@")
-		e := SummaryEntry{Spec: spec, Model: parts[0], Reasoning: "off", Input: "whole"}
+		e := SummaryEntry{Spec: spec, Model: parts[0], Reasoning: "off"}
 		if after, ok := strings.CutPrefix(e.Model, claudePrefix); ok {
-			e.Claude, e.Model, e.Input = true, after, "excerpt"
+			e.Claude, e.Model = true, after
 		}
 		if e.Model == "" || strings.ContainsAny(e.Model, " \t") || !e.Claude && !strings.Contains(e.Model, "/") {
 			return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q is neither an OpenRouter model id (vendor/model) nor claude-p:MODEL", spec)
 		}
 		for _, option := range parts[1:] {
 			name, value, _ := strings.Cut(option, "=")
-			switch {
-			case name == "reasoning" && slices.Contains(reasonings, value) && !e.Claude:
-				e.Reasoning = value
-			case name == "input" && slices.Contains(inputs, value):
-				e.Input = value
-			default:
-				return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q has option %q; use @reasoning=%s (OpenRouter models only) or @input=%s", spec, option,
-					strings.Join(reasonings, "|"), strings.Join(inputs, "|"))
+			if name != "reasoning" || !slices.Contains(reasonings, value) || e.Claude {
+				return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q has option %q; the one option is @reasoning=%s, for OpenRouter models", spec, option,
+					strings.Join(reasonings, "|"))
 			}
+			e.Reasoning = value
 		}
 		if e.Claude {
 			if _, err := exec.LookPath("claude"); err != nil {
@@ -96,7 +83,8 @@ func parseSummary(list string) ([]SummaryEntry, error) {
 	return entries, nil
 }
 
-// SummaryInput is one cut output to summarize: nib's facts about the call, the log's lines without colors, and the log lines of the excerpt.
+// SummaryInput is one cut output to summarize: nib's facts about the call, the log's lines without colors, and the log lines of the excerpt,
+// which is all a summarizer reads.
 type SummaryInput struct {
 	Command  string
 	Purpose  string
@@ -107,23 +95,15 @@ type SummaryInput struct {
 	Excerpt []int
 }
 
-// Evidence is a log line an answer rests on, as it copied it.
-type Evidence struct {
-	Line int
-	Text string
-}
-
-// Summary is a summarizer's checked answer: its prose, the evidence lines and ranges that matched the log, and what was dropped.
+// Summary is a summarizer's checked answer: its prose, the ranges that lie in the lines it read, and how many ranges did not.
 type Summary struct {
-	Text     string
-	Evidence []Evidence
+	Text string
 	// Ranges are 1-based inclusive log lines, most important first.
 	Ranges [][2]int
-	// Dropped counts evidence lines and ranges that did not match the log.
+	// Dropped counts ranges outside the log or the lines the entry read.
 	Dropped int
-	// Who is the entry that answered; Excerpt says it read only the excerpt.
-	Who     string
-	Excerpt bool
+	// Who is the entry that answered.
+	Who string
 	// Failure is why no entry gave a usable answer; the other fields are empty then.
 	Failure string
 	Usage   Usage
@@ -154,12 +134,8 @@ type summaries struct {
 
 // answer is a summarizer's reply as JSON, read leniently since models write numbers as strings at times.
 type answer struct {
-	Summary  string `json:"summary"`
-	Evidence []struct {
-		Line any    `json:"line"`
-		Text string `json:"text"`
-	} `json:"evidence"`
-	Ranges [][]any `json:"ranges"`
+	Summary string  `json:"summary"`
+	Ranges  [][]any `json:"ranges"`
 }
 
 func (s *summaries) Summarize(ctx context.Context, in SummaryInput) Summary {
@@ -187,8 +163,8 @@ func (s *summaries) Summarize(ctx context.Context, in SummaryInput) Summary {
 
 // with asks one entry, from the cache when it answered this before, and checks the answer against the log.
 func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (Summary, string) {
-	text, shown := numbered(in, e.Input == "whole")
-	prompt := summaryPrompt(in, len(shown) < len(in.Log))
+	text := render(in.Log, in.Excerpt)
+	prompt := summaryPrompt(in, len(in.Excerpt) < len(in.Log))
 	key := summaryKey(e, s.config.SummaryURL, prompt, text)
 	var reply string
 	var usage Usage
@@ -205,7 +181,7 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 			return Summary{Usage: usage}, failure
 		}
 	}
-	got, failure := check(reply, in.Log, shown)
+	got, failure := check(reply, in.Log, in.Excerpt)
 	got.Usage = usage
 	if failure != "" {
 		return got, failure
@@ -213,24 +189,8 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 	if usage.Cached == 0 {
 		s.cache.putText(key, reply)
 	}
-	got.Who, got.Excerpt = e.Spec, len(shown) < len(in.Log)
+	got.Who = e.Spec
 	return got, ""
-}
-
-// numbered is the text an entry reads, each row with its log line, and the log lines it holds: the whole log while it fits WholeChars and
-// whole is asked for, else the excerpt, with a marker where lines are left out.
-func numbered(in SummaryInput, whole bool) (string, []int) {
-	var lines []int
-	if whole {
-		lines = make([]int, len(in.Log))
-		for i := range lines {
-			lines[i] = i + 1
-		}
-		if text := render(in.Log, lines); len(text) <= WholeChars {
-			return text, lines
-		}
-	}
-	return render(in.Log, in.Excerpt), in.Excerpt
 }
 
 func render(log []string, lines []int) string {
@@ -263,10 +223,9 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 		"Command: " + in.Command + "\n" +
 		"Exit status (from the shell, always true): " + status + "\n" +
 		fmt.Sprintf("Output: %d lines, numbered below.\n\n", len(in.Log)) +
-		`Answer with JSON only: {"summary": "...", "evidence": [{"line": N, "text": "..."}], "ranges": [[first, last], ...]}` + "\n" +
+		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
 		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
 		"lines or entries; the agent gets exact counts from the shell.\n" +
-		"evidence: the 1 to 3 lines your summary rests on, each copied exactly with its line number.\n" +
 		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines."
 	if excerpt {
 		text += "\nOnly an excerpt is shown: the start, the end, and the passages a relevance model judged most likely to matter, each with its " +
@@ -285,8 +244,8 @@ func summaryKey(e SummaryEntry, url, prompt, text string) string {
 
 var fence = regexp.MustCompile("^```(?:json)?\\s*|\\s*```$")
 
-// check reads a reply and keeps what the log bears out: evidence lines whose text is on that log line, and ranges inside the log that touch
-// a line the entry read. An answer with no evidence left, or nothing to point at, fails.
+// check reads a reply and keeps the ranges inside the log that touch a line the entry read; an answer with no summary, or no range left,
+// fails.
 func check(reply string, log []string, shown []int) (Summary, string) {
 	var a answer
 	if json.Unmarshal([]byte(fence.ReplaceAllString(strings.TrimSpace(reply), "")), &a) != nil {
@@ -295,22 +254,6 @@ func check(reply string, log []string, shown []int) (Summary, string) {
 	got := Summary{Text: strings.Join(strings.Fields(a.Summary), " ")}
 	if got.Text == "" {
 		return got, "its answer has no summary"
-	}
-	read := func(n int) bool {
-		_, found := slices.BinarySearch(shown, n)
-		return found
-	}
-	for i, ev := range a.Evidence {
-		n, ok := integer(ev.Line)
-		copied := strings.TrimSpace(ev.Text)
-		if i >= maxEvidence || !ok || n < 1 || n > len(log) || !read(n) || !matches(copied, log[n-1]) {
-			got.Dropped++
-			continue
-		}
-		got.Evidence = append(got.Evidence, Evidence{n, copied})
-	}
-	if len(got.Evidence) == 0 {
-		return got, "none of its evidence lines is on the log line it names"
 	}
 	for i, r := range a.Ranges {
 		first, ok1 := 0, false
@@ -326,22 +269,10 @@ func check(reply string, log []string, shown []int) (Summary, string) {
 		}
 		got.Ranges = append(got.Ranges, [2]int{first, last})
 	}
-	// Evidence outside every range is pointed at as well, after the ranges, so what the summary rests on is always shown.
-	for _, ev := range got.Evidence {
-		if !slices.ContainsFunc(got.Ranges, func(r [2]int) bool { return ev.Line >= r[0] && ev.Line <= r[1] }) {
-			got.Ranges = append(got.Ranges, [2]int{ev.Line, ev.Line})
-		}
+	if len(got.Ranges) == 0 {
+		return got, "none of its ranges lies in the lines it read"
 	}
 	return got, ""
-}
-
-// matches says whether copied is the line, or a part of it long enough to name it.
-func matches(copied, line string) bool {
-	whole := strings.TrimSpace(line)
-	if copied == "" {
-		return false
-	}
-	return copied == whole || len([]rune(copied)) >= snapshots.EvidenceMinRunes && strings.Contains(line, copied)
 }
 
 func integer(v any) (int, bool) {

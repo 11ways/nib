@@ -33,20 +33,19 @@ func fakeClaude(t *testing.T, reply string, status int) string {
 
 func TestSummaryEntriesParseTheirOptionsAndRefuseTheRest(t *testing.T) {
 	fakeClaude(t, "", 0)
-	entries, err := parseSummary(" deepseek/deepseek-v4.1-flash-1017 , google/gemini-3.1-flash-lite@input=excerpt@reasoning=low,claude-p:haiku,claude-p:sonnet@input=whole")
+	entries, err := parseSummary(" deepseek/deepseek-v4.1-flash-1017 , google/gemini-3.1-flash-lite@reasoning=low,claude-p:haiku")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []SummaryEntry{
-		{Spec: "deepseek/deepseek-v4.1-flash-1017", Model: "deepseek/deepseek-v4.1-flash-1017", Reasoning: "off", Input: "whole"},
-		{Spec: "google/gemini-3.1-flash-lite@input=excerpt@reasoning=low", Model: "google/gemini-3.1-flash-lite", Reasoning: "low", Input: "excerpt"},
-		{Spec: "claude-p:haiku", Claude: true, Model: "haiku", Reasoning: "off", Input: "excerpt"},
-		{Spec: "claude-p:sonnet@input=whole", Claude: true, Model: "sonnet", Reasoning: "off", Input: "whole"},
+		{Spec: "deepseek/deepseek-v4.1-flash-1017", Model: "deepseek/deepseek-v4.1-flash-1017", Reasoning: "off"},
+		{Spec: "google/gemini-3.1-flash-lite@reasoning=low", Model: "google/gemini-3.1-flash-lite", Reasoning: "low"},
+		{Spec: "claude-p:haiku", Claude: true, Model: "haiku", Reasoning: "off"},
 	}
 	if !slices.Equal(entries, want) {
 		t.Fatalf("entries %+v", entries)
 	}
-	for _, bad := range []string{"haiku", "vendor/m@reasoning=lots", "vendor/m@speed=1", "claude-p:haiku@reasoning=low", "claude-p:", " , "} {
+	for _, bad := range []string{"haiku", "vendor/m@reasoning=lots", "vendor/m@speed=1", "vendor/m@input=whole", "claude-p:haiku@reasoning=low", "claude-p:", " , "} {
 		if _, err := parseSummary(bad); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
@@ -129,26 +128,25 @@ func summarizerFor(t *testing.T, server *httptest.Server, list, cache string) Su
 	return Config{Key: "key", Summary: entries, SummaryURL: server.URL, SummaryTimeout: 5 * time.Second, Cache: cache}.Summarizer()
 }
 
-func TestASummaryFallsThroughTheListAndKeepsOnlyWhatTheLogBearsOut(t *testing.T) {
+func TestASummaryFallsThroughTheListAndKeepsOnlyRangesInWhatItRead(t *testing.T) {
 	log := logOf(300, map[int]string{120: "FAIL: TestParse expected 3, got 4", 121: "    at parse_test.go:40"})
 	f := &chatFake{answer: func(n int, req map[string]any) (int, string) {
 		switch req["model"] {
 		case "a/down":
 			return 500, ""
 		case "b/liar":
-			return 200, `{"summary": "All passed.", "evidence": [{"line": 5, "text": "PASS everything"}], "ranges": [[1, 3]]}`
+			return 200, `{"summary": "All passed.", "ranges": [[5, 9]]}`
 		}
-		return 200, "```json\n" + `{"summary": "TestParse fails:  it expected 3.", "evidence": [{"line": 120, "text": "FAIL: TestParse expected 3"},` +
-			`{"line": "121", "text": "at parse_test.go:40"}, {"line": 7, "text": "made up"}], "ranges": [[118, 125], [0, 4], [200, 290], ["121", "121"]]}` + "\n```"
+		return 200, "```json\n" + `{"summary": "TestParse fails:  it expected 3.", "ranges": [[118, 125], [0, 4], [200, 290], ["121", "121"]]}` + "\n```"
 	}}
 	server := f.serve(t)
 	s := summarizerFor(t, server, "a/down,b/liar,c/good@reasoning=low", "")
 	in := SummaryInput{Command: "go test", Purpose: "find the failure", Exit: 1, Log: log, Excerpt: []int{1, 2, 3, 120, 121, 300}}
 	got := s.Summarize(context.Background(), in)
-	if got.Failure != "" || got.Who != "c/good@reasoning=low" || got.Text != "TestParse fails: it expected 3." || got.Excerpt {
+	if got.Failure != "" || got.Who != "c/good@reasoning=low" || got.Text != "TestParse fails: it expected 3." {
 		t.Fatalf("summary %+v", got)
 	}
-	if !slices.Equal(got.Ranges, [][2]int{{118, 125}, {121, 121}}) || len(got.Evidence) != 2 || got.Dropped != 3 || got.Usage.Requests != 3 {
+	if !slices.Equal(got.Ranges, [][2]int{{118, 125}, {121, 121}}) || got.Dropped != 2 || got.Usage.Requests != 3 {
 		t.Fatalf("checked %+v", got)
 	}
 	first := f.requests[0]
@@ -161,7 +159,7 @@ func TestASummaryFallsThroughTheListAndKeepsOnlyWhatTheLogBearsOut(t *testing.T)
 	messages := first["messages"].([]any)
 	system, user := messages[0].(map[string]any)["content"].(string), messages[1].(map[string]any)["content"].(string)
 	if !strings.Contains(system, "find the failure") || !strings.Contains(system, "Exit status (from the shell, always true): 1") ||
-		!strings.Contains(system, "300 lines") || strings.Contains(system, "Only an excerpt") || !strings.HasPrefix(user, "1: ok step 1\n") ||
+		!strings.Contains(system, "300 lines") || !strings.Contains(system, "Only an excerpt") || !strings.HasPrefix(user, "1: ok step 1\n2: ") ||
 		!strings.Contains(user, "\n120: FAIL: TestParse") {
 		t.Fatalf("prompt %q\ninput %q", system, user[:60])
 	}
@@ -173,26 +171,21 @@ func TestASummaryFallsThroughTheListAndKeepsOnlyWhatTheLogBearsOut(t *testing.T)
 	}
 }
 
-func TestAnExcerptIsReadPastTheWholeLimitAndAnswersAreCached(t *testing.T) {
-	long := strings.Repeat("x", summaryRowChars)
-	log := logOf(WholeChars/summaryRowChars+10, nil)
-	for i := range log {
-		log[i] = long
-	}
-	log[40] = "error: the one that matters"
+func TestASummarizerReadsOnlyTheExcerptAndAnswersAreCached(t *testing.T) {
+	log := logOf(100, map[int]string{41: "error: the one that matters"})
 	f := &chatFake{answer: func(int, map[string]any) (int, string) {
-		return 200, `{"summary": "One error.", "evidence": [{"line": 41, "text": "error: the one that matters"}], "ranges": [[41, 41], [90, 95]]}`
+		return 200, `{"summary": "One error.", "ranges": [[41, 41], [90, 95]]}`
 	}}
 	server := f.serve(t)
 	cache := t.TempDir()
 	in := SummaryInput{Command: "build", Exit: 2, Log: log, Excerpt: []int{1, 2, 40, 41, 42}}
 	got := summarizerFor(t, server, "v/m", cache).Summarize(context.Background(), in)
 	// The range outside the excerpt is dropped, since the model never read those lines.
-	if got.Failure != "" || !got.Excerpt || !slices.Equal(got.Ranges, [][2]int{{41, 41}}) || got.Dropped != 1 {
+	if got.Failure != "" || !slices.Equal(got.Ranges, [][2]int{{41, 41}}) || got.Dropped != 1 {
 		t.Fatalf("summary %+v", got)
 	}
 	messages := f.requests[0]["messages"].([]any)
-	if user := messages[1].(map[string]any)["content"].(string); user != fmt.Sprintf("1: %s\n2: %s\n[lines left out]\n40: %s\n41: %s\n42: %s\n", long, long, long, log[40], long) ||
+	if user := messages[1].(map[string]any)["content"].(string); user != fmt.Sprintf("1: %s\n2: %s\n[lines left out]\n40: %s\n41: %s\n42: %s\n", log[0], log[1], log[39], log[40], log[41]) ||
 		!strings.Contains(messages[0].(map[string]any)["content"].(string), "Only an excerpt is shown") {
 		t.Fatalf("excerpt input %q", user)
 	}
@@ -204,7 +197,7 @@ func TestAnExcerptIsReadPastTheWholeLimitAndAnswersAreCached(t *testing.T) {
 }
 
 func TestClaudePRunsOnTheLoginWithNothingOfTheProjectLoaded(t *testing.T) {
-	record := fakeClaude(t, `{"summary": "It hangs.", "evidence": [{"line": 2, "text": "waiting on lock"}], "ranges": [[2, 2]]}`, 0)
+	record := fakeClaude(t, `{"summary": "It hangs.", "ranges": [[2, 2]]}`, 0)
 	entries, _ := parseSummary("claude-p:haiku")
 	s := Config{Summary: entries, SummaryTimeout: 5 * time.Second}.Summarizer()
 	in := SummaryInput{Command: "serve", TimedOut: true, Log: []string{"start", "waiting on lock", "tick"}, Excerpt: []int{1, 2, 3}}

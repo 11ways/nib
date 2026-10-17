@@ -1,0 +1,1 @@
+"{\"summary\": \"bun install failed with exit 1 because the package diff-sequences-nonexistent-pkg-zz@^1.0.0 could not be resolved: its registry request returned 404 Not Found. All other manifests resolved (304 Not Modified) and the run reported 'Resolved, downloaded and extracted [101]' before the two error lines.\", \"ranges\": [[2647, 2654], [178, 185], [1186, 1201]]}"

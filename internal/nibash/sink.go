@@ -27,8 +27,8 @@ const (
 	decidedHead = 30
 	decidedTail = 100
 	pickContext = 3
-	// A summarizer that does not read the whole output reads its first excerptHead and last excerptTail log lines and the decider's picks
-	// scored excerptScore or more, each widened by excerptContext lines, up to excerptLines lines in all.
+	// A summarizer reads the first excerptHead and last excerptTail log lines and the decider's picks scored excerptScore or more, each
+	// widened by excerptContext lines, up to excerptLines lines in all.
 	excerptHead    = 30
 	excerptTail    = 100
 	excerptScore   = 0.3

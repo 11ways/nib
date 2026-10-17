@@ -21,33 +21,55 @@ func purpose(description string) string {
 
 // shape cuts over-budget rows: the configured decider chooses the middle of plain output, and the fixed cut serves the rest, file rows
 // included, since what nib's own commands show is file content the model asked for and counts as seen for edits. With a summarizer, a
-// checked summary and the lines it points at take the place of the decider's cut; raw is the log's text.
+// checked summary and the lines it points at take the place of the decider's cut; raw is the log's text. An output that fits excerptLines
+// goes to the summarizer whole, with no decider asked unless the summary fails; a longer one goes as the excerpt of the decider's picks.
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
 	if len(rows) <= headRows+tailRows || d.decider == nil || slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) {
 		return fixedCut(rows, log, "")
 	}
-	middle := rows[decidedHead : len(rows)-decidedTail]
-	texts := make([]string, len(middle))
-	for i, r := range middle {
-		texts[i] = r.text
-	}
-	choice := d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
-	var notes []string
-	// A summary is not asked for where the decider judged that every line counts, nor for a run that succeeded with no purpose to serve.
-	if d.summarizer != nil && !(choice.Judged && choice.Whole >= decider.WholeThreshold) && (d.purpose != "" || d.exit != 0 || d.timedOut) {
-		lines := plainLines([]byte(raw))
-		s := d.summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
-			Excerpt: excerpt(rows, choice, len(lines))})
-		if s.Failure == "" {
-			return summarized(rows, s, log)
+	decide := func() decider.Choice {
+		middle := rows[decidedHead : len(rows)-decidedTail]
+		texts := make([]string, len(middle))
+		for i, r := range middle {
+			texts[i] = r.text
 		}
-		notes = append(notes, "no summary")
+		return d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
 	}
-	return assemble(rows, choice, log, d, notes...)
+	// A summary is not asked for a run that succeeded with no purpose to serve, nor where the decider judged that every line counts.
+	if d.summarizer == nil || d.purpose == "" && d.exit == 0 && !d.timedOut {
+		return assemble(rows, decide(), log, d)
+	}
+	lines := plainLines([]byte(raw))
+	ask := func(shown []int) bool {
+		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines, Excerpt: shown}
+		s := d.summarizer.Summarize(ctx, in)
+		if s.Failure == "" {
+			rows = summarized(rows, s, log)
+		}
+		return s.Failure == ""
+	}
+	if len(lines) <= excerptLines {
+		all := make([]int, len(lines))
+		for i := range all {
+			all[i] = i + 1
+		}
+		if ask(all) {
+			return rows
+		}
+		return assemble(rows, decide(), log, d, "no summary")
+	}
+	choice := decide()
+	if choice.Judged && choice.Whole >= decider.WholeThreshold {
+		return assemble(rows, choice, log, d)
+	}
+	if ask(excerpt(rows, choice, len(lines))) {
+		return rows
+	}
+	return assemble(rows, choice, log, d, "no summary")
 }
 
-// excerpt is the log lines a summarizer reads when it does not read the whole output: the start and end a decider keeps, and the passages it
-// picked, best first and widened by excerptContext lines, while they fit excerptLines.
+// excerpt is the log lines a summarizer reads: the start and end a decider keeps, and the passages it picked, best first and widened by
+// excerptContext lines, while they fit excerptLines.
 func excerpt(rows []row, choice decider.Choice, lines int) []int {
 	keep := map[int]bool{}
 	for n := 1; n <= min(excerptHead, lines); n++ {
@@ -121,14 +143,7 @@ func summarized(rows []row, s decider.Summary, log saved) []row {
 		shown += len(add)
 	}
 	out := append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep)...)
-	read := "quotes checked against the log"
-	if s.Excerpt {
-		read = "summary of an excerpt; " + read
-	}
-	clauses := []string{read}
-	if s.Dropped > 0 {
-		clauses = append(clauses, fmt.Sprintf("%d named lines or ranges not in the log dropped", s.Dropped))
-	}
+	var clauses []string
 	if len(rest) > 0 {
 		var parts []string
 		for _, r := range rest {
