@@ -14,6 +14,9 @@ const namedHeader = "Named directories: ~name/ paths work in every tool and, unq
 // namedHint closes what an agent is told of named directories when nibash is offered, also when there are none yet.
 const namedHint = "Name a directory you will use again with hash -d name=dir in nibash: ~name/ then works in every tool, for you and the subagents you start."
 
+// providersLine tells an agent that the hosted providers' tools print code as nib's own rows; %s lists their NAME_* patterns.
+const providersLine = "Tools named %s are hosted by nib: code they show prints as [PATH#TAG] and LINE:TEXT rows, like read's, that edit can anchor on."
+
 // Schemas are lean: nib reads and checks arguments itself, so they only tell the model what to send.
 const readSchema = `{"type":"object","properties":{"paths":{"description":"Required: files or directories, each optionally with a :selector, or path#TAG","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"maxLineLength":{"description":"Default 2000","type":"integer"},"plain":{"description":"For logs and files you will not edit: no numbers or tags, color codes stripped, long lines shortened, repeats collapsed; any size","type":"boolean"},"collapse":{"description":"Plain only: false keeps repeated lines","type":"boolean"},"info":{"description":"One line of facts per file (tag, lines, size, line endings, age) instead of its content","type":"boolean"}}}`
 

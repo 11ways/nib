@@ -42,6 +42,7 @@ gofmt -l .      # must print nothing
 | `internal/js/` | JavaScript string semantics (UTF-16 lengths and offsets, JS whitespace) that nib's output rules were defined with |
 | `internal/setup/`, `internal/hook/`, `internal/hookstate/` | `nib setup` (server, approval, hook matchers, deny rules; order-preserving JSON); the hook for the built-in `Read` and for nib's own tools, which reads a subagent's parent from Claude Code's meta file and its spawn moment from the parent's transcript; the hook's private state, the per-call agent records it hands the server and the spawn moments it found |
 | `internal/opencode/` | read-only lookups in OpenCode 2's sqlite database, found by OpenCode's own environment: a session's parent, whether it is a fork, and its spawn moment |
+| `internal/providers/` | hosted providers (`--provider NAME=PROGRAM`): starting `PROGRAM nib-provider`, listing and calling its tools, starting it again after it ended, and reading its answers into prose and locations (`docs/design-providers.md`); `providertest` is a fake provider for tests |
 | `test/` | `engine`, `patch` and `server` suites against the binary (`support/engine.ts` gives them the engine's interface over MCP), and the `bench` tests |
 | `bench/` | benchmark: tasks and checks, fixture (nib at a pinned commit plus generated files), Claude Code and OpenCode runners, cached run store, HTML report |
 

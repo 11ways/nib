@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/11ways/nib/internal/hook"
+	"github.com/11ways/nib/internal/providers"
 )
 
 // Options configure a setup run; Home, Env and Claude stand in for the real ones in tests.
@@ -28,8 +29,11 @@ type Options struct {
 	User    bool
 	DryRun  bool
 	Command []string
-	Home    string
-	Env     func(string) string
+	// Providers are the --provider changes: a program for nib to host under a name, or none to stop hosting it; what an entry hosts
+	// already stays.
+	Providers []providers.Spec
+	Home      string
+	Env       func(string) string
 	// Claude runs `claude` with arguments in dir ("" for the current one), for the MCP registrations Claude Code's own CLI makes; nil when it
 	// is not installed.
 	Claude func(dir string, args []string) (int, string)
@@ -121,15 +125,23 @@ func program(server object) (words []string, local bool) {
 // program that is gone, such as Bun running an older nib's main.ts; ok is false for an entry that starts command, by any path to it.
 func staleProgram(server object, command []string) (old []string, ok bool) {
 	words, local := program(server)
-	if !local || slices.Equal(words, command) {
+	if !local {
 		return nil, false
 	}
+	return words, differs(words, command)
+}
+
+// differs is true when words do not start command, by any path to its program.
+func differs(words, command []string) bool {
+	if slices.Equal(words, command) {
+		return false
+	}
 	if len(words) != len(command) || !slices.Equal(words[1:], command[1:]) {
-		return words, true
+		return true
 	}
 	found, err := resolve(words[0])
 	want, wantErr := resolve(command[0])
-	return words, err != nil || wantErr != nil || found != want
+	return err != nil || wantErr != nil || found != want
 }
 
 func resolve(program string) (string, error) {
@@ -147,24 +159,35 @@ func described(words []string) string {
 	return shellLine(words)
 }
 
-// repoint points a local nib server entry that does not start command (see staleProgram) at it, keeping its other keys; list is OpenCode's
+// repoint points a local nib server entry at command, hosting what it hosts with changes applied, keeping its other keys; list is OpenCode's
 // form, a command list without args.
-func repoint(server object, command []string, list bool) []change {
-	old, ok := staleProgram(server, command)
+func repoint(server object, command []string, changes []providers.Spec, list bool) []change {
+	words, _ := program(server)
+	want := wanted(command, words, changes)
+	old, ok := staleProgram(server, want)
 	if !ok {
 		return nil
 	}
 	if list {
-		server.set("command", toAny(command))
+		server.set("command", toAny(want))
 	} else {
-		server.set("command", command[0])
-		server.set("args", toAny(command[1:]))
+		server.set("command", want[0])
+		server.set("args", toAny(want[1:]))
 	}
-	return adds("nib's command, replacing a stale one (" + described(old) + ")")
+	return adds(repointed(old, command, want))
 }
 
-// registrations are the nib servers in Claude Code's own file: the user's, nil when there is none, and the local-scope ones by project folder.
-func registrations(file string) (user object, projects map[string]object) {
+// repointed says what repointing an entry from old to want does: replace a stale command, or change what it hosts.
+func repointed(old, command, want []string) string {
+	if rest, _ := split(old); differs(rest, command) {
+		return "nib's command, replacing a stale one (" + described(old) + ")"
+	}
+	return "nib's command, hosting " + hostingText(want) + " instead of " + hostingText(old)
+}
+
+// registrations are the servers named name in Claude Code's own file: the user's, nil when there is none, and the local-scope ones by
+// project folder.
+func registrations(file, name string) (user object, projects map[string]object) {
 	projects = map[string]object{}
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -185,7 +208,7 @@ func registrations(file string) (user object, projects map[string]object) {
 		if serversObject == nil {
 			return nil
 		}
-		server, _ := serversObject.get("nib")
+		server, _ := serversObject.get(name)
 		found, _ := server.(object)
 		return found
 	}
@@ -281,21 +304,24 @@ func listAt(json object, key, where string) ([]any, error) {
 	return found, nil
 }
 
-// addServer adds nib to an MCP config's servers, or points a nib entry that does not start command at it (see repoint).
-func addServer(json object, key string, command []string) ([]change, error) {
+// addServer adds nib to an MCP config's servers, or points a nib entry at command (see repoint), and takes out the entries of the providers
+// nib now hosts.
+func addServer(json object, key string, command []string, changes []providers.Spec) ([]change, error) {
 	servers, err := objectAt(json, key)
 	if err != nil {
 		return nil, err
 	}
+	removed := removeHosted(servers, changes)
 	if current, ok := servers.get("nib"); ok {
 		if server, ok := current.(object); ok {
-			return repoint(server, command, false), nil
+			return append(repoint(server, command, changes, false), removed...), nil
 		}
-		return nil, nil
+		return removed, nil
 	}
-	servers.set("nib", obj("type", "stdio", "command", command[0], "args", toAny(command[1:])))
+	want := wanted(command, nil, changes)
+	servers.set("nib", obj("type", "stdio", "command", want[0], "args", toAny(want[1:])))
 	json.set(key, servers)
-	return adds("the nib MCP server"), nil
+	return append(adds("the nib MCP server"), removed...), nil
 }
 
 // plainMatcher is a PreToolUse matcher Claude Code (2.1.301) compares as names separated by | or commas, rather than as a regular expression.
@@ -501,7 +527,7 @@ func denyOpencode(json object, notes *[]string) ([]change, error) {
 
 // addOpencodeServer adds nib to OpenCode 2's MCP servers, outside code mode, where OpenCode would otherwise offer its tools only inside code
 // mode scripts. A nib entry in OpenCode 1's form, as an older setup wrote it, moves there; one that does not start command is pointed at it.
-func addOpencodeServer(command []string) func(object, *[]string) ([]change, error) {
+func addOpencodeServer(command []string, changes []providers.Spec) func(object, *[]string) ([]change, error) {
 	return func(json object, notes *[]string) ([]change, error) {
 		mcp, err := objectAt(json, "mcp")
 		if err != nil {
@@ -511,6 +537,7 @@ func addOpencodeServer(command []string) func(object, *[]string) ([]change, erro
 		if err != nil {
 			return nil, fmt.Errorf(`its "mcp.servers" is not an object`)
 		}
+		removed := removeHosted(servers, changes)
 		legacy, hasLegacy := mcp.get("nib")
 		if current, ok := servers.get("nib"); ok {
 			if hasLegacy {
@@ -518,35 +545,35 @@ func addOpencodeServer(command []string) func(object, *[]string) ([]change, erro
 			}
 			server, ok := current.(object)
 			if !ok {
-				return nil, nil
+				return removed, nil
 			}
-			changes := repoint(server, command, true)
+			changed := append(repoint(server, command, changes, true), removed...)
 			if codemode, set := server.get("codemode"); set {
 				if codemode != false {
 					*notes = append(*notes, "codemode is set for nib there, so OpenCode offers nib's tools as configured")
 				}
-				return changes, nil
+				return changed, nil
 			}
 			server.set("codemode", false)
-			return append(changes, adds("code mode off for the nib MCP server")...), nil
+			return append(changed, adds("code mode off for the nib MCP server")...), nil
 		}
-		server := obj("type", "local", "command", toAny(command), "codemode", false)
-		changes := adds("the nib MCP server")
+		server := obj("type", "local", "command", toAny(wanted(command, nil, changes)), "codemode", false)
+		done := adds("the nib MCP server")
 		if hasLegacy {
 			migrated, ok := migrateServer(legacy)
 			if !ok {
 				*notes = append(*notes, "its mcp.nib is not a local server in OpenCode 1's form, so it stays as it is")
-				return nil, nil
+				return removed, nil
 			}
 			mcp.remove("nib")
 			server = migrated
-			changes = []change{{what: "the nib MCP server in OpenCode 2's form, outside code mode"}, {what: "its OpenCode 1 form (mcp.nib)", removed: true}}
-			changes = append(changes, repoint(server, command, true)...)
+			done = []change{{what: "the nib MCP server in OpenCode 2's form, outside code mode"}, {what: "its OpenCode 1 form (mcp.nib)", removed: true}}
+			done = append(done, repoint(server, command, changes, true)...)
 		}
 		servers.set("nib", server)
 		mcp.set("servers", servers)
 		json.set("mcp", mcp)
-		return changes, nil
+		return append(done, removed...), nil
 	}
 }
 
@@ -698,7 +725,7 @@ func Setup(options Options) []string {
 			return changes, nil
 		}
 	}
-	opencodeStep := all(addOpencodeServer(command), denyOpencode)
+	opencodeStep := all(addOpencodeServer(command, options.Providers), denyOpencode)
 	hookStep := func(json object, _ *[]string) ([]change, error) { return addHook(json, command) }
 	denyStep := func(json object, _ *[]string) ([]change, error) { return deny(json) }
 	// Claude Code keeps user-scope servers, and local-scope ones by project folder, in a file it rewrites while it runs: setup only reads it,
@@ -707,17 +734,19 @@ func Setup(options Options) []string {
 	if dir := env("CLAUDE_CONFIG_DIR"); dir != "" {
 		registry = filepath.Join(dir, ".claude.json")
 	}
-	user, projects := registrations(registry)
+	user, projects := registrations(registry, "nib")
 	claude := options.Claude
 	if claude == nil {
 		if _, err := exec.LookPath("claude"); err == nil {
 			claude = runClaude
 		}
 	}
-	// replace re-registers a nib entry at its scope, pointed at command, with its other keys (alwaysLoad, env) kept; dir is a local scope's
-	// project folder, the one Claude Code's CLI must run in.
+	// replace re-registers a nib entry at its scope, pointed at command and hosting what the changes ask, with its other keys (alwaysLoad,
+	// env) kept; dir is a local scope's project folder, the one Claude Code's CLI must run in.
 	replace := func(scope, dir string, server object) {
-		old, ok := staleProgram(server, command)
+		words, _ := program(server)
+		want := wanted(command, words, options.Providers)
+		old, ok := staleProgram(server, want)
 		if !ok {
 			return
 		}
@@ -725,35 +754,69 @@ func Setup(options Options) []string {
 		if dir != "" {
 			where, cd = "in "+tilde(dir), "cd "+quote(dir)+" && "
 		}
-		stale := fmt.Sprintf("the stale nib registration %s (%s)", where, described(old))
-		repoint(server, command, false)
+		what := fmt.Sprintf("the stale nib registration %s (%s)", where, described(old))
+		if rest, _ := split(old); !differs(rest, command) {
+			what = fmt.Sprintf("the nib registration %s, to host %s instead of %s", where, hostingText(want), hostingText(old))
+		}
+		repoint(server, command, options.Providers, false)
 		remove := []string{"mcp", "remove", "--scope", scope, "nib"}
 		add := []string{"mcp", "add-json", "--scope", scope, "nib", compact(server)}
 		switch {
 		case claude == nil:
-			report = append(report, fmt.Sprintf("claude is not on PATH; replace %s with: %sclaude %s && claude %s", stale, cd, shellLine(remove), shellLine(add)))
+			report = append(report, fmt.Sprintf("claude is not on PATH; replace %s with: %sclaude %s && claude %s", what, cd, shellLine(remove), shellLine(add)))
 		case options.DryRun:
-			report = append(report, "claude mcp: would replace "+stale)
+			report = append(report, "claude mcp: would replace "+what)
 		default:
 			if exit, output := claude(dir, remove); exit != 0 {
 				report = append(report, fmt.Sprintf("claude mcp remove failed %s: %s", where, strings.TrimSpace(output)))
 			} else if exit, output := claude(dir, add); exit != 0 {
-				report = append(report, fmt.Sprintf("claude mcp add-json failed %s after the stale registration (%s) was removed, so nib is not registered there now: %s", where, described(old), strings.TrimSpace(output)))
+				report = append(report, fmt.Sprintf("claude mcp add-json failed %s after the old registration (%s) was removed, so nib is not registered there now: %s", where, described(old), strings.TrimSpace(output)))
 			} else {
-				report = append(report, "claude mcp: replaced "+stale)
+				report = append(report, "claude mcp: replaced "+what)
 			}
 		}
 	}
 	// A local-scope registration wins over every other in its folder; one for a folder that is gone shadows nothing, and Claude Code's CLI
 	// cannot run there to remove it.
+	exists := func(dir string) bool {
+		info, err := os.Stat(dir)
+		return err == nil && info.IsDir()
+	}
 	replaceLocal := func(dir string) {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		if exists(dir) {
 			replace("local", dir, projects[dir])
+		}
+	}
+	// unregister removes a registration of a provider nib now hosts, so Claude Code does not run it beside nib.
+	unregister := func(name, scope, dir string) {
+		where, cd := "for this user", ""
+		if dir != "" {
+			where, cd = "in "+tilde(dir), "cd "+quote(dir)+" && "
+		}
+		remove := []string{"mcp", "remove", "--scope", scope, name}
+		what := fmt.Sprintf("the %s registration %s, now hosted by nib", name, where)
+		switch {
+		case claude == nil:
+			report = append(report, fmt.Sprintf("claude is not on PATH; remove %s with: %sclaude %s", what, cd, shellLine(remove)))
+		case options.DryRun:
+			report = append(report, "claude mcp: would remove "+what)
+		default:
+			if exit, output := claude(dir, remove); exit != 0 {
+				report = append(report, fmt.Sprintf("claude mcp remove failed %s: %s", where, strings.TrimSpace(output)))
+			} else {
+				report = append(report, "claude mcp: removed "+what)
+			}
+		}
+	}
+	var hosted []string
+	for _, c := range options.Providers {
+		if c.Program != "" && c.Name != "nib" {
+			hosted = append(hosted, c.Name)
 		}
 	}
 	if !options.User {
 		configure(filepath.Join(options.Directory, ".mcp.json"), func(json object, _ *[]string) ([]change, error) {
-			return addServer(json, "mcpServers", command)
+			return addServer(json, "mcpServers", command, options.Providers)
 		})
 		configure(filepath.Join(options.Directory, ".claude", "settings.local.json"), all(approve, hookStep, denyStep))
 		opencode := filepath.Join(options.Directory, "opencode.json")
@@ -762,6 +825,15 @@ func Setup(options Options) []string {
 		}
 		if projects[options.Directory] != nil {
 			replaceLocal(options.Directory)
+		}
+		for _, name := range hosted {
+			userServer, local := registrations(registry, name)
+			if local[options.Directory] != nil && exists(options.Directory) {
+				unregister(name, "local", options.Directory)
+			}
+			if userServer != nil {
+				report = append(report, fmt.Sprintf("claude mcp: %s is also registered for this user, so Claude Code runs it beside nib here; nib setup --user --provider ... removes it", name))
+			}
 		}
 		return report
 	}
@@ -772,17 +844,18 @@ func Setup(options Options) []string {
 	configure(filepath.Join(config, "settings.json"), all(hookStep, denyStep))
 	switch {
 	case user != nil:
-		if _, stale := staleProgram(user, command); stale {
+		userWords, _ := program(user)
+		if _, stale := staleProgram(user, wanted(command, userWords, options.Providers)); stale {
 			replace("user", "", user)
 		} else {
 			report = append(report, "claude mcp: nib is already registered for this user")
 		}
 	case claude == nil:
-		report = append(report, "claude is not on PATH; register the server with: claude mcp add --scope user nib -- "+shellLine(command))
+		report = append(report, "claude is not on PATH; register the server with: claude mcp add --scope user nib -- "+shellLine(wanted(command, nil, options.Providers)))
 	case options.DryRun:
 		report = append(report, "claude mcp: would add nib for this user")
 	default:
-		exit, output := claude("", append([]string{"mcp", "add", "--scope", "user", "nib", "--"}, command...))
+		exit, output := claude("", append([]string{"mcp", "add", "--scope", "user", "nib", "--"}, wanted(command, nil, options.Providers)...))
 		if exit == 0 {
 			report = append(report, "claude mcp: added nib for this user")
 		} else {
@@ -791,6 +864,17 @@ func Setup(options Options) []string {
 	}
 	for _, dir := range slices.Sorted(maps.Keys(projects)) {
 		replaceLocal(dir)
+	}
+	for _, name := range hosted {
+		userServer, local := registrations(registry, name)
+		if userServer != nil {
+			unregister(name, "user", "")
+		}
+		for _, dir := range slices.Sorted(maps.Keys(local)) {
+			if exists(dir) {
+				unregister(name, "local", dir)
+			}
+		}
 	}
 	// OpenCode 2 reads its user config from OPENCODE_CONFIG_DIR when set, else from its folder in the XDG config home.
 	folder := env("OPENCODE_CONFIG_DIR")
@@ -891,22 +975,43 @@ func runClaude(dir string, args []string) (int, string) {
 	return 0, string(output)
 }
 
-var usage = `Usage: nib setup [--user] [--dry-run]
+var usage = `Usage: nib setup [--user] [--dry-run] [--provider NAME=PROGRAM]...
 Registers nib in this folder: the MCP server in .mcp.json; its approval, its Claude Code hook and deny rules for the built-in tools nib replaces
 (` + strings.Join(ClaudeDenied, ", ") + `) in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
-tools Claude Code no longer has (` + strings.Join(ClaudeUndenied, ", ") + `) are removed.`
+tools Claude Code no longer has (` + strings.Join(ClaudeUndenied, ", ") + `) are removed.
+--provider NAME=PROGRAM makes nib host PROGRAM's tools as NAME_TOOL (see nib --help) and removes the NAME server entries and registrations
+it replaces, in this folder or, with --user, for this user; NAME= stops hosting it. The providers an entry hosts already stay.`
 
 // Main is `nib setup` from the command line; it returns the exit code.
 func Main(args []string) int {
 	user, dryRun := false, false
-	for _, arg := range args {
-		switch arg {
-		case "--user":
+	var changes []providers.Spec
+	directory, _ := os.Getwd()
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value, isProvider := strings.CutPrefix(arg, providerFlag+"=")
+		if arg == providerFlag && i+1 < len(args) {
+			i++
+			value, isProvider = args[i], true
+		}
+		switch {
+		case isProvider:
+			change, err := ParseChange(value)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n%s\n", err, usage)
+				return 2
+			}
+			// A path relative to here would mean another file to a nib started elsewhere; a bare name is looked up on PATH when nib starts.
+			if strings.Contains(change.Program, "/") && !filepath.IsAbs(change.Program) {
+				change.Program = filepath.Join(directory, change.Program)
+			}
+			changes = append(changes, change)
+		case arg == "--user":
 			user = true
-		case "--dry-run":
+		case arg == "--dry-run":
 			dryRun = true
-		case "--help", "-h":
+		case arg == "--help" || arg == "-h":
 			fmt.Println(usage)
 			return 0
 		default:
@@ -914,8 +1019,7 @@ func Main(args []string) int {
 			return 2
 		}
 	}
-	directory, _ := os.Getwd()
-	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun}) {
+	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun, Providers: changes}) {
 		fmt.Println(line)
 	}
 	return 0

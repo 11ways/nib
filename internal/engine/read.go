@@ -710,93 +710,108 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 			blocks = append(blocks, noteBlock("["+absent[len(absent)-1]+"]"))
 			continue
 		}
-		b, err := serialized(t.canonical, ctx, func() (*block, error) {
-			return inParent(t, func(p *parent) (*block, error) {
-				file, err := os.OpenFile(p.location, os.O_RDONLY|syscall.O_NOFOLLOW|nonblock, 0)
-				if err != nil {
-					return nil, err
-				}
-				defer file.Close()
-				if err := checkDescriptor(file, p.location, t.canonical); err != nil {
-					return nil, err
-				}
-				info, err := file.Stat()
-				if err != nil {
-					return nil, err
-				}
-				if info.IsDir() {
-					if args.Info {
-						return directoryFacts(file, t.display)
-					}
-					return listDirectory(file, t.display)
-				}
-				if args.Info {
-					return e.facts(ctx, t, file)
-				}
-				// Images and PDFs fall through to the usual handling, since plain only changes how text lines print.
-				if args.Plain {
-					collapse := args.Collapse == nil || *args.Collapse
-					plain, err := e.plainBlock(ctx, t, file, sel, maxLineLength, collapse)
-					if err != nil || plain != nil {
-						return plain, err
-					}
-				}
-				// A file too big to hold as text is noted rather than failing the call, so the other files of a read still come back.
-				tooBig := func(size int64) *block {
-					return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the 2 MiB text limit. Read it with plain: true (a range like %s:-200 works too), or grep it.", t.display, float64(size)/1048576, t.display))
-				}
-				if info.Size() > MediaLimit {
-					return tooBig(info.Size()), nil
-				}
-				current, err := snapshot(file, MediaLimit)
-				if err != nil {
-					return nil, err
-				}
-				if err := p.check(); err != nil {
-					return nil, err
-				}
-				if err := checkDescriptor(file, p.location, t.canonical); err != nil {
-					return nil, err
-				}
-				if err := ctx.checkAbort(); err != nil {
-					return nil, err
-				}
-				attachment := mime(current.bytes)
-				if attachment == "application/pdf" {
-					return noteBlock(t.display + ": PDF is not supported here; use the built-in Read tool"), nil
-				}
-				if attachment != "" {
-					images = append(images, Image{Data: current.bytes, MimeType: attachment})
-					return noteBlock(fmt.Sprintf("%s: %s image attached", t.display, attachment)), nil
-				}
-				if len(current.bytes) > TextLimit {
-					return tooBig(int64(len(current.bytes))), nil
-				}
-				source, err := decodeText(current.bytes)
-				if err != nil {
-					return nil, err
-				}
-				if since != "" {
-					return e.sinceBlock(ctx, t, source, since, maxLineLength), nil
-				}
-				return e.textBlock(ctx, t, source, sel, maxLineLength, args.MaxLineLength != nil)
-			})
-		})
+		b, err := e.entryBlock(ctx, t, sel, since, args, maxLineLength, &images)
 		if err != nil {
 			return Result{}, err
 		}
 		blocks = append(blocks, b)
 	}
+	budget := OutputLimit
+	if single && maxLineLength > LineLimit {
+		budget = TextLimit + 1024
+	}
+	parts := fill(blocks, budget)
+	if len(absent) == len(args.Paths) {
+		return Result{}, errors.New(strings.Join(absent, "; "))
+	}
+	return Result{Text: strings.Join(append(caps, parts...), "\n\n"), Images: images}, nil
+}
+
+// entryBlock is read's block for one resolved path: a listing, facts, plain lines, an image note, changes since a tag, or rows.
+func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string, args ReadArgs, maxLineLength int, images *[]Image) (*block, error) {
+	return serialized(t.canonical, ctx, func() (*block, error) {
+		return inParent(t, func(p *parent) (*block, error) {
+			file, err := os.OpenFile(p.location, os.O_RDONLY|syscall.O_NOFOLLOW|nonblock, 0)
+			if err != nil {
+				return nil, err
+			}
+			defer file.Close()
+			if err := checkDescriptor(file, p.location, t.canonical); err != nil {
+				return nil, err
+			}
+			info, err := file.Stat()
+			if err != nil {
+				return nil, err
+			}
+			if info.IsDir() {
+				if args.Info {
+					return directoryFacts(file, t.display)
+				}
+				return listDirectory(file, t.display)
+			}
+			if args.Info {
+				return e.facts(ctx, t, file)
+			}
+			// Images and PDFs fall through to the usual handling, since plain only changes how text lines print.
+			if args.Plain {
+				collapse := args.Collapse == nil || *args.Collapse
+				plain, err := e.plainBlock(ctx, t, file, sel, maxLineLength, collapse)
+				if err != nil || plain != nil {
+					return plain, err
+				}
+			}
+			// A file too big to hold as text is noted rather than failing the call, so the other files of a read still come back.
+			tooBig := func(size int64) *block {
+				return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the 2 MiB text limit. Read it with plain: true (a range like %s:-200 works too), or grep it.", t.display, float64(size)/1048576, t.display))
+			}
+			if info.Size() > MediaLimit {
+				return tooBig(info.Size()), nil
+			}
+			current, err := snapshot(file, MediaLimit)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.check(); err != nil {
+				return nil, err
+			}
+			if err := checkDescriptor(file, p.location, t.canonical); err != nil {
+				return nil, err
+			}
+			if err := ctx.checkAbort(); err != nil {
+				return nil, err
+			}
+			attachment := mime(current.bytes)
+			if attachment == "application/pdf" {
+				return noteBlock(t.display + ": PDF is not supported here; use the built-in Read tool"), nil
+			}
+			if attachment != "" {
+				*images = append(*images, Image{Data: current.bytes, MimeType: attachment})
+				return noteBlock(fmt.Sprintf("%s: %s image attached", t.display, attachment)), nil
+			}
+			if len(current.bytes) > TextLimit {
+				return tooBig(int64(len(current.bytes))), nil
+			}
+			source, err := decodeText(current.bytes)
+			if err != nil {
+				return nil, err
+			}
+			if since != "" {
+				return e.sinceBlock(ctx, t, source, since, maxLineLength), nil
+			}
+			return e.textBlock(ctx, t, source, sel, maxLineLength, args.MaxLineLength != nil)
+		})
+	})
+}
+
+// fill prints blocks within budget, shared so small blocks show whole and large ones split the rest; a block's head and footer always print,
+// and an empty head none.
+func fill(blocks []*block, budget int) []string {
 	size := func(text string) int { return len(text) + 1 }
 	demands := make([]int, len(blocks))
 	for i, b := range blocks {
 		for _, r := range b.rows {
 			demands[i] += size(r.text)
 		}
-	}
-	budget := OutputLimit
-	if single && maxLineLength > LineLimit {
-		budget = TextLimit + 1024
 	}
 	shares := allocate(demands, budget)
 	parts := make([]string, len(blocks))
@@ -807,17 +822,17 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 			left -= size(b.rows[shown].text)
 			shown++
 		}
-		lines := []string{b.head}
+		var lines []string
+		if b.head != "" {
+			lines = append(lines, b.head)
+		}
 		for _, r := range b.rows[:shown] {
 			lines = append(lines, r.text)
 		}
 		lines = append(lines, b.finish(shown)...)
 		parts[index] = strings.Join(lines, "\n")
 	}
-	if len(absent) == len(args.Paths) {
-		return Result{}, errors.New(strings.Join(absent, "; "))
-	}
-	return Result{Text: strings.Join(append(caps, parts...), "\n\n"), Images: images}, nil
+	return parts
 }
 
 // facts is one line of facts about a file instead of its content; a file nib can hold as text also gets its tag, recorded with no line seen.

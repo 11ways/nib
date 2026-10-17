@@ -26,6 +26,7 @@ import (
 	"github.com/11ways/nib/internal/hookstate"
 	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/opencode"
+	"github.com/11ways/nib/internal/providers"
 )
 
 // Options configure a server. ConfirmOutsideRoots asks the user through elicitation before writing outside the client's roots; Sandbox refuses
@@ -46,6 +47,8 @@ type Options struct {
 	// Origin is where an OpenCode session comes from, a fork or a subagent's child session, asked once per session, on the first call nib
 	// sees from it; nil, or ok false, starts every session on its own.
 	Origin func(session string) (origin opencode.Origin, ok bool)
+	// Providers are the programs whose tools nib offers as its own, as NAME_TOOL.
+	Providers []*providers.Provider
 }
 
 // Shell is the nibash side of the server; nil offers no shell.
@@ -141,6 +144,13 @@ func Instructions(options Options) string {
 	if options.Shell != nil {
 		text = shellInstructions
 	}
+	if len(options.Providers) > 0 {
+		var names []string
+		for _, p := range options.Providers {
+			names = append(names, p.Name+"_*")
+		}
+		text += "\n" + fmt.Sprintf(providersLine, strings.Join(names, ", "))
+	}
 	shell := options.Shell != nil
 	if options.Names == nil || len(options.Names.Entries) == 0 {
 		return text + named(nil, shell)
@@ -192,6 +202,11 @@ func New(options Options) *Server {
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
 		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
+	}
+	for _, p := range options.Providers {
+		for _, tool := range p.Tools {
+			s.AddTool(&mcp.Tool{Name: p.Name + "_" + tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, Annotations: tool.Annotations}, s.handle(s.hosted(p, tool.Name), false))
+		}
 	}
 	return s
 }
@@ -1037,3 +1052,26 @@ func (s *Server) nibash(ctx *engine.Context, args arguments, notes *[]string, c 
 
 // Engine is the server's engine, which nibash's own commands share.
 func (s *Server) Engine() *engine.Engine { return s.engine }
+
+// hosted is a provider tool's action: the provider answers, and nib shows its prose and prints its locations as read does, or shows its
+// text when nib cannot read the answer.
+func (s *Server) hosted(p *providers.Provider, tool string) action {
+	return func(ctx *engine.Context, args arguments, _ *[]string, _ *call) (engine.Result, error) {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return engine.Result{}, err
+		}
+		result, err := p.Call(ctx.Ctx, tool, raw)
+		if err != nil {
+			return engine.Result{}, err
+		}
+		if result.IsError {
+			return engine.Result{}, errors.New(providers.Text(result))
+		}
+		pieces, ok := providers.Pieces(result)
+		if !ok {
+			pieces = []engine.Piece{{Text: providers.Text(result)}}
+		}
+		return s.engine.Show(ctx, p.Name, pieces)
+	}
+}

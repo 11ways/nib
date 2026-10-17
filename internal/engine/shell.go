@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -114,6 +115,9 @@ func Row(line int, content string, limit int) (text string, anchor bool) {
 	r := lineRow(line, content, limit)
 	return r.text, r.anchor
 }
+
+// RowShaped matches text that reads like an anchor or row-map row, which output nib does not vouch for must never pass as.
+var RowShaped = regexp.MustCompile(`^\*?\d+[:~]`)
 
 // Latest is the newest version of canonical this session holds.
 func (e *Engine) Latest(ctx *Context, canonical string) *snapshots.Version {
