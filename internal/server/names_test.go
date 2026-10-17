@@ -25,18 +25,18 @@ func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 		}
 	}
 	// Six shown paths save more than the note that tells of the name costs.
-	if !strings.HasPrefix(last, "[~widgets/W5.java#") || !strings.HasSuffix(last, "\n\n[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through; ~widgets/ works in every tool and in nibash, for you and the subagents you start]") {
+	if !strings.HasPrefix(last, "[~bewidgets/W5.java#") || !strings.HasSuffix(last, "\n\n[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through; ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]") {
 		t.Fatalf("got:\n%s", last)
 	}
 	// The name works as input, and the note is told once.
-	again := text(c.call(t, readCall("~widgets/W0.java")))
-	if !strings.HasPrefix(again, "[~widgets/W0.java#") || strings.Contains(again, "nib named") {
+	again := text(c.call(t, readCall("~bewidgets/W0.java")))
+	if !strings.HasPrefix(again, "[~bewidgets/W0.java#") || strings.Contains(again, "nib named") {
 		t.Fatalf("got:\n%s", again)
 	}
 	// The next server of this directory has the name from the start, in its instructions.
 	table := &names.Table{Base: directory}
 	table.AddLearned(learned)
-	if got := Instructions(Options{Names: table}); !strings.Contains(got, "\n~widgets = zenit/src/server/java/be/elevenways/widgets") {
+	if got := Instructions(Options{Names: table}); !strings.Contains(got, "\n~bewidgets = zenit/src/server/java/be/elevenways/widgets") {
 		t.Fatalf("instructions: %s", got)
 	}
 }

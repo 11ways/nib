@@ -91,7 +91,7 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 		}
 		names.counts[directory]++
 		count := names.counts[directory]
-		saved := count * (len(prefix) - len(slug(filepath.Base(directory))) - 1)
+		saved := count * (len(prefix) - len(slug(filepath.Base(directory))) - 3)
 		worth := len(prefix) >= autoAtOnce || (count >= autoUses && saved >= len(note("x", prefix, count)))
 		if worth && saved > saving {
 			best, saving = directory, saved
@@ -127,25 +127,33 @@ func slug(folder string) string {
 	return strings.Trim(unslugged.ReplaceAllString(strings.ToLower(folder), "-"), "-")
 }
 
-// autoName is a free name for directory from its last folder, with its parent folder's in front where that one is taken, and a number
-// after where both are; "" when none can be made.
+// meaningless matches a folder whose name says nothing of what it holds: a hash, or a version.
+var meaningless = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8,}|v?[0-9]+(?:\.[0-9]+)*)$`)
+
+// autoName is a free name for directory: the first letters of the two folders above it that say something (a hash or a version does not),
+// outer first, then its own folder, as ~bptypes for bundled-skills/2.1.302/<hash>/plugin-authoring/types; with a number after where that
+// is taken; "" when none can be made.
 func autoName(directory string, table *Table) string {
 	taken := func(name string) bool {
 		return !valid.MatchString(name) || isUser(name) || slices.ContainsFunc(table.Entries, func(e Entry) bool { return e.Name == name })
 	}
 	last := slug(filepath.Base(directory))
-	parent := slug(filepath.Base(filepath.Dir(directory)))
-	candidates := []string{last}
-	if parent != "" {
-		candidates = append(candidates, parent+"-"+last)
+	if last == "" {
+		return ""
 	}
-	for _, candidate := range candidates {
-		if candidate != "" && !taken(candidate) {
-			return candidate
+	initials := ""
+	for above := filepath.Dir(directory); above != filepath.Dir(above) && len(initials) < 2; above = filepath.Dir(above) {
+		folder := slug(filepath.Base(above))
+		if folder != "" && !meaningless.MatchString(filepath.Base(above)) {
+			initials = folder[:1] + initials
 		}
 	}
+	base := initials + last
+	if !taken(base) {
+		return base
+	}
 	for n := 2; n < 100; n++ {
-		if candidate := last + strconv.Itoa(n); last != "" && !taken(candidate) {
+		if candidate := base + strconv.Itoa(n); !taken(candidate) {
 			return candidate
 		}
 	}

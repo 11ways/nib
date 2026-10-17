@@ -126,10 +126,10 @@ func TestAVeryLongPathACommandSpellsIsNamedAtOnce(t *testing.T) {
 	f.names = (&names.Table{Base: f.directory}).For(defined, "s")
 	// A real program's argument, which nib never prints, counts all the same.
 	f.run("/usr/bin/wc -l " + filepath.Join(skill, "api.d.ts"))
-	if notes := defined.Announced("s"); len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~types = ") {
+	if notes := defined.Announced("s"); len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bptypes = ") {
 		t.Fatalf("notes %v", notes)
 	}
-	if got := f.run("cat ~types/api.d.ts"); !strings.Contains(got, "1:export {}") {
+	if got := f.run("cat ~bptypes/api.d.ts"); !strings.Contains(got, "1:export {}") {
 		t.Fatalf("got %s", got)
 	}
 }

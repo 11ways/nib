@@ -32,11 +32,11 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 		t.Fatalf("named too soon: %v", notes)
 	}
 	shown, _ := view.Display(filepath.Join(widgets, "Last.java"))
-	if shown != "~widgets/Last.java" {
+	if shown != "~bewidgets/Last.java" {
 		t.Fatalf("the path that crossed the threshold prints under its new name, got %q", shown)
 	}
 	notes := defined.Announced("main")
-	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through;") {
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through;") {
 		t.Fatalf("notes %v", notes)
 	}
 	if again := defined.Announced("main"); len(again) != 0 {
@@ -49,7 +49,7 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	// The next server of the same directory has it from the start; one of another directory does not.
 	next := &Table{Base: root}
 	next.AddLearned(file)
-	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"widgets", widgets}) {
+	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"bewidgets", widgets}) {
 		t.Fatalf("learned %v", next.Entries)
 	}
 	elsewhere := &Table{Base: filepath.Join(root, "zenit")}
@@ -68,10 +68,10 @@ func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
 	defined := NewDefined()
 	defined.Automatic("", "/elsewhere")
 	view := (&Table{Base: "/elsewhere"}).For(defined, "main")
-	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~types/claude-code.d.ts" {
+	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~bptypes/claude-code.d.ts" {
 		t.Fatalf("got %q", shown)
 	}
-	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, too long to print again; ~types/ works") {
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, too long to print again; ~bptypes/ works") {
 		t.Fatalf("notes %v", notes)
 	}
 }
@@ -85,19 +85,19 @@ func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	if err := os.MkdirAll(short, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	view := (&Table{Base: root, Entries: []Entry{{"widgets", short}}}).For(defined, "main")
+	view := (&Table{Base: root, Entries: []Entry{{"bewidgets", short}}}).For(defined, "main")
 	for i := range 3 * autoUses {
 		view.Display(filepath.Join(root, "src", fmt.Sprintf("f%d", i)))
 	}
 	if notes := defined.Announced("main"); len(notes) != 0 {
 		t.Fatalf("a short prefix got a name: %v", notes)
 	}
-	// A taken name takes its parent folder's in front.
+	// A taken name gets a number after it.
 	widgets := deep(t, root, "widgets")
 	for i := range 8 {
 		view.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
 	}
-	if shown, _ := view.Display(filepath.Join(widgets, "X.java")); shown != "~elevenways-widgets/X.java" {
+	if shown, _ := view.Display(filepath.Join(widgets, "X.java")); shown != "~bewidgets2/X.java" {
 		t.Fatalf("got %q", shown)
 	}
 	defined.Announced("main")
