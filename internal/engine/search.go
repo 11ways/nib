@@ -919,7 +919,7 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 	for _, name := range page {
 		total += len(files[name])
 	}
-	defaultBefore, defaultAfter := 1, 3
+	defaultBefore, defaultAfter := 1, 1
 	if replacing {
 		defaultBefore, defaultAfter = 0, 0
 	}
