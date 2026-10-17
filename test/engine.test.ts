@@ -2464,11 +2464,19 @@ describe("bracket balance after an edit", () => {
     "}",
   ].map((line) => `+${line}`).join("\n")
 
-  test("a closing line left outside a replaced block is named", async () => {
+  test("a closing line left outside a replaced block is taken into the range, with a note", async () => {
     const f = await fixture(code)
     const r = await f.read()
     const result = await f.patch(`[file.txt#${r.tag}]\nPUT 5.=7:\n${rewrite}`)
-    expect(result.text).toEndWith("Warnings:\nBrackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new lines 5-9 have 1 more } than {, counted against the lines they replaced; check them and the lines just outside them.")
+    const lines = code.split("\n")
+    expect(await readFile(f.filePath, "utf8")).toBe([...lines.slice(0, 4), ...rewrite.split("\n").map((line) => line.slice(1)), ...lines.slice(8)].join("\n"))
+    expect(result.text).toEndWith("Warnings:\nThe edit of lines 5-7 replaced lines 5-8: its last new row repeats line 8, which would have stayed below it with the brackets unbalanced, so the range ended one line early.")
+    // The mirror slip: a range that starts one line late, under rows that begin with the line above it.
+    const g = await fixture(code)
+    const s = await g.read()
+    const mirrored = await g.patch(`[file.txt#${s.tag}]\nPUT 6.=8:\n${rewrite}`)
+    expect(await readFile(g.filePath, "utf8")).toBe(await readFile(f.filePath, "utf8"))
+    expect(mirrored.text).toEndWith("Warnings:\nThe edit of lines 6-8 replaced lines 5-8: its first new row repeats line 5, which would have stayed above it with the brackets unbalanced, so the range started one line late.")
   })
 
   test("a stray closer typed into one line is named too", async () => {

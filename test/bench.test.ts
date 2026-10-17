@@ -231,7 +231,11 @@ describe("harness output", () => {
     await writeFile(path.join(directory, "code.ts"), "function f() {\n  return 1\n}\n")
     const code = /#([0-9A-F]{4})\]/.exec(await call("read", { paths: ["code.ts"] }))![1]
     expect(await notes("edit", { input: `[code.ts#${code}]\nPUT 1.=2:\n+function f() {\n+  return 2\n+}` })).toEqual([
-      "warned: Brackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new lines 1-3 have 1 more } than {, counted against the lines they replaced; check them and the lines just outside them.",
+      "warned: The edit of lines 1-2 replaced lines 1-3: its last new row repeats line 3, which would have stayed below it with the brackets unbalanced, so the range ended one line early.",
+    ])
+    const stray = /#([0-9A-F]{4})\]/.exec(await call("read", { paths: ["code.ts"] }))![1]
+    expect(await notes("edit", { input: `[code.ts#${stray}]\nPUT 2:\n+  return 3 }` })).toEqual([
+      "warned: Brackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new line 2 has 1 more } than {, counted against the lines they replaced; check them and the lines just outside them.",
     ])
     // nibash's notes on cut output: keywords choosing the middle, the fixed cut when they find nothing, and the footer of a row cut for length.
     const decided = await notes("nibash", { command: "seq 1 3000; echo 'error: boom'; seq 5001 5200" })

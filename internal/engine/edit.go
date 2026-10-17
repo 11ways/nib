@@ -722,10 +722,7 @@ func appliedLines(result applied) []string {
 // line left just outside a replaced range is too short for offByOne to compare. Files that never balanced, like shell case labels, are left alone.
 func unbalanced(file string, source *text, edits []snapshots.LineEdit, result applied) []string {
 	before, after := sourceLines(source), appliedLines(result)
-	count := bracketsOf
-	if strings.EqualFold(filepath.Ext(file), ".hwk") {
-		count = templateBrackets
-	}
+	count := bracketCounter(file)
 	old, now := count(before), count(after)
 	var total, changed brackets
 	for _, b := range old {
@@ -764,6 +761,95 @@ func unbalanced(file string, source *text, edits []snapshots.LineEdit, result ap
 		warning += fmt.Sprintf(" The new %s %s, counted against the lines they replaced; check them and the lines just outside them.", rows, delta.describe())
 	}
 	return []string{warning}
+}
+
+// bracketCounter is how a file's lines count brackets: templates their own way, everything else as code.
+func bracketCounter(file string) func([]string) []brackets {
+	if strings.EqualFold(filepath.Ext(file), ".hwk") {
+		return templateBrackets
+	}
+	return bracketsOf
+}
+
+// rawChanges are edits as the raw lines applyChanges writes, in the file's line ending.
+func rawChanges(source *text, edits []snapshots.LineEdit) []rawEdit {
+	changes := make([]rawEdit, len(edits))
+	for i, e := range edits {
+		raw := make([]string, len(e.Content))
+		for j, line := range e.Content {
+			raw[j] = line + source.ending
+		}
+		changes[i] = rawEdit{e, raw}
+	}
+	return changes
+}
+
+// extendSlips widens a replaced range by the line just past it when the model's rows end (or start) with that very line and only the wider
+// range keeps a file whose brackets balanced balanced: the range ended one line early (or started one late), the slip offByOne cannot see on
+// a line as short as a closing brace. It corrects only when exactly one such widening restores the balance, and says what it did.
+func extendSlips(file string, source *text, edits []snapshots.LineEdit) ([]snapshots.LineEdit, []string) {
+	count := bracketCounter(file)
+	total := func(lines []string) brackets {
+		var sum brackets
+		for _, b := range count(lines) {
+			sum = sum.add(b)
+		}
+		return sum
+	}
+	lines := sourceLines(source)
+	balanced := func(candidate []snapshots.LineEdit) bool {
+		return total(appliedLines(applyChanges(source, rawChanges(source, candidate)))) == brackets{}
+	}
+	if total(lines) != (brackets{}) || balanced(edits) {
+		return edits, nil
+	}
+	touched := func(skip, line int) bool {
+		for j, other := range edits {
+			if j != skip && (slices.Contains(snapshots.AnchorLines(other), line) || other.Operation == snapshots.Replace && other.Start <= line && line <= other.End) {
+				return true
+			}
+		}
+		return false
+	}
+	type slip struct {
+		edits []snapshots.LineEdit
+		note  string
+	}
+	var found []slip
+	for i, e := range edits {
+		if e.Operation != snapshots.Replace || e.Quoted || len(e.Content) == 0 {
+			continue
+		}
+		span := fmt.Sprintf("lines %d-%d", e.Start, e.End)
+		if e.Start == e.End {
+			span = "line " + itoa(e.Start)
+		}
+		for _, below := range []bool{true, false} {
+			line, row := e.End+1, e.Content[len(e.Content)-1]
+			if !below {
+				line, row = e.Start-1, e.Content[0]
+			}
+			if line < 1 || line > len(lines) || js.Trim(row) == "" || js.Trim(row) != js.Trim(lines[line-1]) || touched(i, line) {
+				continue
+			}
+			wider := slices.Clone(edits)
+			var note string
+			if below {
+				wider[i].End = line
+				note = fmt.Sprintf("The edit of %s replaced lines %d-%d: its last new row repeats line %d, which would have stayed below it with the brackets unbalanced, so the range ended one line early.", span, e.Start, line, line)
+			} else {
+				wider[i].Start = line
+				note = fmt.Sprintf("The edit of %s replaced lines %d-%d: its first new row repeats line %d, which would have stayed above it with the brackets unbalanced, so the range started one line late.", span, line, e.End, line)
+			}
+			if balanced(wider) {
+				found = append(found, slip{wider, note})
+			}
+		}
+	}
+	if len(found) != 1 {
+		return edits, nil
+	}
+	return found[0].edits, []string{found[0].note}
 }
 
 type previewed struct {
@@ -1286,15 +1372,9 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		}
 	}
 	finish := func(edits []snapshots.LineEdit, warnings []string) (*staged, error) {
-		changes := make([]rawEdit, len(edits))
-		for i, e := range edits {
-			raw := make([]string, len(e.Content))
-			for j, line := range e.Content {
-				raw[j] = line + source.ending
-			}
-			changes[i] = rawEdit{e, raw}
-		}
-		result := applyChanges(source, changes)
+		edits, fixes := extendSlips(h.target.canonical, source, edits)
+		warnings = append(warnings, fixes...)
+		result := applyChanges(source, rawChanges(source, edits))
 		if bytes.Equal(result.bytes, current.bytes) && r.move == "" && r.copy == "" {
 			return &staged{kind: stagedNoop, handle: h, source: source, live: live, prior: prior, applied: result}, nil
 		}
