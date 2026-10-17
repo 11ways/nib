@@ -1497,6 +1497,24 @@ describe("SUB", () => {
     expect(start.text).toContain("\n[1 cut at 300 of 3511 chars]|first word word")
   })
 
+  test("rows an edit response cuts stay seen when the agent wrote them or knew them before", async () => {
+    const prose = (word: string) => `${word} ` + "word ".repeat(80)
+    const f = await fixture(`top\n${prose("kept")}\nend\n`)
+    const r = await f.read()
+    // A new long row the agent wrote, shown cut at 300 characters, still anchors an insert after it.
+    const written = await f.patch(`[file.txt#${r.tag}]\nPUT >1:\n+${prose("new")}${"tail ".repeat(60)}marker`)
+    expect(written.text).toContain("\n[2 cut at 300 of ")
+    const after = await f.patch(`[file.txt#${written.tag}]\nPUT >2:\n+after new`)
+    // The kept line moved down and showed cut at 120 characters; the agent read it whole before, so it anchors an edit at its new number.
+    expect(after.text).toContain("\n[4 cut at 120 of ")
+    const kept = await f.patch(`[file.txt#${after.tag}]\nPUT >4:\n+after kept`)
+    // A SUB on a line the agent read whole leaves a line it knows, though the response shows only the stretch around the change.
+    const sub = await f.patch(`[file.txt#${kept.tag}]\nSUB 2: marker\n+MARKER`)
+    expect(sub.text).toContain("\n[2 chars ")
+    await f.patch(`[file.txt#${sub.tag}]\nPUT 2.=2:\n+short new`)
+    expect(await readFile(f.filePath, "utf8")).toBe(`top\nshort new\nafter new\n${prose("kept")}\nafter kept\nend\n`)
+  })
+
   test("SUB rows that repeat the line's indentation get it once, with a lesson", async () => {
     const f = await fixture("class A {\n    run(a, b);\n\tstop();\n}\n")
     const r = await f.read()

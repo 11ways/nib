@@ -1010,17 +1010,21 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 			if r.was != nil && js.Len(visible(content)) > rowLimit {
 				w = matchWindows(content, []span{changedSpan(*r.was, content)}, rowLimit)
 			}
+			// A cut row still shows the line's new number, so a line the agent knew whole before stays one it may anchor.
+			anchor := knew(index)
 			if w != nil {
 				out.output = append(out.output, fmt.Sprintf("[%d %s]|%s", index+1, w.label, w.text))
 				out.marks = append(out.marks, marks{cut: true})
 			} else {
 				line := lineRow(index+1, content, rowLimit)
 				out.output = append(out.output, line.text)
-				if line.anchor {
-					out.shown = append(out.shown, index+1)
-				} else {
+				anchor = anchor || line.anchor
+				if !line.anchor {
 					out.marks = append(out.marks, line.marks)
 				}
+			}
+			if anchor {
+				out.shown = append(out.shown, index+1)
 			}
 		} else if mapped[index] {
 			out.output = append(out.output, fmt.Sprintf("%d~%s", index+1, clip(lines()[index])))
@@ -1834,7 +1838,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 			seen = append(seen, index+1)
 		}
 		if r.origin < 0 {
+			// The agent wrote the whole row, so it counts as seen however the response shows it; a SUB on a line it never knew whole does not.
 			if !r.opaque {
+				seen = append(seen, index+1)
 				known = append(known, index+1)
 			}
 		} else if prior != nil && prior.Seen != nil && knownLine(prior, r.origin+1) {
