@@ -32,6 +32,8 @@ type gitPlan struct {
 	// at is where the subcommand sits in args; wide asks a --stat without a width for one wide enough to print every path whole.
 	at   int
 	wide bool
+	// forms are the kinds of path line the command line asks for, the only lines read as paths.
+	forms []*regexp.Regexp
 }
 
 // gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
@@ -107,6 +109,10 @@ subcommand:
 			break
 		}
 		if !strings.HasPrefix(a, "-") || a == "-" {
+			// A show of REV:PATH prints a file's content, not a diff.
+			if p.subcommand == "show" && strings.Contains(a, ":") {
+				return nil, errForeign
+			}
 			continue
 		}
 		name, ok := spec.match(a)
@@ -133,7 +139,17 @@ subcommand:
 			p.noPrefix = true
 		case "--stat":
 			shapes, p.wide = true, true
-		case "-p", "-u", "--patch", "--name-only", "--name-status", "--numstat":
+			p.forms = append(p.forms, gitStat)
+		case "--name-only":
+			shapes = true
+			p.forms = append(p.forms, gitBarePath)
+		case "--name-status":
+			shapes = true
+			p.forms = append(p.forms, gitStatus)
+		case "--numstat":
+			shapes = true
+			p.forms = append(p.forms, gitNumstat)
+		case "-p", "-u", "--patch":
 			shapes = true
 		}
 		if strings.HasPrefix(name, "-U") || strings.HasPrefix(name, "--unified=") {
@@ -141,11 +157,19 @@ subcommand:
 		}
 		if strings.HasPrefix(name, "--stat=") {
 			shapes, sized = true, true
+			p.forms = append(p.forms, gitStat)
 		}
 	}
 	p.wide = p.wide && !sized
 	switch p.subcommand {
+	case "status":
+		p.forms = []*regexp.Regexp{gitShort, gitLong, gitTabbed}
+	case "rm":
+		p.forms = []*regexp.Regexp{gitVerbose}
+	case "ls-files":
+		p.forms = []*regexp.Regexp{gitBarePath}
 	case "add":
+		p.forms = []*regexp.Regexp{gitVerbose}
 		// Without -v or -n add prints nothing to reshape.
 		if !verbose {
 			return nil, errForeign
@@ -213,7 +237,7 @@ func (p *gitPlan) run(inv *invocation) int {
 	if p.patch {
 		p.renderPatch(inv, lines)
 	} else {
-		emitLines(inv, compactListing(lines, gitParser(p.subcommand)))
+		emitLines(inv, compactListing(lines, gitParser(p.forms)))
 	}
 	return status
 }
@@ -238,19 +262,9 @@ var (
 	gitBarePath = regexp.MustCompile(`^()([^ \t]*[/.][^ \t]*)()$`)
 )
 
-// gitParser reads the path listing lines a subcommand prints.
-func gitParser(subcommand string) func(string) (listed, bool) {
-	var forms []*regexp.Regexp
-	switch subcommand {
-	case "status":
-		forms = []*regexp.Regexp{gitShort, gitLong, gitTabbed}
-	case "add", "rm":
-		forms = []*regexp.Regexp{gitVerbose}
-	case "ls-files":
-		forms = []*regexp.Regexp{gitBarePath}
-	default:
-		forms = []*regexp.Regexp{gitStat, gitStatus, gitNumstat, gitBarePath}
-	}
+// gitParser reads the path listing lines of the forms a command line asked git for; other lines, in a commit's message or a file's content,
+// never count as paths.
+func gitParser(forms []*regexp.Regexp) func(string) (listed, bool) {
 	return func(line string) (listed, bool) {
 		for _, form := range forms {
 			m := form.FindStringSubmatch(line)
@@ -300,7 +314,7 @@ var gitExtended = []string{"old mode ", "new mode ", "deleted file mode ", "new 
 func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
 	var plain []string
 	flush := func() {
-		emitLines(inv, compactListing(plain, gitParser(p.subcommand)))
+		emitLines(inv, compactListing(plain, gitParser(p.forms)))
 		plain = nil
 	}
 	base, asked := "", false

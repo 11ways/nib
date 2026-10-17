@@ -102,6 +102,12 @@ func TestGitOutputGoingElsewhereOrInFormsNibDoesNotReadIsGits(t *testing.T) {
 	if !strings.Contains(out, "1 .M N... ") || !strings.HasSuffix(out, "[git ran as the system program: nib's own does not implement this form of it, so its output is as git printed it]") {
 		t.Errorf("porcelain v2: %q", out)
 	}
+	// A show of a file's content is not a diff, and lines of a commit's message or a file are never taken for a path list.
+	expect(t, f.run("git show HEAD:a.go"), "package a\n\nfunc A() {}")
+	f.git("commit", "-qam", "list\n\n"+operation+"a.txt\n"+operation+"b.txt\n"+operation+"c.txt")
+	if out := f.run("git log -1 -p --format=%B"); !strings.HasPrefix(out, "list\n\n"+operation+"a.txt\n"+operation+"b.txt\n") {
+		t.Errorf("message with paths:\n%s", out)
+	}
 	// git's exit status and standard error are its own.
 	expect(t, f.run("git -C missing status --short"), "fatal: cannot change to 'missing': No such file or directory\n[exit 128]")
 }
