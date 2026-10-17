@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,25 +52,31 @@ const (
 	DefaultKind    = Keywords
 	DefaultModel   = "typesafe/jev-1.14"
 	DefaultURL     = "https://openrouter.ai/api/alpha/decisions"
-	DefaultTimeout = 2 * time.Second
+	DefaultTimeout = 30 * time.Second
 )
 
 // Config is the decider the environment asks for.
 type Config struct {
-	Kind    Kind
-	Key     string
-	Model   string
+	Kind Kind
+	Key  string
+	// Models are the decision models in order of preference; the next one answers when one fails.
+	Models  []string
 	URL     string
 	Timeout time.Duration
 	// Cache is a directory for answers on disk; "" keeps them in memory only.
 	Cache string
 	// Client makes the requests; nil uses a plain one. Tests set it.
 	Client *http.Client
+	// Summary are the summarizers in order of preference; none turns summaries off.
+	Summary        []SummaryEntry
+	SummaryURL     string
+	SummaryTimeout time.Duration
 }
 
 // Parse reads every NIB_DECIDER_* variable through getenv, NIB_SANDBOX included; an error is a startup error.
 func Parse(getenv func(string) string) (Config, error) {
-	c := Config{Kind: DefaultKind, Model: DefaultModel, URL: DefaultURL, Timeout: DefaultTimeout}
+	c := Config{Kind: DefaultKind, Models: []string{DefaultModel}, URL: DefaultURL, Timeout: DefaultTimeout, SummaryURL: DefaultSummaryURL,
+		SummaryTimeout: DefaultSummaryTimeout}
 	if name := getenv("NIB_DECIDER"); name != "" {
 		c.Kind = Kind(name)
 		if c.Kind.Cut() == "" {
@@ -80,34 +87,75 @@ func Parse(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("NIB_DECIDER is %q; use one of %s", name, strings.Join(names, ", "))
 		}
 	}
+	key := getenv("NIB_DECIDER_KEY")
+	if key == "" {
+		key = getenv("OPENROUTER_API_KEY")
+	}
+	c.Cache = getenv("NIB_DECIDER_CACHE")
+	if list := getenv("NIB_DECIDER_SUMMARY"); list != "" {
+		if c.Kind == Fixed {
+			return Config{}, errors.New("NIB_DECIDER_SUMMARY reads the passages a decider picks, which NIB_DECIDER=fixed does not; use keywords or openrouter")
+		}
+		entries, err := parseSummary(list)
+		if err != nil {
+			return Config{}, err
+		}
+		c.Summary = entries
+		if slices.ContainsFunc(entries, func(e SummaryEntry) bool { return !e.Claude }) {
+			if key == "" {
+				return Config{}, errors.New("NIB_DECIDER_SUMMARY names an OpenRouter model, which needs a key in NIB_DECIDER_KEY or OPENROUTER_API_KEY")
+			}
+			c.Key = key
+		}
+		if url := getenv("NIB_DECIDER_SUMMARY_URL"); url != "" {
+			c.SummaryURL = url
+		}
+		if c.SummaryTimeout, err = milliseconds(getenv, "NIB_DECIDER_SUMMARY_TIMEOUT", c.SummaryTimeout); err != nil {
+			return Config{}, err
+		}
+	}
 	if c.Kind != OpenRouter {
 		return c, nil
 	}
-	c.Key = getenv("NIB_DECIDER_KEY")
-	if c.Key == "" {
-		c.Key = getenv("OPENROUTER_API_KEY")
-	}
+	c.Key = key
 	if c.Key == "" {
 		return Config{}, errors.New("NIB_DECIDER=openrouter needs a key in NIB_DECIDER_KEY or OPENROUTER_API_KEY")
 	}
 	if getenv("NIB_SANDBOX") == "1" && getenv("NIB_DECIDER_SANDBOX") != "1" {
 		return Config{}, errors.New("NIB_DECIDER=openrouter sends program output to OpenRouter, which NIB_SANDBOX=1 allows only with NIB_DECIDER_SANDBOX=1")
 	}
-	if model := getenv("NIB_DECIDER_MODEL"); model != "" {
-		c.Model = model
+	if models := getenv("NIB_DECIDER_MODEL"); models != "" {
+		c.Models = nil
+		for _, m := range strings.Split(models, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				c.Models = append(c.Models, m)
+			}
+		}
+		if len(c.Models) == 0 {
+			return Config{}, fmt.Errorf("NIB_DECIDER_MODEL is %q; give one or more model ids, separated by commas", models)
+		}
 	}
 	if url := getenv("NIB_DECIDER_URL"); url != "" {
 		c.URL = url
 	}
-	if timeout := getenv("NIB_DECIDER_TIMEOUT"); timeout != "" {
-		ms, err := strconv.Atoi(timeout)
-		if err != nil || ms <= 0 {
-			return Config{}, fmt.Errorf("NIB_DECIDER_TIMEOUT is %q; give a number of milliseconds", timeout)
-		}
-		c.Timeout = time.Duration(ms) * time.Millisecond
+	var err error
+	if c.Timeout, err = milliseconds(getenv, "NIB_DECIDER_TIMEOUT", c.Timeout); err != nil {
+		return Config{}, err
 	}
-	c.Cache = getenv("NIB_DECIDER_CACHE")
 	return c, nil
+}
+
+// milliseconds reads a variable holding a number of milliseconds; unset keeps otherwise.
+func milliseconds(getenv func(string) string, name string, otherwise time.Duration) (time.Duration, error) {
+	value := getenv(name)
+	if value == "" {
+		return otherwise, nil
+	}
+	ms, err := strconv.Atoi(value)
+	if err != nil || ms <= 0 {
+		return 0, fmt.Errorf("%s is %q; give a number of milliseconds", name, value)
+	}
+	return time.Duration(ms) * time.Millisecond, nil
 }
 
 // New is the decider c describes; nil for the fixed cut.

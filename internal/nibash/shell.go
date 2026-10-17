@@ -39,12 +39,13 @@ Unlike bash: a program does not start in a deleted directory; a command still ru
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
-	engine   *engine.Engine
-	sandbox  bool
-	decider  decider.Decider
-	logs     *logDirectory
-	mu       sync.Mutex
-	sessions map[any]*session
+	engine     *engine.Engine
+	sandbox    bool
+	decider    decider.Decider
+	summarizer decider.Summarizer
+	logs       *logDirectory
+	mu         sync.Mutex
+	sessions   map[any]*session
 }
 
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
@@ -59,13 +60,23 @@ func (s *Shell) Deciding(d decider.Decider) *Shell {
 	return s
 }
 
+// Summarizing sets the summarizer whose checked summary leads long output; nil is none. Call it before serving.
+func (s *Shell) Summarizing(summarizer decider.Summarizer) *Shell {
+	s.summarizer = summarizer
+	return s
+}
+
 // Description is the tool description, which says how the configured decider cuts long output.
 func (s *Shell) Description() string {
 	kind := decider.Fixed
 	if s.decider != nil {
 		kind = s.decider.Kind()
 	}
-	return fmt.Sprintf(description, kind.Cut())
+	cut := kind.Cut()
+	if s.summarizer != nil {
+		cut += ", or to a model's summary, marked as one, and the log lines it points at"
+	}
+	return fmt.Sprintf(description, cut)
 }
 
 // session is one agent's jobs, which outlive the calls that start them, and the calls running now; nothing else of a shell carries over from
@@ -359,7 +370,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		status = 1
 	}
 	callTools.Ctx = ctx
-	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, command: request.Command, purpose: purpose(request.Description), exit: status})
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), exit: status})
 	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
@@ -392,7 +403,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		j.finish(err, out)
 	}()
 	c.tools.Ctx = ctx
-	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, command: request.Command, purpose: purpose(request.Description), timedOut: true})
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), timedOut: true})
 	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
 	return c.result(reports, text, tail, before, bodies), nil
 }

@@ -266,13 +266,18 @@ func TestACappedLogIsAnnounced(t *testing.T) {
 
 func TestDescriptionSaysHowEachDeciderCuts(t *testing.T) {
 	for _, kind := range decider.Kinds() {
-		shell := New(engine.New(), false)
-		if kind != decider.Fixed {
-			shell.Deciding(&fakeDecider{kind: kind})
-		}
-		text := shell.Description()
-		if len(text) > 2048 || !strings.Contains(text, kind.Cut()) || strings.Contains(text, "%!") {
-			t.Errorf("%s: %d characters:\n%s", kind, len(text), text)
+		for _, summarizing := range []bool{false, true} {
+			shell := New(engine.New(), false)
+			if kind != decider.Fixed {
+				shell.Deciding(&fakeDecider{kind: kind})
+			}
+			if summarizing {
+				shell.Summarizing(&fakeSummarizer{})
+			}
+			text := shell.Description()
+			if len(text) > 2048 || !strings.Contains(text, kind.Cut()) || strings.Contains(text, "%!") {
+				t.Errorf("%s, summarizing %v: %d characters:\n%s", kind, summarizing, len(text), text)
+			}
 		}
 	}
 	if !strings.Contains(New(engine.New(), false).Description(), "long output cut to its start and end, with the whole kept in a log") {

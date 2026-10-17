@@ -28,9 +28,13 @@ type cache struct {
 	memory map[string]entry
 	order  []string
 	dir    string
+	// texts are summarizers' replies by request, which are checked against the log again whenever they are used.
+	texts map[string]string
 }
 
-func newCache(dir string) *cache { return &cache{memory: map[string]entry{}, dir: dir} }
+func newCache(dir string) *cache {
+	return &cache{memory: map[string]entry{}, dir: dir, texts: map[string]string{}}
+}
 
 // cacheKey covers everything an answer depends on: the endpoint and the whole request body, model, state and question wording included.
 func cacheKey(c Config, body []byte) string {
@@ -62,14 +66,46 @@ func (c *cache) get(key string, ids []string) (map[string]float64, bool) {
 
 func (c *cache) put(key string, e entry) {
 	c.remember(key, e)
-	if c.dir == "" {
-		return
+	if data, err := json.Marshal(e); err == nil {
+		c.store(key, data)
 	}
-	if os.MkdirAll(c.dir, 0o700) != nil {
-		return
+}
+
+// getText is a cached summarizer reply; the caller checks it like a live one.
+func (c *cache) getText(key string) (string, bool) {
+	c.mu.Lock()
+	text, ok := c.texts[key]
+	c.mu.Unlock()
+	if ok || c.dir == "" {
+		return text, ok
 	}
-	data, err := json.Marshal(e)
-	if err != nil {
+	data, err := os.ReadFile(filepath.Join(c.dir, key+".json"))
+	if err != nil || json.Unmarshal(data, &text) != nil {
+		return "", false
+	}
+	c.rememberText(key, text)
+	return text, true
+}
+
+func (c *cache) putText(key, text string) {
+	c.rememberText(key, text)
+	if data, err := json.Marshal(text); err == nil {
+		c.store(key, data)
+	}
+}
+
+func (c *cache) rememberText(key, text string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.texts) >= memoryEntries {
+		clear(c.texts)
+	}
+	c.texts[key] = text
+}
+
+// store writes data as the entry for key, through a temporary file renamed into place; without a directory it does nothing.
+func (c *cache) store(key string, data []byte) {
+	if c.dir == "" || os.MkdirAll(c.dir, 0o700) != nil {
 		return
 	}
 	temporary, err := os.CreateTemp(c.dir, ".entry-*")

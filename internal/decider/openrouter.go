@@ -31,14 +31,15 @@ const (
 // inFlight caps requests across the process, since several agents' shells can render at once.
 var inFlight = make(chan struct{}, 16)
 
-// openRouter asks a decision model on OpenRouter which windows of the output matter, and adds the keyword hits to its picks.
+// openRouter asks a decision model on OpenRouter which windows of the output matter, and adds the keyword hits to its picks; with several
+// models, the next one answers when one fails.
 type openRouter struct {
 	config Config
 	client *http.Client
 	cache  *cache
 	mu     sync.Mutex
-	// off is why the model is off for the rest of the session, after an answer that retrying cannot change (401, 402, 403).
-	off string
+	// off is why a model is off for the rest of the session, after an answer that retrying cannot change (401, 402, 403).
+	off map[string]string
 }
 
 func newOpenRouter(c Config) *openRouter {
@@ -46,7 +47,7 @@ func newOpenRouter(c Config) *openRouter {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &openRouter{config: c, client: client, cache: newCache(c.Cache)}
+	return &openRouter{config: c, client: client, cache: newCache(c.Cache), off: map[string]string{}}
 }
 
 func (o *openRouter) Kind() Kind { return OpenRouter }
@@ -78,35 +79,60 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 	if in.Purpose == "" && in.Exit == 0 && !in.TimedOut {
 		return fallback
 	}
-	o.mu.Lock()
-	off := o.off
-	o.mu.Unlock()
-	if off != "" {
-		fallback.Failure = off
-		return fallback
-	}
 	if ctx.Err() != nil {
 		fallback.Failure = "cancelled"
 		return fallback
 	}
-	batches, unjudged := o.plan(in, fallback.Picks)
 	started := time.Now()
 	deadline, cancel := context.WithTimeout(ctx, o.config.Timeout)
 	defer cancel()
+	var usage Usage
+	var failures []string
+	for _, model := range o.config.Models {
+		choice, failure := o.decideWith(deadline, in, model, fallback.Picks)
+		usage.add(choice.Usage)
+		if failure == "" {
+			if len(failures) > 0 {
+				choice.Who = fmt.Sprintf("%s and keywords (after %s)", model, strings.Join(failures, "; "))
+			}
+			choice.Usage = usage
+			choice.Usage.Elapsed = time.Since(started)
+			return choice
+		}
+		if len(o.config.Models) > 1 {
+			failure = model + " failed: " + failure
+		}
+		failures = append(failures, failure)
+		if deadline.Err() != nil {
+			break
+		}
+	}
+	fallback.Failure = strings.Join(failures, "; ")
+	usage.Elapsed = time.Since(started)
+	fallback.Usage = usage
+	return fallback
+}
+
+// decideWith asks one model; a failure says why it gave no answer at all.
+func (o *openRouter) decideWith(ctx context.Context, in Input, model string, hits []Pick) (Choice, string) {
+	o.mu.Lock()
+	off := o.off[model]
+	o.mu.Unlock()
+	if off != "" {
+		return Choice{}, off
+	}
+	batches, unjudged := o.plan(in, model, hits)
 	outcomes := make([]outcome, len(batches))
 	var wait sync.WaitGroup
 	for i, b := range batches {
-		wait.Go(func() { outcomes[i] = o.ask(deadline, in, b) })
+		wait.Go(func() { outcomes[i] = o.ask(ctx, in, model, b) })
 	}
 	wait.Wait()
-	choice := Choice{Who: o.config.Model + " and keywords", Model: true}
+	choice := Choice{Who: model + " and keywords", Model: true}
 	var failures []string
 	for i, b := range batches {
 		got := outcomes[i]
-		choice.Usage.Requests += got.usage.Requests
-		choice.Usage.Cached += got.usage.Cached
-		choice.Usage.InputTokens += got.usage.InputTokens
-		choice.Usage.Cost += got.usage.Cost
+		choice.Usage.add(got.usage)
 		if got.failure != "" {
 			failures = append(failures, got.failure)
 			for _, w := range b.windows {
@@ -121,17 +147,22 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 			choice.Judged, choice.Whole = true, got.answers["whole"]
 		}
 	}
-	choice.Usage.Elapsed = time.Since(started)
 	if len(failures) == len(batches) {
-		fallback.Failure = failures[0]
-		fallback.Usage = choice.Usage
-		return fallback
+		return Choice{Usage: choice.Usage}, failures[0]
 	}
 	slices.SortStableFunc(choice.Picks, func(a, b Pick) int { return cmpScore(b.Score, a.Score) })
-	choice.Picks = append(choice.Picks, fallback.Picks...)
+	choice.Picks = append(choice.Picks, hits...)
 	slices.SortFunc(unjudged, func(a, b Unjudged) int { return a.Start - b.Start })
 	choice.Unjudged = unjudged
-	return choice
+	return choice, ""
+}
+
+// add counts other's requests and cost into u; the elapsed time is the caller's to set.
+func (u *Usage) add(other Usage) {
+	u.Requests += other.Requests
+	u.Cached += other.Cached
+	u.InputTokens += other.InputTokens
+	u.Cost += other.Cost
 }
 
 func cmpScore(a, b float64) int {
@@ -146,7 +177,7 @@ func cmpScore(a, b float64) int {
 
 // plan splits the rows into windows and packs them into at most maxRequests batches; past that, windows with keyword hits go first, then
 // those nearest the end, then those nearest the start, and the rest are not judged.
-func (o *openRouter) plan(in Input, hits []Pick) ([]batch, []Unjudged) {
+func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjudged) {
 	var windows []window
 	for start := 0; start < len(in.Rows); start += windowRows {
 		end := min(start+windowRows, len(in.Rows))
@@ -161,7 +192,7 @@ func (o *openRouter) plan(in Input, hits []Pick) ([]batch, []Unjudged) {
 		w.size = jsonSize(w.text) + jsonSize(question(in, w.id)) + 2*len(w.id) + 16
 		windows = append(windows, w)
 	}
-	base := jsonSize(request{Model: o.config.Model, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}})
+	base := jsonSize(request{Model: model, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}})
 	whole := 0
 	if in.Purpose != "" {
 		whole = jsonSize(wholeQuestion) + 16
@@ -325,8 +356,8 @@ var wholeQuestion = noul{"noul", "Does `purpose` need every line of the output, 
 	"The purpose is served by finding specific lines, such as an error, a failure or a particular entry.",
 }}
 
-func (o *openRouter) body(in Input, b batch) request {
-	r := request{Model: o.config.Model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}}
+func (o *openRouter) body(in Input, model string, b batch) request {
+	r := request{Model: model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}}
 	for _, w := range b.windows {
 		r.State.Output = append(r.State.Output, field{w.id, w.text})
 		r.Questions = append(r.Questions, field{w.id, question(in, w.id)})
@@ -350,8 +381,8 @@ func (b batch) ids() []string {
 }
 
 // ask answers one batch from the cache, else from OpenRouter with one retry for answers that may change on their own.
-func (o *openRouter) ask(ctx context.Context, in Input, b batch) outcome {
-	body, err := json.Marshal(o.body(in, b))
+func (o *openRouter) ask(ctx context.Context, in Input, model string, b batch) outcome {
+	body, err := json.Marshal(o.body(in, model, b))
 	if err != nil {
 		return outcome{failure: "invalid request"}
 	}
@@ -361,7 +392,7 @@ func (o *openRouter) ask(ctx context.Context, in Input, b batch) outcome {
 	}
 	var usage Usage
 	for attempt := 0; ; attempt++ {
-		answered, retryAfter, failure := o.post(ctx, body, b.ids(), &usage)
+		answered, retryAfter, failure := o.post(ctx, model, body, b.ids(), &usage)
 		if failure == "" {
 			o.cache.put(key, entry{Version: questionsVersion, Answers: answered.answers, Model: answered.model, InputTokens: answered.tokens, Cost: answered.cost})
 			return outcome{answers: answered.answers, usage: usage}
@@ -400,7 +431,7 @@ type response struct {
 }
 
 // post sends one request; retryAfter is how long to wait before the one retry, negative when retrying cannot help.
-func (o *openRouter) post(ctx context.Context, body []byte, ids []string, usage *Usage) (answered, time.Duration, string) {
+func (o *openRouter) post(ctx context.Context, model string, body []byte, ids []string, usage *Usage) (answered, time.Duration, string) {
 	select {
 	case inFlight <- struct{}{}:
 		defer func() { <-inFlight }()
@@ -435,7 +466,7 @@ func (o *openRouter) post(ctx context.Context, body []byte, ids []string, usage 
 		switch {
 		case resp.StatusCode == 401 || resp.StatusCode == 402 || resp.StatusCode == 403:
 			o.mu.Lock()
-			o.off = "the decision model is off for this session after " + failure
+			o.off[model] = "the decision model is off for this session after " + failure
 			o.mu.Unlock()
 			return answered{}, -1, failure
 		case resp.StatusCode == 429 || resp.StatusCode >= 500:

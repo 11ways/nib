@@ -111,7 +111,7 @@ The choice is the union of the model's windows (each its `noul`) and the keyword
 
 ### 8.5 Failures, retries, session state
 
-One retry for 429, 5xx and network errors, after `Retry-After` or 200 ms, only if it fits the deadline (`NIB_DECIDER_TIMEOUT`, default 2 s for the whole decision). No retry for other 4xx or invalid answers. 401, 402 and 403 turn the model off for the server session; each later note says so. A call whose MCP context is already cancelled sends nothing. Recording took 0.4 to 1.2 s per decision with 6 to 8 parallel requests, so the 2 s deadline has some headroom but no tail-latency evidence: the timeout fallback is tested as a common path.
+One retry for 429, 5xx and network errors, after `Retry-After` or 200 ms, only if it fits the deadline (`NIB_DECIDER_TIMEOUT`, default 30 s for the whole decision; it was 2 s until the user set the bar at 30 s, since a decision costs seconds the agent does not notice). With several models in `NIB_DECIDER_MODEL`, a model that gives no answer at all hands the decision to the next within the same deadline, and `Who` names the one that chose and the failures before it. No retry for other 4xx or invalid answers. 401, 402 and 403 turn the model off for the server session; each later note says so. A call whose MCP context is already cancelled sends nothing. Recording took 0.4 to 1.2 s per decision with 6 to 8 parallel requests, so the 2 s deadline has some headroom but no tail-latency evidence: the timeout fallback is tested as a common path.
 
 ### 8.6 Answers and the cache
 
@@ -123,9 +123,10 @@ Responses are decoded leniently: only `answers.*.noul` and `usage` are read, and
 | --- | --- | --- |
 | `NIB_DECIDER` | `keywords` | `fixed`, `keywords` or `openrouter`; anything else stops nib at startup |
 | `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | (user decision 4); `openrouter` without either stops nib at startup |
-| `NIB_DECIDER_MODEL` | `typesafe/jev-1.14` | any Decisions model |
+| `NIB_DECIDER_MODEL` | `typesafe/jev-1.14` | Decisions models, comma separated, in order of preference |
 | `NIB_DECIDER_URL` | `https://openrouter.ai/api/alpha/decisions` | tests point it at a fake |
-| `NIB_DECIDER_TIMEOUT` | `2000` | ms for the whole decision |
+| `NIB_DECIDER_TIMEOUT` | `30000` | ms for the whole decision |
+| `NIB_DECIDER_SUMMARY`, `_URL`, `_TIMEOUT` | unset, OpenRouter's chat endpoint, `30000` | summarizers (section 16) |
 | `NIB_DECIDER_CACHE` | unset | directory for answers on disk |
 | `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1`; without it nib stops at startup (review M9) |
 
@@ -193,3 +194,11 @@ Not made here (the benchmark is being moved to OpenCode v2 in parallel):
 | Minor: head/tail constants | done: in `sink.go` |
 | Minor: sandboxed black-box fake, startup error tests | done |
 | Minor: 2 s deadline evidence | recorded latencies stated; the fallback is tested |
+
+## 16. Summaries
+
+The research branch (`research/decider-eval/`, 27 cases, three rounds) measured chat models that read a cut output and return a summary and line ranges. Their ranges covered every needed line in more cases than Jev's windows (deepseek-v4.1-flash with reasoning off on the whole output: 19 of 19; gemini-3.1-flash-lite and haiku-5.5 on an excerpt of Jev's picks: 18 of 19), in about 7 to 21 lines against Jev's 150 to 300 rows, and every line they quoted with its number matched the log. Counts they gave were wrong, so the prompt leaves counts to the shell and no summary is asked where the decider judged that every line counts.
+
+`decider.Summarizer` sits after the decider: `shape` decides, then, with a summarizer and outside the gates above, passes nib's facts, the log's lines without colors and the excerpt (the first 30 and last 100 log lines and the decider's picks rated 0.3 or more, widened by 10 lines, up to 400) to `Summarize`. Each entry of `NIB_DECIDER_SUMMARY` reads the whole output, numbered by log line and each row cut to 300 characters, while it fits 400,000 characters and the entry asks for it (OpenRouter's default), else the excerpt (`claude-p`'s default); the prompt is the research's grounded one. `check` keeps only quoted lines found on the named log line (the whole line or `snapshots.EvidenceMinRunes` characters of it) and ranges inside the log, of at most 60 lines, that touch a line the entry read; an answer with no quote left fails, and the next entry is asked within the same deadline. A checked summary replaces the decider's cut with a bracketed row naming its model, the real rows of its ranges (2 lines around each, the first range always, the rest while they fit 40 rows), named gaps, and a closing note with nib's own counts, the drops and a `read LOG:A-B plain:true` for the ranges left over; the agent sees fewer rows than any decider shows, and nothing in it is the model's but the one marked row. When every entry fails, the decider's cut stands with `no summary (...)` in its note.
+
+`claude-p:MODEL` runs Claude Code's `claude -p` on the user's login in an empty temporary directory with `--tools "" --strict-mcp-config --setting-sources "" --no-session-persistence --disable-slash-commands`, so it loads neither nib nor hooks; its process group is killed at the deadline. It costs about 1.8 s of start-up per call and no key. Answers are cached by entry, endpoint, prompt and input (`summary-` files beside the decisions in `NIB_DECIDER_CACHE`) and checked again whenever used.

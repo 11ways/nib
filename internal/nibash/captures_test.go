@@ -70,7 +70,7 @@ func TestCaptures(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache, _ := filepath.Abs("testdata/captures/decider")
-	model := decider.Config{Kind: decider.OpenRouter, Key: "offline", Model: decider.DefaultModel, URL: decider.DefaultURL, Timeout: 10 * time.Second, Cache: cache,
+	model := decider.Config{Kind: decider.OpenRouter, Key: "offline", Models: []string{decider.DefaultModel}, URL: decider.DefaultURL, Timeout: 10 * time.Second, Cache: cache,
 		Client: &http.Client{Transport: offline{}}}
 	recording := os.Getenv("NIB_DECIDER_RECORD") == "1"
 	if recording {

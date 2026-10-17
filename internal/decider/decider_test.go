@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ func TestParseReadsEveryVariableAndRefusesWhatItCannotHonour(t *testing.T) {
 		t.Fatalf("default: %+v %v", c, err)
 	}
 	c, err = Parse(env(map[string]string{"NIB_DECIDER": "openrouter", "OPENROUTER_API_KEY": "k1", "NIB_DECIDER_MODEL": "m", "NIB_DECIDER_URL": "http://x", "NIB_DECIDER_TIMEOUT": "500", "NIB_DECIDER_CACHE": "/c"}))
-	if err != nil || c.Key != "k1" || c.Model != "m" || c.URL != "http://x" || c.Timeout != 500*time.Millisecond || c.Cache != "/c" {
+	if err != nil || c.Key != "k1" || !slices.Equal(c.Models, []string{"m"}) || c.URL != "http://x" || c.Timeout != 500*time.Millisecond || c.Cache != "/c" {
 		t.Fatalf("openrouter: %+v %v", c, err)
 	}
 	if c, _ := Parse(env(map[string]string{"NIB_DECIDER": "openrouter", "OPENROUTER_API_KEY": "k1", "NIB_DECIDER_KEY": "k2"})); c.Key != "k2" {
@@ -146,7 +147,7 @@ func rowsOf(n int, special map[int]string) []string {
 }
 
 func openRouterFor(server *httptest.Server, timeout time.Duration, cache string) *openRouter {
-	return newOpenRouter(Config{Kind: OpenRouter, Key: "key", Model: DefaultModel, URL: server.URL + "/api/alpha/decisions", Timeout: timeout, Cache: cache})
+	return newOpenRouter(Config{Kind: OpenRouter, Key: "key", Models: []string{DefaultModel}, URL: server.URL + "/api/alpha/decisions", Timeout: timeout, Cache: cache})
 }
 
 func TestRequestsNameWindowsAndAskTheWholeQuestionOnce(t *testing.T) {
@@ -203,7 +204,7 @@ func TestRequestsNameWindowsAndAskTheWholeQuestionOnce(t *testing.T) {
 		t.Fatalf("usage %+v", choice.Usage)
 	}
 	// The windows go in output order, as named fields.
-	data, _ := json.Marshal(o.body(Input{Command: "c", Rows: rows[:60], Exit: 1}, batch{windows: []window{{id: "w0", text: "a"}, {id: "w1", text: "b"}, {id: "w10", text: "c"}}}))
+	data, _ := json.Marshal(o.body(Input{Command: "c", Rows: rows[:60], Exit: 1}, DefaultModel, batch{windows: []window{{id: "w0", text: "a"}, {id: "w1", text: "b"}, {id: "w10", text: "c"}}}))
 	if !strings.Contains(string(data), `"output":{"w0":"a","w1":"b","w10":"c"}`) || strings.Contains(string(data), `"purpose"`) || strings.Contains(string(data), "whole") {
 		t.Fatalf("body %s", data)
 	}
@@ -365,7 +366,7 @@ func TestAnswersAreCachedWithoutTheOutputAndCheckedWhenRead(t *testing.T) {
 	if f.count() != 2 {
 		t.Fatalf("a tampered entry was used")
 	}
-	other := newOpenRouter(Config{Kind: OpenRouter, Key: "key", Model: DefaultModel, URL: server.URL + "/api/alpha/decisions?x", Timeout: 5 * time.Second, Cache: dir})
+	other := newOpenRouter(Config{Kind: OpenRouter, Key: "key", Models: []string{DefaultModel}, URL: server.URL + "/api/alpha/decisions?x", Timeout: 5 * time.Second, Cache: dir})
 	if cacheKey(other.config, []byte("b")) == cacheKey(openRouterFor(server, time.Second, dir).config, []byte("b")) {
 		t.Fatal("the URL must be part of the key")
 	}

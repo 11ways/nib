@@ -27,7 +27,17 @@ const (
 	decidedHead = 30
 	decidedTail = 100
 	pickContext = 3
-	rowLimit    = engine.LineLimit
+	// A summarizer that does not read the whole output reads its first excerptHead and last excerptTail log lines and the decider's picks
+	// scored excerptScore or more, each widened by excerptContext lines, up to excerptLines lines in all.
+	excerptHead    = 30
+	excerptTail    = 100
+	excerptScore   = 0.3
+	excerptContext = 10
+	excerptLines   = 400
+	// A summary shows the rows of the passages it points at, each widened by summaryContext lines, up to summaryRows rows past the first.
+	summaryContext = 2
+	summaryRows    = 40
+	rowLimit       = engine.LineLimit
 	// collapseAfter is how long plain output gets before repeats in it collapse.
 	collapseAfter = 20
 )
@@ -155,13 +165,14 @@ func plainLines(data []byte) []string {
 	return lines
 }
 
-// decision is what a decider needs to know about a call besides its output.
+// decision is what a decider and a summarizer need to know about a call besides its output.
 type decision struct {
-	decider  decider.Decider
-	command  string
-	purpose  string
-	exit     int
-	timedOut bool
+	decider    decider.Decider
+	summarizer decider.Summarizer
+	command    string
+	purpose    string
+	exit       int
+	timedOut   bool
 }
 
 // render turns what the sink holds into the tool result, records the anchored rows it shows as seen, and writes the whole output to a log when
@@ -218,7 +229,7 @@ func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d deci
 	}
 	log := logs.save(raw)
 	if over {
-		rows = shape(ctx, rows, log, d)
+		rows = shape(ctx, rows, raw, log, d)
 	}
 	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil

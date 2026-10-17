@@ -112,7 +112,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	options.Providers = startProviders(ctx, specs, directory, options.Sandbox && os.Getenv("NIB_PROVIDERS_SANDBOX") != "1")
-	s := newServer(options, choice.New())
+	s := newServer(options, choice.New(), choice.Summarizer())
 	err = s.Run(ctx, &mcp.StdioTransport{})
 	s.Close()
 	for _, p := range options.Providers {

@@ -19,8 +19,9 @@ func purpose(description string) string {
 }
 
 // shape cuts over-budget rows: the configured decider chooses the middle of plain output, and the fixed cut serves the rest, file rows
-// included, since what nib's own commands show is file content the model asked for and counts as seen for edits.
-func shape(ctx context.Context, rows []row, log saved, d decision) []row {
+// included, since what nib's own commands show is file content the model asked for and counts as seen for edits. With a summarizer, a
+// checked summary and the lines it points at take the place of the decider's cut; raw is the log's text.
+func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
 	if len(rows) <= headRows+tailRows || d.decider == nil || slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) {
 		return fixedCut(rows, log, "")
 	}
@@ -30,12 +31,143 @@ func shape(ctx context.Context, rows []row, log saved, d decision) []row {
 		texts[i] = r.text
 	}
 	choice := d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
-	return assemble(rows, choice, log, d)
+	var notes []string
+	// A summary is not asked for where the decider judged that every line counts, nor for a run that succeeded with no purpose to serve.
+	if d.summarizer != nil && !(choice.Judged && choice.Whole >= decider.WholeThreshold) && (d.purpose != "" || d.exit != 0 || d.timedOut) {
+		lines := plainLines([]byte(raw))
+		s := d.summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
+			Excerpt: excerpt(rows, choice, len(lines))})
+		if s.Failure == "" {
+			return summarized(rows, s, choice.Who, log)
+		}
+		notes = append(notes, "no summary ("+s.Failure+")")
+	}
+	return assemble(rows, choice, log, d, notes...)
+}
+
+// excerpt is the log lines a summarizer reads when it does not read the whole output: the start and end a decider keeps, and the passages it
+// picked, best first and widened by excerptContext lines, while they fit excerptLines.
+func excerpt(rows []row, choice decider.Choice, lines int) []int {
+	keep := map[int]bool{}
+	for n := 1; n <= min(excerptHead, lines); n++ {
+		keep[n] = true
+	}
+	for n := max(1, lines-excerptTail+1); n <= lines; n++ {
+		keep[n] = true
+	}
+	picks := slices.Clone(choice.Picks)
+	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
+	for _, p := range picks {
+		if p.Score < excerptScore || p.End <= p.Start {
+			continue
+		}
+		first, last := logLines(rows[decidedHead+p.Start : decidedHead+p.End])
+		if first == 0 {
+			continue
+		}
+		var more []int
+		for n := max(1, first-excerptContext); n <= min(lines, last+excerptContext); n++ {
+			if !keep[n] {
+				more = append(more, n)
+			}
+		}
+		if len(keep)+len(more) > excerptLines {
+			continue
+		}
+		for _, n := range more {
+			keep[n] = true
+		}
+	}
+	out := make([]int, 0, len(keep))
+	for n := range keep {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func cmpScore(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// summarized shows a checked summary in place of a decider's cut: the summary, the rows of the log lines it points at with summaryContext
+// lines around each while they fit summaryRows (the first passage always), a read of the passages that did not fit, and the gaps named.
+func summarized(rows []row, s decider.Summary, picker string, log saved) []row {
+	keep := make([]bool, len(rows))
+	shown := 0
+	var rest [][2]int
+	for k, r := range s.Ranges {
+		var add []int
+		for i, row := range rows {
+			if !keep[i] && row.first > 0 && row.first <= r[1]+summaryContext && row.last >= r[0]-summaryContext {
+				add = append(add, i)
+			}
+		}
+		if k > 0 && shown+len(add) > summaryRows {
+			rest = append(rest, r)
+			continue
+		}
+		for _, i := range add {
+			keep[i] = true
+		}
+		shown += len(add)
+	}
+	out := append([]row{{text: "[summary by " + s.Who + ", in its own words, not program output: " + s.Text + "]", header: -1}}, gapped(rows, keep)...)
+	read := "the summary's model pointed at the lines shown, and each line it quoted was checked against the log"
+	if s.Excerpt {
+		read = "the summary's model read only the start, the end and the passages " + picker + " chose; it pointed at the lines shown, and each line " +
+			"it quoted was checked against the log"
+	}
+	clauses := []string{read}
+	if s.Dropped > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d of the lines and ranges it named did not match the log, so they were dropped", s.Dropped))
+	}
+	if len(rest) > 0 {
+		var parts []string
+		for _, r := range rest {
+			part := fmt.Sprint(r[0])
+			if r[1] > r[0] {
+				part += fmt.Sprintf("-%d", r[1])
+			}
+			parts = append(parts, part)
+		}
+		more := "the other passages it named are log " + spans(rest)
+		if log.path != "" {
+			more = "read the other passages it named with read " + log.path + ":" + strings.Join(parts, ",") + " plain:true"
+		}
+		clauses = append(clauses, more)
+	}
+	return append(out, row{text: closing(shown, log, clauses), header: -1})
+}
+
+// gapped is the rows keep marks, with a row naming the log lines of each run left out between them.
+func gapped(rows []row, keep []bool) []row {
+	var out []row
+	for i := 0; i < len(rows); {
+		if keep[i] {
+			out = append(out, rows[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(rows) && !keep[j] {
+			j++
+		}
+		out = append(out, row{text: "[nibash: " + leftOut(rows[i:j]) + "]", header: -1})
+		i = j
+	}
+	return out
 }
 
 // assemble keeps the start and end and adds the picks that reach the threshold, best first and widened, while they fit the budget; every gap
-// is announced with the log lines it leaves out, and a closing note says who chose.
-func assemble(rows []row, choice decider.Choice, log saved, d decision) []row {
+// is announced with the log lines it leaves out, and a closing note says who chose, with notes added to it.
+func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ...string) []row {
 	who := choice.Who
 	if choice.Failure != "" {
 		who = "the decision model failed (" + choice.Failure + "), so " + who
@@ -48,7 +180,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision) []row {
 		}
 	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
-		return fixedCut(rows, log, who+" judged that your description needs every line, so filter or count the whole output instead")
+		return fixedCut(rows, log, strings.Join(append([]string{who + " judged that your description needs every line, so filter or count the whole output instead"}, notes...), "; "))
 	}
 	n := len(rows)
 	end := n - decidedTail
@@ -64,15 +196,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision) []row {
 			picks = append(picks, p)
 		}
 	}
-	slices.SortStableFunc(picks, func(a, b decider.Pick) int {
-		switch {
-		case a.Score > b.Score:
-			return -1
-		case a.Score < b.Score:
-			return 1
-		}
-		return 0
-	})
+	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
 	chose := false
 	var missed [][2]int
 	for _, p := range picks {
@@ -102,22 +226,9 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision) []row {
 		chose = true
 	}
 	if !chose && len(missed) == 0 {
-		return fixedCut(rows, log, who+" found nothing in them"+purpose)
+		return fixedCut(rows, log, strings.Join(append([]string{who + " found nothing in them" + purpose}, notes...), "; "))
 	}
-	var out []row
-	for i := 0; i < n; {
-		if keep[i] {
-			out = append(out, rows[i])
-			i++
-			continue
-		}
-		j := i
-		for j < n && !keep[j] {
-			j++
-		}
-		out = append(out, row{text: "[nibash: " + leftOut(rows[i:j]) + "]", header: -1})
-		i = j
-	}
+	out := gapped(rows, keep)
 	clauses := []string{who + " chose the middle" + purpose}
 	if len(missed) > 0 {
 		passages := "passages"
@@ -141,7 +252,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision) []row {
 	for _, reason := range reasons {
 		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", spans(byReason[reason]), reason))
 	}
-	return append(out, row{text: closing(shown, log, clauses), header: -1})
+	return append(out, row{text: closing(shown, log, append(clauses, notes...)), header: -1})
 }
 
 // logLines are the first and last log lines rows stand for; 0 when none stands for any, as for file headers.
