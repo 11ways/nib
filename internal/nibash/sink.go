@@ -28,12 +28,13 @@ const (
 	decidedTail = 100
 	pickContext = 3
 	// A summarizer reads the first excerptHead and last excerptTail log lines and the decider's picks scored excerptScore or more, each
-	// widened by excerptContext lines, up to excerptLines lines in all.
+	// widened by excerptContext lines, up to excerptLines lines in all; picks go in best first, so it is the cap, not the score, that leaves
+	// out a passage the decider ranked low.
 	excerptHead    = 30
 	excerptTail    = 100
 	excerptScore   = 0.3
 	excerptContext = 10
-	excerptLines   = 400
+	excerptLines   = 600
 	// A summary shows the rows of the passages it points at, each widened by summaryContext lines, up to summaryRows rows past the first.
 	summaryContext = 2
 	summaryRows    = 40

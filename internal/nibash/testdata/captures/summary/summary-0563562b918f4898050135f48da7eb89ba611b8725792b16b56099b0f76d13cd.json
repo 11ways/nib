@@ -1,0 +1,1 @@
+"{\"summary\": \"One test fails: 'durations \u003e parses \\\"-90s\\\"' at line 1445, with the assertion message 'got 90, want -90' thrown at parseDuration (src/duration.ts:41:12). The run ends with 2393 pass, 1 fail, 7182 expect() calls across 38 files.\", \"ranges\": [[1445, 1447], [2473, 2476]]}"

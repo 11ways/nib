@@ -1,0 +1,1 @@
+"{\"summary\": \"Ruff reports 2286 errors across src/zemble; the only undefined-name finding is F821 at src/zemble/dedup/report.py:30:9 (`undefined_helper_name`). The rest are style/lint rules (CPY001, COM812, TRY003/EM101/EM102, PLC0415, D401, PLR2004, etc.). Lines 1-2 are warnings about incompatible docstring rule pairs.\", \"ranges\": [[705, 705], [1, 2], [2289, 2290]]}"

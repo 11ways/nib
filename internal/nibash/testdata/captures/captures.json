@@ -128,13 +128,7 @@
     "purpose": "Build everything and show the compiler commands",
     "needs": [
       "^internal/decider/openrouter.go:\\d+:\\d+: "
-    ],
-    "loses": {
-      "summary": [
-        5133,
-        5134
-      ]
-    }
+    ]
   },
   {
     "name": "pytest-v-fail",
@@ -146,12 +140,7 @@
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
-    ],
-    "loses": {
-      "summary": [
-        19
-      ]
-    }
+    ]
   },
   {
     "name": "pytest-two-fail",
@@ -210,14 +199,7 @@
       "search: print scores as integers",
       "^ src/zemble/utils\\.py \\| 23 ",
       "^ tests/test_mcp\\.py\\s+\\| 23 "
-    ],
-    "loses": {
-      "summary": [
-        239,
-        243,
-        245
-      ]
-    }
+    ]
   },
   {
     "name": "git-log-p",
