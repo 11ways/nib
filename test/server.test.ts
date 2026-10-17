@@ -97,6 +97,21 @@ describe("MCP server", () => {
     expect((await call("nibash", { command: "if then" })).text).toStartWith("nibash: ")
   })
 
+  test("nibash's git diff rows anchor edits through MCP with no read", async () => {
+    const directory = await workspace()
+    await writeFile(path.join(directory, "a.go"), "package a\n\nfunc A() {}\n")
+    const env = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+    const { call } = await connect(directory, { env: { NIB_SHELL: "1", ...env } })
+    expect((await call("nibash", { command: "git init -q -b main && git add -A && git commit -qm first" })).text).toBe("(no output)")
+    await writeFile(path.join(directory, "a.go"), "package a\n\nfunc A() { return }\n")
+    const diff = await call("nibash", { command: "git diff" })
+    const tag = tagOf(diff.text)
+    expect(diff.text).toBe(`[a.go#${tag}]\n@@ -1,3 +1,3 @@\n 1:package a\n 2:\n-|func A() {}\n+3:func A() { return }`)
+    const edited = await call("edit", { input: `[a.go#${tag}]\nPUT 3:\n+func A() { return 1 }` })
+    expect(edited.isError).toBeFalsy()
+    expect(await readFile(path.join(directory, "a.go"), "utf8")).toBe("package a\n\nfunc A() { return 1 }\n")
+  })
+
   test("with nib's hook, rows an agent holds print as one marker until its context is compacted", async () => {
     const directory = await workspace()
     const runtime = await workspace()

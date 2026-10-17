@@ -20,8 +20,12 @@ type record struct {
 	// match marks a grep match, as opposed to a context line; context records render with a space where matches get a *.
 	match   bool
 	context bool
+	// added marks a line a diff adds, which renders with a +.
+	added bool
 	// separator is grep's "--" between groups of context.
 	separator bool
+	// display is a line of nib's own or a program's that belongs under origin's file header but is not that file's line, as text shows it.
+	display bool
 }
 
 type origin struct {

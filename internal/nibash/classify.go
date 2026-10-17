@@ -1,6 +1,7 @@
 package nibash
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -257,15 +258,18 @@ func (c *classifier) check(call *syntax.CallExpr, out destination) (nib, system 
 		words[i] = value
 	}
 	name := words[0]
-	prepare, ok := commands[name]
+	cmd, ok := commands[name]
 	if !ok || c.functions[name] || len(call.Args[0].Parts) != 1 {
 		return false, false
 	}
 	if _, isLit := call.Args[0].Parts[0].(*syntax.Lit); !isLit {
 		return false, false
 	}
-	if _, err := prepare(name, words[1:]); err != nil {
-		return false, out == toTerminal
+	if cmd.renders && out != toTerminal {
+		return false, false
+	}
+	if _, err := cmd.prepare(name, words[1:]); err != nil {
+		return false, out == toTerminal && !errors.Is(err, errForeign)
 	}
 	return true, false
 }

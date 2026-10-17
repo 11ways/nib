@@ -1,0 +1,484 @@
+package nibash
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/11ways/nib/internal/engine"
+	"mvdan.cc/sh/v3/interp"
+)
+
+// errForeign means a command nib's own never handles in that form, such as a git subcommand whose output it does not reshape; the system
+// program runs with no note, since nothing was expected of nib's.
+var errForeign = errors.New("form nibash does not handle")
+
+// gitPlan runs the real git with the command line's own arguments and reshapes what it prints for the model: path listings with each folder
+// once, and a diff's lines as rows of the files they belong to. Exit status, standard error and side effects are git's.
+type gitPlan struct {
+	args []string
+	// dirs are the -C directories in order, which git joins to the working directory.
+	dirs []string
+	// globals are the options before the subcommand, which a helper run of git gets too.
+	globals    []string
+	subcommand string
+	// patch is whether the output can hold a diff; relative and noPrefix say how its paths read.
+	patch, relative, noPrefix bool
+	// at is where the subcommand sits in args; wide asks a --stat without a width for one wide enough to print every path whole.
+	at   int
+	wide bool
+}
+
+// gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
+// is the next word. A name ending in "*" takes any attached rest, as -U3 or -n5 do.
+type gitOptions struct {
+	flags, attached, separate []string
+}
+
+var gitSubcommands = map[string]gitOptions{
+	"status": {
+		flags:    []string{"-s", "--short", "-b", "--branch", "--porcelain", "--long", "-u", "-u*", "--untracked-files", "--ignored", "--no-renames", "--renames", "--ahead-behind", "--no-ahead-behind", "--show-stash"},
+		attached: []string{"--porcelain=v1", "--untracked-files=", "--ignored="},
+	},
+	"add": {flags: []string{"-v", "--verbose", "-A", "--all", "-u", "--update", "-n", "--dry-run", "-f", "--force", "-N", "--intent-to-add", "--no-all", "--ignore-removal", "--ignore-errors"}},
+	"rm":  {flags: []string{"-r", "-f", "--force", "--cached", "-n", "--dry-run", "-q", "--quiet", "--ignore-unmatch"}},
+	"ls-files": {
+		flags:    []string{"-c", "--cached", "-m", "--modified", "-o", "--others", "-d", "--deleted", "-i", "--ignored", "--exclude-standard", "--full-name", "--directory", "--no-empty-directory", "--error-unmatch"},
+		attached: []string{"--exclude=", "--exclude-from=", "--exclude-per-directory="},
+	},
+	"diff": diffOptions,
+	"show": diffOptions,
+	"log":  diffOptions,
+}
+
+// diffOptions are what diff, show and log share here: none changes the shape of the lines nib reads, or it handles the change (--relative,
+// --no-prefix), or the lines it cannot read print as git printed them.
+var diffOptions = gitOptions{
+	flags: []string{"--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "-p", "-u", "--patch", "--cached",
+		"--staged", "--no-renames", "-M", "-M*", "--find-renames", "-w", "--ignore-all-space", "-b", "--ignore-space-change", "--ignore-blank-lines",
+		"--minimal", "--patience", "--histogram", "--no-color", "--no-ext-diff", "--relative", "--no-prefix", "--oneline", "--abbrev-commit",
+		"--no-merges", "--merges", "--first-parent", "--reverse", "--all", "--graph", "--decorate", "--no-decorate", "--full-diff", "--follow",
+		"-R", "--text", "-a", "-U*", "-n*", "-[0-9]*"},
+	attached: []string{"--stat=", "--unified=", "--format=", "--pretty=", "--date=", "--since=", "--until=", "--after=", "--before=", "--author=",
+		"--committer=", "--grep=", "--max-count=", "--find-renames=", "--diff-filter=", "--color=never", "--diff-algorithm=", "--abbrev="},
+	separate: []string{"-n"},
+}
+
+func prepareGit(_ string, args []string) (plan, error) {
+	p := &gitPlan{args: args}
+	i := 0
+	for ; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "-C", "-c":
+			if i+1 >= len(args) {
+				return nil, errForeign
+			}
+			if a == "-C" {
+				p.dirs = append(p.dirs, args[i+1])
+			}
+			p.globals = append(p.globals, a, args[i+1])
+			i++
+		case "--no-pager", "-P", "--no-optional-locks":
+			p.globals = append(p.globals, a)
+		default:
+			if strings.HasPrefix(a, "-") || a == expansion {
+				return nil, errForeign
+			}
+			goto subcommand
+		}
+	}
+	return nil, errForeign
+subcommand:
+	p.subcommand, p.at = args[i], i
+	spec, ok := gitSubcommands[p.subcommand]
+	if !ok {
+		return nil, errForeign
+	}
+	verbose, shapes, sized := false, false, false
+	rest := args[i+1:]
+	for k := 0; k < len(rest); k++ {
+		a := rest[k]
+		if a == "--" {
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		name, ok := spec.match(a)
+		if !ok && p.subcommand == "rm" && !strings.HasPrefix(a, "--") {
+			// rm's short options bundle, as -rf.
+			ok = strings.Trim(a[1:], "rfnq") == ""
+			name = a
+		}
+		if !ok {
+			return nil, errUnsupported
+		}
+		if spec.takesNext(name) {
+			if k+1 >= len(rest) {
+				return nil, errUnsupported
+			}
+			k++
+		}
+		switch name {
+		case "-v", "--verbose", "-n", "--dry-run":
+			verbose = true
+		case "--relative":
+			p.relative = true
+		case "--no-prefix":
+			p.noPrefix = true
+		case "--stat":
+			shapes, p.wide = true, true
+		case "-p", "-u", "--patch", "--name-only", "--name-status", "--numstat":
+			shapes = true
+		}
+		if strings.HasPrefix(name, "-U") || strings.HasPrefix(name, "--unified=") {
+			shapes = true
+		}
+		if strings.HasPrefix(name, "--stat=") {
+			shapes, sized = true, true
+		}
+	}
+	p.wide = p.wide && !sized
+	switch p.subcommand {
+	case "add":
+		// Without -v or -n add prints nothing to reshape.
+		if !verbose {
+			return nil, errForeign
+		}
+	case "log":
+		// A log without a diff or a file list is commits only.
+		if !shapes {
+			return nil, errForeign
+		}
+		p.patch = true
+	case "diff", "show":
+		p.patch = true
+	}
+	return p, nil
+}
+
+// match is the option name a matches, as listed: a flag, an attached value's "name=" or a name with "*".
+func (o gitOptions) match(a string) (string, bool) {
+	for _, f := range o.flags {
+		if f == a {
+			return f, true
+		}
+		if stem, ok := strings.CutSuffix(f, "*"); ok {
+			if stem == "-[0-9]" {
+				if len(a) > 1 && strings.Trim(a[1:], "0123456789") == "" {
+					return f, true
+				}
+				continue
+			}
+			if strings.HasPrefix(a, stem) && len(a) > len(stem) {
+				return a, true
+			}
+		}
+	}
+	for _, f := range o.attached {
+		if strings.HasSuffix(f, "=") && strings.HasPrefix(a, f) || a == f {
+			return a, true
+		}
+	}
+	for _, f := range o.separate {
+		if a == f {
+			return f, true
+		}
+	}
+	return "", false
+}
+
+func (o gitOptions) takesNext(name string) bool {
+	for _, f := range o.separate {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *gitPlan) run(inv *invocation) int {
+	hc := interp.HandlerCtx(inv.ctx)
+	var out bytes.Buffer
+	var stderr io.Writer = hc.Stderr
+	if hc.Stderr == hc.Stdout {
+		stderr = &out
+	}
+	args := p.args
+	if p.wide {
+		// git cuts a path to fit 80 columns, which would leave it out of its folder; its bars, at most 20 wide, still show each change's size against the others.
+		args = append(append(append([]string{}, args[:p.at+1]...), "--stat-width=1000", "--stat-graph-width=20"), args[p.at+1:]...)
+	}
+	err := inv.call.runProgramTo(inv.ctx, append([]string{"git"}, args...), &out, stderr, nil)
+	lines := splitLines(out.String())
+	switch {
+	case p.patch:
+		p.renderPatch(inv, lines)
+	default:
+		for _, text := range compactListing(lines, gitParser(p.subcommand)) {
+			inv.out.emit(record{text: text})
+		}
+	}
+	var status interp.ExitStatus
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &status):
+		return int(status)
+	}
+	return 1
+}
+
+// splitLines splits a program's output into lines without their newline; a carriage return before it stays, for a diff to compare.
+func splitLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+}
+
+// The forms of a git line that names one path, each split into the text before the path, the path, and the text after it.
+var (
+	gitShort    = regexp.MustCompile(`^([ MADRCUT?!][ MADRCUT?!] )(.+)()$`)
+	gitLong     = regexp.MustCompile(`^(\t(?:modified|new file|deleted|renamed|copied|typechange|unmerged|both modified|both added|both deleted|added by us|added by them|deleted by us|deleted by them): +)(.+)()$`)
+	gitTabbed   = regexp.MustCompile(`^(\t)([^ \t]+)()$`)
+	gitVerbose  = regexp.MustCompile(`^((?:add|remove|rm) ')(.+)(')$`)
+	gitStat     = regexp.MustCompile(`^( )(\S(?:.*\S)?) +(\| +(?:\d+(?: [+-]+)?|Bin .*))$`)
+	gitStatus   = regexp.MustCompile(`^([ACDMTUXB]\t)(.+)()$`)
+	gitNumstat  = regexp.MustCompile(`^((?:\d+|-)\t(?:\d+|-)\t)(.+)()$`)
+	gitBarePath = regexp.MustCompile(`^()([^ \t]*[/.][^ \t]*)()$`)
+)
+
+// gitParser reads the path listing lines a subcommand prints.
+func gitParser(subcommand string) func(string) (listed, bool) {
+	var forms []*regexp.Regexp
+	switch subcommand {
+	case "status":
+		forms = []*regexp.Regexp{gitShort, gitLong, gitTabbed}
+	case "add", "rm":
+		forms = []*regexp.Regexp{gitVerbose}
+	case "ls-files":
+		forms = []*regexp.Regexp{gitBarePath}
+	default:
+		forms = []*regexp.Regexp{gitStat, gitStatus, gitNumstat, gitBarePath}
+	}
+	return func(line string) (listed, bool) {
+		for _, form := range forms {
+			m := form.FindStringSubmatch(line)
+			if m == nil || !plainPath(m[2]) {
+				continue
+			}
+			after := m[3]
+			if form == gitStat {
+				// The padding that lines up the bars would no longer line anything up.
+				after = " " + after
+			}
+			return listed{before: m[1], path: m[2], after: after}, true
+		}
+		return listed{}, false
+	}
+}
+
+// plainPath is whether git printed a path as it is: not quoted, not a rename's two paths, not cut short, nothing but printable text.
+func plainPath(path string) bool {
+	if path == "" || strings.HasPrefix(path, `"`) || strings.HasPrefix(path, "...") || strings.HasPrefix(path, " ") || strings.HasSuffix(path, " ") {
+		return false
+	}
+	if strings.Contains(path, " -> ") || strings.Contains(path, " => ") || strings.ContainsAny(path, "{}\t") {
+		return false
+	}
+	for _, r := range path {
+		if r < ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// gitDiff matches the header that starts one file's part of a diff.
+var gitDiff = regexp.MustCompile(`^diff --git `)
+
+// gitHunk matches a hunk's header: the old side's start and length, the new side's start and length (a missing length is 1).
+var gitHunk = regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// gitExtended are the lines git puts between a file's "diff --git" and its first hunk.
+var gitExtended = []string{"old mode ", "new mode ", "deleted file mode ", "new file mode ", "copy from ", "copy to ", "rename from ", "rename to ",
+	"similarity index ", "dissimilarity index ", "index ", "--- ", "+++ ", "Binary files "}
+
+// renderPatch prints a diff's files as rows of the files they are now: lines a hunk adds or keeps, where the file holds exactly that text at
+// that line, are the file's rows; removed lines and lines the file no longer holds there print in forms that are never anchors. Everything
+// else, the commits of a log and a stat included, prints as git printed it, its path listings with each folder once.
+func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
+	var plain []string
+	flush := func() {
+		for _, text := range compactListing(plain, gitParser(p.subcommand)) {
+			inv.out.emit(record{text: text})
+		}
+		plain = nil
+	}
+	base, asked := "", false
+	for i := 0; i < len(lines); {
+		if !gitDiff.MatchString(lines[i]) {
+			plain = append(plain, lines[i])
+			i++
+			continue
+		}
+		end := sectionEnd(lines, i)
+		if !asked {
+			base, asked = p.base(inv), true
+		}
+		if source := p.sectionSource(inv, base, lines[i:end]); source != nil {
+			flush()
+			renderFile(inv, source, lines[i:end])
+		} else {
+			plain = append(plain, lines[i:end]...)
+		}
+		i = end
+	}
+	flush()
+}
+
+// sectionEnd is where one file's part of a diff that starts at start ends: after its extended header lines and the hunks their headers count,
+// so a log's next commit, whatever its format, is never taken for part of the file.
+func sectionEnd(lines []string, start int) int {
+	i := start + 1
+	for i < len(lines) && slices.ContainsFunc(gitExtended, func(prefix string) bool { return strings.HasPrefix(lines[i], prefix) }) {
+		i++
+	}
+	for i < len(lines) {
+		m := gitHunk.FindStringSubmatch(strings.TrimSuffix(lines[i], "\r"))
+		if m == nil {
+			break
+		}
+		old, added := hunkLength(m[1]), hunkLength(m[3])
+		i++
+		for i < len(lines) && (old > 0 || added > 0 || strings.HasPrefix(lines[i], `\`)) {
+			switch line := lines[i]; {
+			case strings.HasPrefix(line, `\`):
+			case strings.HasPrefix(line, "-"):
+				old--
+			case strings.HasPrefix(line, "+"):
+				added--
+			case strings.HasPrefix(line, " "), line == "", line == "\r":
+				old--
+				added--
+			default:
+				return i
+			}
+			i++
+		}
+	}
+	return i
+}
+
+func hunkLength(text string) int {
+	if text == "" {
+		return 1
+	}
+	n, _ := strconv.Atoi(text)
+	return n
+}
+
+// base is the directory a diff's paths are relative to: the working directory with --relative, else the top of the repository; "" when git
+// cannot say.
+func (p *gitPlan) base(inv *invocation) string {
+	dir := inv.dir
+	for _, d := range p.dirs {
+		dir = absolute(dir, d)
+	}
+	if p.relative {
+		return dir
+	}
+	var out bytes.Buffer
+	args := append(append([]string{"git"}, p.globals...), "rev-parse", "--show-toplevel")
+	if inv.call.runProgramTo(inv.ctx, args, &out, io.Discard, nil) != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// sectionSource is the file one file's part of a diff is about, opened as it is now; nil when that part has no new side nib can name and hold
+// as one version, as for a deleted file or a binary one.
+func (p *gitPlan) sectionSource(inv *invocation, base string, section []string) *engine.Source {
+	if base == "" {
+		return nil
+	}
+	for _, line := range section {
+		path, ok := strings.CutPrefix(strings.TrimSuffix(line, "\r"), "+++ ")
+		if !ok {
+			continue
+		}
+		if path == "/dev/null" || !p.noPrefix && !stripPrefix(&path) || !plainPath(path) {
+			return nil
+		}
+		source := inv.open(filepath.Join(base, path), true)
+		if source == nil || source.View == nil {
+			return nil
+		}
+		return source
+	}
+	return nil
+}
+
+// stripPrefix removes the side prefix git puts before a new side's path: b/ by default, or a mnemonic one (w/, i/, c/, o/).
+func stripPrefix(path *string) bool {
+	for _, prefix := range []string{"b/", "w/", "i/", "c/", "o/"} {
+		if rest, ok := strings.CutPrefix(*path, prefix); ok {
+			*path = rest
+			return true
+		}
+	}
+	return false
+}
+
+// renderFile prints one file's part of a diff under its header: git's own header lines go, since the file's header names it; mode, rename
+// and similarity lines and hunk headers stay as lines that are not the file's.
+func renderFile(inv *invocation, source *engine.Source, section []string) {
+	view := source.View
+	display := func(text string) { inv.out.emit(record{text: text, origin: &origin{source: source}, display: true}) }
+	next := 0
+	for _, raw := range section {
+		line := strings.TrimSuffix(raw, "\r")
+		if m := gitHunk.FindStringSubmatch(line); m != nil {
+			next, _ = strconv.Atoi(m[2])
+			display(line)
+			continue
+		}
+		if next == 0 {
+			if gitDiff.MatchString(line) || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+				continue
+			}
+			display(line)
+			continue
+		}
+		if line == "" {
+			// A context line of an empty line, as some tools strip its space.
+			line = " "
+		}
+		mark, text := line[0], line[1:]
+		if mark == '\\' {
+			display(line)
+			continue
+		}
+		if mark == '-' {
+			display("-|" + text)
+			continue
+		}
+		at := next
+		next++
+		if at == 1 {
+			text = strings.TrimPrefix(text, string(rune(0xfeff)))
+		}
+		if at >= 1 && at <= len(view.Lines) && view.Lines[at-1] == text {
+			inv.out.emit(record{text: text, origin: &origin{source: source, line: at}, added: mark == '+', context: mark == ' '})
+			continue
+		}
+		display(fmt.Sprintf("%c%d|%s", mark, at, text))
+	}
+}

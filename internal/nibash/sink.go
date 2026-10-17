@@ -159,6 +159,7 @@ type item struct {
 	marker      string
 	gap         bool
 	plain       bool
+	display     bool
 	first, last int
 }
 
@@ -344,10 +345,17 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 		}
 		flushPlain()
 		marker := ""
-		if r.match {
+		switch {
+		case r.match:
 			marker = "*"
-		} else if r.context {
+		case r.added:
+			marker = "+"
+		case r.context:
 			marker = " "
+		}
+		if r.display {
+			items = append(items, item{source: r.origin.source, text: engine.PlainText(r.text), display: true, first: at, last: at})
+			continue
 		}
 		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, first: at, last: at})
 	}
@@ -375,7 +383,8 @@ type row struct {
 	plain       bool
 	capped      bool
 	first, last int
-	// covers are the lines a held marker stands for; a match row of grep is what the command is for, so it always prints.
+	// covers are the lines a held marker stands for; a match row (grep's match, a line a diff adds) is what the command is for, so it always
+	// prints.
 	covers []int
 }
 
@@ -411,6 +420,16 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 			rows = append(rows, row{text: header(e, ctx, source), header: -1})
 			headerAt = len(rows) - 1
 		}
+		if it.display {
+			// A line under the header that is not the file's own breaks the run of its lines, so no "..." follows it.
+			previous = 0
+			text := it.text
+			if js.Len(text) > rowLimit {
+				text = string([]rune(text)[:rowLimit]) + "..."
+			}
+			rows = append(rows, row{text: text, header: headerAt, first: it.first, last: it.first})
+			continue
+		}
 		if previous != 0 && it.line != previous+1 && it.line != previous {
 			rows = append(rows, row{text: "...", header: headerAt})
 		}
@@ -418,7 +437,7 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		content, latest := lineOf(e, ctx, source, it.line)
 		if latest {
 			text, anchor := engine.Row(it.line, content, rowLimit)
-			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, match: it.marker == "*", first: it.first, last: it.first})
+			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, match: it.marker == "*" || it.marker == "+", first: it.first, last: it.first})
 			continue
 		}
 		shown := engine.Visible(content)

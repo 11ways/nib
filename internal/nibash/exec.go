@@ -93,7 +93,11 @@ func (c *call) ranAsSystem(name string, err error) {
 	if errors.Is(err, errUntranslatable) {
 		why = "its pattern needs a feature nib's own cannot run exactly"
 	}
-	note := fmt.Sprintf("[%s ran as the system program: %s, so its lines are plain output, not edit anchors]", name, why)
+	so := "its lines are plain output, not edit anchors"
+	if commands[name].renders {
+		so = "its output is as " + name + " printed it"
+	}
+	note := fmt.Sprintf("[%s ran as the system program: %s, so %s]", name, why, so)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !slices.Contains(c.system, note) {
@@ -105,7 +109,7 @@ func (c *call) ranAsSystem(name string, err error) {
 func (c *call) runNib(ctx context.Context, mode, name string, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 	args = append([]string{name}, args[1:]...)
-	prepare := commands[name]
+	prepare := commands[name].prepare
 	p, err := prepare(name, args[1:])
 	if err != nil {
 		// An option the command line or an expansion gave it that nib's own lacks. With no other nib command reading or writing its records,
@@ -187,6 +191,13 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 // runProgram is runReal calling printed, when not nil, once the program's standard output brings the sink anything.
 func (c *call) runProgram(ctx context.Context, args []string, printed func()) error {
 	hc := interp.HandlerCtx(ctx)
+	return c.runProgramTo(ctx, args, hc.Stdout, hc.Stderr, printed)
+}
+
+// runProgramTo is runProgram with its standard output and error going to stdout and stderr, which a nib command that renders a real program's
+// output passes; the same writer for both gives the program one descriptor for both, as 2>&1 does.
+func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr io.Writer, printed func()) error {
+	hc := interp.HandlerCtx(ctx)
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
 		fmt.Fprintln(hc.Stderr, err)
@@ -250,14 +261,14 @@ func (c *call) runProgram(ctx context.Context, args []string, printed func()) er
 		}()
 		return writer, nil
 	}
-	stdout, err := attach(hc.Stdout, printed)
+	out, err := attach(stdout, printed)
 	if err != nil {
 		return err
 	}
-	cmd.Stdout = stdout
-	if hc.Stderr == hc.Stdout {
-		cmd.Stderr = stdout
-	} else if cmd.Stderr, err = attach(hc.Stderr, nil); err != nil {
+	cmd.Stdout = out
+	if stderr == stdout {
+		cmd.Stderr = out
+	} else if cmd.Stderr, err = attach(stderr, nil); err != nil {
 		return err
 	}
 	cmd.WaitDelay = drainDelay

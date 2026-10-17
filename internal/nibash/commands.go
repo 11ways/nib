@@ -42,17 +42,26 @@ type plan interface {
 	run(inv *invocation) int
 }
 
-// commands are nibash's own commands; prepare refuses with errUnsupported for anything they do not implement.
-var commands = map[string]func(name string, args []string) (plan, error){
-	"cat":   prepareCat,
-	"head":  prepareHead,
-	"tail":  prepareTail,
-	"grep":  prepareGrep,
-	"egrep": prepareGrep,
-	"fgrep": prepareGrep,
-	"rg":    prepareRg,
-	"sed":   prepareSed,
-	"wc":    prepareWc,
+// command is one of nibash's own commands; prepare refuses with errUnsupported for anything it does not implement. renders marks a command
+// that runs the real program and only reshapes its output: it is nib's own only where that output reaches the model, and it has no rows to
+// edit from. prepare refuses with errForeign for a form it never handles, which then runs as the system program without a note.
+type command struct {
+	prepare func(name string, args []string) (plan, error)
+	renders bool
+}
+
+// commands are nibash's own commands.
+var commands = map[string]command{
+	"cat":   {prepare: prepareCat},
+	"head":  {prepare: prepareHead},
+	"tail":  {prepare: prepareTail},
+	"grep":  {prepare: prepareGrep},
+	"egrep": {prepare: prepareGrep},
+	"fgrep": {prepare: prepareGrep},
+	"rg":    {prepare: prepareRg},
+	"sed":   {prepare: prepareSed},
+	"wc":    {prepare: prepareWc},
+	"git":   {prepare: prepareGit, renders: true},
 }
 
 // fail prints a GNU-style error for a command.
