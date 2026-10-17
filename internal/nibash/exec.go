@@ -43,8 +43,10 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 				err = interp.ExitStatus(2)
 			}
 		}()
-		if mode, name, ok := parseMarker(args[0]); ok {
-			switch name {
+		name := args[0]
+		mode, marked, ok := parseMarker(args[0])
+		if ok {
+			switch marked {
 			case internalJob:
 				return c.startJob(ctx, args[1:])
 			case internalKill:
@@ -56,6 +58,13 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 			case internalHash:
 				return c.hash(ctx, args[2:])
 			}
+			name = marked
+		}
+		// What a command deletes goes to the trash, wherever its output goes.
+		if handled, err := c.trashing(ctx, mode, name, args); handled {
+			return err
+		}
+		if ok {
 			return c.runNib(ctx, mode, name, args)
 		}
 		return c.runReal(ctx, args)

@@ -31,7 +31,7 @@ async function connect(directory: string, options: Options = {}) {
   await client.connect(new StdioClientTransport({
     command: await binary(),
     cwd: directory,
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", NIB_SHELL: "0", ...options.confirm && { NIB_CONFIRM_OUTSIDE_ROOTS: "1" }, ...options.env },
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", NIB_SHELL: "0", ...options.confirm && { NIB_CONFIRM_OUTSIDE_ROOTS: "1" }, ...options.env },
     stderr: "pipe",
   }))
   clients.push(client)
@@ -327,7 +327,7 @@ describe("MCP server", () => {
         return await client.callTool({ name: "write", arguments: { path: path.join(outside, "a.txt"), content: "a" } }) as { isError?: boolean; content: { text: string }[] }
       } finally { await client.close() }
     }
-    const env = { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "" }
+    const env = { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "" }
     const confirmed = await writeOutside({ ...env, NIB_CONFIRM_OUTSIDE_ROOTS: "1" })
     expect(confirmed.isError).toBe(true)
     expect(confirmed.content[0]!.text).toContain("outside the workspace roots")
@@ -345,7 +345,7 @@ describe("MCP server", () => {
         return await client.callTool({ name: "read", arguments: { paths: [path.join(outside, "secret.txt")] } }) as { isError?: boolean; content: { text: string }[] }
       } finally { await client.close() }
     }
-    const env = { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "" }
+    const env = { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "" }
     const boxed = await readOutside({ ...env, NIB_SANDBOX: "1" })
     expect(boxed.isError).toBe(true)
     expect(boxed.content[0]!.text).toBe(`${path.join(outside, "secret.txt")} is outside the sandbox, which allows only ${directory}`)

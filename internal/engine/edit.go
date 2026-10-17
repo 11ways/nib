@@ -18,6 +18,7 @@ import (
 	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/patch"
 	"github.com/11ways/nib/internal/snapshots"
+	"github.com/11ways/nib/internal/trash"
 )
 
 type checked struct {
@@ -1673,7 +1674,7 @@ type response struct {
 }
 
 // commit publishes every staged change in order; a failure after the first write names what already landed.
-func commit(ctx *Context, store *snapshots.Store, items []*staged, shownByPreview map[string]map[int]bool) ([]string, error) {
+func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*staged, shownByPreview map[string]map[int]bool) ([]string, error) {
 	var changes []*staged
 	for _, item := range items {
 		if item.kind != stagedNoop {
@@ -1719,7 +1720,8 @@ func commit(ctx *Context, store *snapshots.Store, items []*staged, shownByPrevie
 				if err := h.parent.check(); err != nil {
 					return err
 				}
-				return os.Remove(h.parent.location)
+				_, err := can.Put(h.parent.location, h.target.canonical, ctx.Sandbox)
+				return err
 			}
 			if d := h.destination; d != nil {
 				if err := unchanged(h, item.current); err != nil {
@@ -1802,7 +1804,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 			}
 		}}
 	case stagedRemove:
-		return response{"Deleted " + display, nothing}
+		return response{"Moved " + display + " to the trash; trash restore " + display + " in nibash puts it back", nothing}
 	case stagedCreate:
 		// The model wrote every line, so all of them count as seen; the row map shows where some of them are.
 		lines := item.created.Lines
@@ -1921,9 +1923,10 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 
 var reapplyPattern = regexp.MustCompile(`^REAPPLY` + jsSpace + `+(\S+)$`)
 
-// Engine holds the snapshot store and the stored patches of REAPPLY tokens.
+// Engine holds the snapshot store, the stored patches of REAPPLY tokens and the trash what nib deletes goes to.
 type Engine struct {
 	Store  *snapshots.Store
+	Trash  *trash.Can
 	mu     sync.Mutex
 	tokens map[string]storedPatch
 	order  []string
@@ -1936,7 +1939,7 @@ type storedPatch struct {
 
 // New makes an engine with an empty store.
 func New() *Engine {
-	return &Engine{Store: snapshots.NewStore(), tokens: map[string]storedPatch{}}
+	return &Engine{Store: snapshots.NewStore(), Trash: trash.New(), tokens: map[string]storedPatch{}}
 }
 
 // Patch applies a patch; REAPPLY TOKEN as the whole input applies the patch stored under that token, once.
@@ -2041,7 +2044,7 @@ func (e *Engine) apply(ctx *Context, input string, p *replacePreview) (Result, e
 		if p != nil {
 			shown = p.shown
 		}
-		texts, err := commit(ctx, e.Store, items, shown)
+		texts, err := commit(ctx, e.Store, e.Trash, items, shown)
 		if err != nil {
 			return Result{}, err
 		}
@@ -2120,7 +2123,7 @@ func (e *Engine) Write(ctx *Context, path, content string, tagValue string) (Res
 		if err != nil {
 			return Result{}, err
 		}
-		texts, err := commit(ctx, e.Store, []*staged{item}, nil)
+		texts, err := commit(ctx, e.Store, e.Trash, []*staged{item}, nil)
 		if err != nil {
 			return Result{}, err
 		}

@@ -78,7 +78,7 @@ export async function connect(ctx: Context, env: Record<string, string> = {}): P
     cwd: ctx.directory,
     env: {
       PATH: process.env.PATH ?? "",
-      HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "",
+      HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "",
       NIB_DIRECTORY: ctx.directory,
       NIB_SHELL: "0",
       // Writes outside the roots go through authorize, which a context without one refuses, as the engine did.

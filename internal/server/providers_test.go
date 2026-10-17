@@ -13,11 +13,15 @@ import (
 
 	"github.com/11ways/nib/internal/providers"
 	"github.com/11ways/nib/internal/providers/providertest"
+	"github.com/11ways/nib/internal/trash"
 )
 
 func TestMain(m *testing.M) {
 	providertest.Serve()
-	os.Exit(m.Run())
+	cleanup := trash.Isolated()
+	status := m.Run()
+	cleanup()
+	os.Exit(status)
 }
 
 // hosting connects a client to a server hosting the test provider as fake, in a directory holding a.py.

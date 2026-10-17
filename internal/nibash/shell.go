@@ -32,10 +32,10 @@ const (
 )
 
 // description is the nibash tool's description, with %s for how long output is cut; a test holds every variant under 2048 characters.
-const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over); calls run in parallel. Programs are real processes; stdin is empty.
+const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over) and in parallel. Programs are real processes, stdin empty.
 cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from, a log's as plain text. Otherwise the system program runs, with a note if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), %s, with the whole kept in a log you can read. Changed files list their new tags.
-Unlike bash: a program does not start in a deleted directory; a command still running at its timeout goes on as a job like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the call after it ends reports it. ~name/ paths expand only unquoted; hash -d name=dir adds one for later calls and subagents, hash -d lists them, ${!HOME*} too. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash; a program does not start in a deleted directory; a command past its timeout goes on as a job like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the next call reports its end. ~name/ paths expand only unquoted; hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
@@ -190,6 +190,8 @@ type call struct {
 	written map[string]bool
 	// system are the notes on nib commands that ran as the system program with output to the model, in the order they first ran.
 	system []string
+	// trashed are the absolute paths the call's deleting commands moved to the trash, in order.
+	trashed []string
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version.
@@ -425,6 +427,9 @@ func (c *call) result(reports []string, text string, tail []string, before map[s
 	c.mu.Lock()
 	parts = append(parts, c.system...)
 	c.mu.Unlock()
+	if note := c.trashNote(); note != "" {
+		parts = append(parts, note)
+	}
 	parts = append(parts, tail...)
 	if len(parts) == 0 {
 		return engine.Result{Text: "(no output)"}
@@ -484,7 +489,11 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if found.was != "" {
-				listed = append(listed, c.tools.Display(path)+" (deleted)")
+				gone := " (deleted)"
+				if c.wasTrashed(path) {
+					gone = " (in the trash)"
+				}
+				listed = append(listed, c.tools.Display(path)+gone)
 			}
 			continue
 		}

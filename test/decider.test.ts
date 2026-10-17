@@ -19,7 +19,7 @@ async function workspace() {
   return directory
 }
 
-const base = () => ({ PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", NIB_SHELL: "1" })
+const base = () => ({ PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", NIB_SHELL: "1" })
 
 async function connect(directory: string, env: Record<string, string>) {
   const client = new Client({ name: "test", version: "1" })

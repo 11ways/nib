@@ -623,7 +623,10 @@ describe("multi-file patches", () => {
     await expect(stat(path.join(f.directory, "b.txt"))).rejects.toThrow()
     await expect(stat(path.join(f.directory, "gone.txt"))).rejects.toThrow()
     expect(result.text).toContain(`Moved b.txt to [nested/dir/c.txt#${fileTag("bee\ncee\n")}]\n1:bee\n2:cee`)
-    expect(result.text).toContain("Deleted gone.txt")
+    expect(result.text).toContain("Moved gone.txt to the trash; trash restore gone.txt in nibash puts it back")
+    const info = path.join(process.env.XDG_DATA_HOME!, "Trash", "info")
+    const records = await Promise.all((await readdir(info)).map((name) => readFile(path.join(info, name), "utf8")))
+    expect(records.some((record) => record.includes("/gone.txt\nDeletionDate="))).toBe(true)
     expect(result.text).toContain(`Created [new/created.txt#${fileTag("hello\n\n")}] (2 lines, 1 non-blank, 1 shown)\n1~hello`)
     const followUp = await f.patch(`[nested/dir/c.txt#${fileTag("bee\ncee\n")}]\nPUT 2.=2:\n+CEE`)
     expect(followUp.text).toContain("2:CEE")
@@ -742,7 +745,7 @@ describe("write", () => {
         command: "bash",
         args: ["-c", 'ulimit -f 1; exec "$0"', await binary()],
         cwd: f.directory,
-        env: { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", NIB_DIRECTORY: f.directory, NIB_SHELL: "0" },
+        env: { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", NIB_DIRECTORY: f.directory, NIB_SHELL: "0" },
         stderr: "pipe",
       }))
       try {
