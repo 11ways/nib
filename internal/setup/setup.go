@@ -660,6 +660,34 @@ func Setup(options Options) []string {
 		}
 		return file
 	}
+	// The providers asked for before are hosted again, so a later setup without --provider, as a script runs it for a new config folder, keeps
+	// them; this run's --provider changes what is remembered.
+	rememberedPath := rememberedFile(home, env)
+	kept, err := remembered(rememberedPath)
+	if err != nil {
+		report = append(report, fmt.Sprintf("%s: left as it is and not used, since %v", tilde(rememberedPath), err))
+	}
+	hosting := applied(kept, options.Providers)
+	var dropped []providers.Spec
+	for _, c := range options.Providers {
+		if c.Program == "" {
+			dropped = append(dropped, c)
+		}
+	}
+	if len(options.Providers) > 0 && err == nil && !slices.Equal(hosting, kept) {
+		verb := "remembers"
+		if options.DryRun {
+			verb = "would remember"
+		}
+		line := fmt.Sprintf("%s: %s %s for later setups", tilde(rememberedPath), verb, hostingText(wanted(nil, nil, hosting)))
+		if !options.DryRun {
+			if err := remember(rememberedPath, hosting); err != nil {
+				line = fmt.Sprintf("%s: could not be written: %v", tilde(rememberedPath), err)
+			}
+		}
+		report = append(report, line)
+	}
+	options.Providers = append(hosting, dropped...)
 	display := func(file string) string {
 		if !options.User {
 			if relative, err := filepath.Rel(options.Directory, file); err == nil && !strings.HasPrefix(relative, "..") {
@@ -871,7 +899,23 @@ func Setup(options Options) []string {
 	if config == "" {
 		config = filepath.Join(home, ".claude")
 	}
-	configure(filepath.Join(config, "settings.json"), all(hookStep, denyStep, allowStep))
+	// The nibash mod goes where every config folder's sessions load it from; the env block of a user settings file names it to Claude Code.
+	mod := modFolder(home, env)
+	steps := all(hookStep, denyStep, allowStep)
+	switch installed, err := installMod(mod, options.DryRun); {
+	case err != nil:
+		report = append(report, fmt.Sprintf("%s: the nibash mod could not be installed: %v", tilde(mod), err))
+	default:
+		if installed {
+			verb := "installed"
+			if options.DryRun {
+				verb = "would install"
+			}
+			report = append(report, fmt.Sprintf("%s: %s the nibash mod of this nib", tilde(mod), verb))
+		}
+		steps = all(hookStep, denyStep, allowStep, func(json object, _ *[]string) ([]change, error) { return addPluginDir(json, mod) })
+	}
+	configure(filepath.Join(config, "settings.json"), steps)
 	switch {
 	case user != nil:
 		userWords, _ := program(user)
@@ -1011,7 +1055,10 @@ Registers nib in this folder: the MCP server in .mcp.json; its approval, its Cla
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
 tools Claude Code no longer has (` + strings.Join(ClaudeUndenied, ", ") + `) are removed.
 --provider NAME=PROGRAM makes nib host PROGRAM's tools as NAME_TOOL (see nib --help) and removes the NAME server entries and registrations
-it replaces, in this folder or, with --user, for this user; NAME= stops hosting it. The providers an entry hosts already stay.`
+it replaces, in this folder or, with --user, for this user; NAME= stops hosting it. The providers an entry hosts already stay, and the
+providers asked for are remembered in ~/.config/nib/setup.json, so a later setup without --provider (a new project, a new config folder)
+hosts them too. With --user it also installs the nibash mod this nib carries to ~/.local/share/nib/mods/nibash and names that folder in
+env.CLAUDE_CODE_PLUGIN_DIRS of the config folder's settings.json.`
 
 // Main is `nib setup` from the command line; it returns the exit code.
 func Main(args []string) int {

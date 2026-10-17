@@ -58,6 +58,29 @@ func equal(t *testing.T, got, want any) {
 	}
 }
 
+// line is the report's line about what, a file or "claude mcp", so a test does not count on the place of the others.
+func line(t *testing.T, report []string, what string) string {
+	t.Helper()
+	for _, text := range report {
+		if strings.HasPrefix(text, what+":") {
+			return text
+		}
+	}
+	t.Fatalf("no line for %s in %v", what, report)
+	return ""
+}
+
+// claudeLines are the report's lines about what setup did or would do through Claude Code's CLI.
+func claudeLines(report []string) []string {
+	var lines []string
+	for _, text := range report {
+		if strings.HasPrefix(text, "claude ") {
+			lines = append(lines, text)
+		}
+	}
+	return lines
+}
+
 func TestFreshProjectGetsServerHookApprovalAndDenyRules(t *testing.T) {
 	directory := t.TempDir()
 	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{
@@ -133,18 +156,19 @@ func TestUserSetup(t *testing.T) {
 	}
 	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: claude}
 	equal(t, Setup(options), []string{
-		"~/configs/nib/settings.json: added nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
+		"~/.local/share/nib/mods/nibash: installed the nibash mod of this nib",
+		"~/configs/nib/settings.json: added nib's PreToolUse hook and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status and the nibash mod in env.CLAUDE_CODE_PLUGIN_DIRS",
 		"claude mcp: added nib for this user",
 		"~/xdg/opencode/opencode.json: added the nib MCP server and deny rules for shell, read, grep, glob, edit",
 	})
 	equal(t, calls, [][]string{{"mcp", "add", "--scope", "user", "nib", "--", "nib"}})
 	// Only a user-scope server counts: one a project registers does not.
 	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"projects": {"x": {"mcpServers": {"nib": {}}}}}`)
-	if report := Setup(options); report[1] != "claude mcp: added nib for this user" {
+	if report := Setup(options); line(t, report, "claude mcp") != "claude mcp: added nib for this user" {
 		t.Fatalf("got %v", report)
 	}
 	writeFile(t, filepath.Join(home, "configs/nib/.claude.json"), `{"mcpServers": {"nib": {"type": "stdio", "command": "nib", "args": []}}}`)
-	if report := Setup(options); report[1] != "claude mcp: nib is already registered for this user" {
+	if report := Setup(options); line(t, report, "claude mcp") != "claude mcp: nib is already registered for this user" {
 		t.Fatalf("got %v", report)
 	}
 }
@@ -277,15 +301,15 @@ func TestOpenCodeServersOutsideCodeModeAndForeignForms(t *testing.T) {
 	file := filepath.Join(config, "opencode.json")
 	// A nib server in OpenCode 2's form with code mode unset gets it turned off; a rule the user wrote for an action keeps it.
 	writeFile(t, file, `{"permissions": [{"action": "edit", "resource": "*.md", "effect": "allow"}], "mcp": {"servers": {"nib": {"type": "local", "command": ["/opt/nib"]}}}}`)
-	equal(t, Setup(options)[2], "~/oc/opencode.json: added nib's command, replacing a stale one (/opt/nib) and code mode off for the nib MCP server and deny rules for shell, read, grep, glob (permissions for edit set there already, so OpenCode keeps those tools as configured)")
+	equal(t, line(t, Setup(options), "~/oc/opencode.json"), "~/oc/opencode.json: added nib's command, replacing a stale one (/opt/nib) and code mode off for the nib MCP server and deny rules for shell, read, grep, glob (permissions for edit set there already, so OpenCode keeps those tools as configured)")
 	written := readJSON(t, file)
 	equal(t, written["mcp"], map[string]any{"servers": map[string]any{"nib": map[string]any{"type": "local", "command": []any{"nib"}, "codemode": false}}})
 	equal(t, len(written["permissions"].([]any)), 5)
 	// Code mode someone turned on stays on, and an OpenCode 1 entry setup cannot read stays as it is.
 	writeFile(t, file, `{"mcp": {"servers": {"nib": {"type": "local", "command": ["nib"], "codemode": true}}}, "tools": {"bash": false, "read": false, "grep": false, "glob": false, "edit": false}}`)
-	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (codemode is set for nib there, so OpenCode offers nib's tools as configured)")
+	equal(t, line(t, Setup(options), "~/oc/opencode.json"), "~/oc/opencode.json: already set up (codemode is set for nib there, so OpenCode offers nib's tools as configured)")
 	writeFile(t, file, `{"mcp": {"nib": {"type": "remote", "url": "http://x"}}, "permissions": {"x": 1}}`)
-	equal(t, Setup(options)[2], "~/oc/opencode.json: already set up (its mcp.nib is not a local server in OpenCode 1's form, so it stays as it is; its \"permissions\" is not a list, so OpenCode's own tools stay on)")
+	equal(t, line(t, Setup(options), "~/oc/opencode.json"), "~/oc/opencode.json: already set up (its mcp.nib is not a local server in OpenCode 1's form, so it stays as it is; its \"permissions\" is not a list, so OpenCode's own tools stay on)")
 }
 
 func executable(t *testing.T, path string) {
@@ -353,11 +377,11 @@ func TestStaleClaudeRegistrationsAreReplaced(t *testing.T) {
 	projectStale := "the stale nib registration in ~/project (" + other + ")"
 	// 2. A dry run names both, and runs nothing.
 	options.DryRun = true
-	equal(t, Setup(options)[1:], []string{"claude mcp: would replace " + userStale, "claude mcp: would replace " + projectStale})
+	equal(t, claudeLines(Setup(options)), []string{"claude mcp: would replace " + userStale, "claude mcp: would replace " + projectStale})
 	equal(t, len(calls), 0)
 	// 3. Each is removed and added again at its own scope, in its folder for a local one, pointed at this nib, with its other keys kept.
 	options.DryRun = false
-	equal(t, Setup(options)[1:], []string{"claude mcp: replaced " + userStale, "claude mcp: replaced " + projectStale})
+	equal(t, claudeLines(Setup(options)), []string{"claude mcp: replaced " + userStale, "claude mcp: replaced " + projectStale})
 	equal(t, calls, []claudeCall{
 		{"", []string{"mcp", "remove", "--scope", "user", "nib"}},
 		{"", []string{"mcp", "add-json", "--scope", "user", "nib", `{"alwaysLoad":true,"args":[],"command":"` + mine + `","type":"stdio"}`}},
@@ -367,7 +391,7 @@ func TestStaleClaudeRegistrationsAreReplaced(t *testing.T) {
 	// 4. Registrations that start this nib, by any path to it, are left alone.
 	calls = nil
 	writeJSON(t, registry, map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": link}}, "projects": map[string]any{same: local(map[string]any{"command": mine})}})
-	equal(t, Setup(options)[1:], []string{"claude mcp: nib is already registered for this user"})
+	equal(t, claudeLines(Setup(options)), []string{"claude mcp: nib is already registered for this user"})
 	equal(t, len(calls), 0)
 	// 5. A failed removal adds nothing.
 	writeJSON(t, registry, map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"command": other}}})
@@ -375,7 +399,7 @@ func TestStaleClaudeRegistrationsAreReplaced(t *testing.T) {
 		calls = append(calls, claudeCall{dir, args})
 		return 1, "No user-scoped MCP server found with name: nib\n"
 	}
-	equal(t, Setup(options)[1:], []string{"claude mcp remove failed for this user: No user-scoped MCP server found with name: nib"})
+	equal(t, claudeLines(Setup(options)), []string{"claude mcp remove failed for this user: No user-scoped MCP server found with name: nib"})
 	equal(t, len(calls), 1)
 }
 

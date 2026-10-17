@@ -4,7 +4,7 @@ A provider is a program nib starts and talks to privately, whose tools nib offer
 
 ## Configuration
 
-`nib --provider NAME=PROGRAM` (repeatable), or `nib setup --provider NAME=PROGRAM`, which puts the flag in nib's server entries and removes the server entries and Claude Code registrations named `NAME` that it replaces (a project setup only names a user-scope one); `NAME=` stops hosting it, and a setup without `--provider` keeps what an entry hosts. `NAME` matches `[a-z][a-z0-9]*`. Under `NIB_SANDBOX=1` providers are off unless `NIB_PROVIDERS_SANDBOX=1` is set too: a provider runs outside the sandbox and may send code elsewhere (zemble's embedder does), so hosting one there is the user's explicit choice. The rows nib prints for it are still confined to the roots.
+`nib --provider NAME=PROGRAM` (repeatable), or `nib setup --provider NAME=PROGRAM`, which puts the flag in nib's server entries and removes the server entries and Claude Code registrations named `NAME` that it replaces (a project setup only names a user-scope one); `NAME=` stops hosting it, and a setup without `--provider` keeps what an entry hosts and gives a new one the providers remembered from earlier `--provider`s (`~/.config/nib/setup.json`). `NAME` matches `[a-z][a-z0-9]*`. Under `NIB_SANDBOX=1` providers are off unless `NIB_PROVIDERS_SANDBOX=1` is set too: a provider runs outside the sandbox and may send code elsewhere (zemble's embedder does), so hosting one there is the user's explicit choice. The rows nib prints for it are still confined to the roots.
 
 ## Protocol, version 1
 

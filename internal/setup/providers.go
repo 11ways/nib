@@ -1,7 +1,12 @@
 package setup
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -36,19 +41,8 @@ func split(words []string) (rest []string, hosted []providers.Spec) {
 // replaces the provider of its name, or with no program stops hosting it, and a new one goes last.
 func wanted(command, words []string, changes []providers.Spec) []string {
 	_, specs := split(words)
-	for _, c := range changes {
-		at := slices.IndexFunc(specs, func(s providers.Spec) bool { return s.Name == c.Name })
-		switch {
-		case c.Program == "" && at >= 0:
-			specs = slices.Delete(specs, at, at+1)
-		case c.Program != "" && at >= 0:
-			specs[at] = c
-		case c.Program != "":
-			specs = append(specs, c)
-		}
-	}
 	out := slices.Clone(command)
-	for _, spec := range specs {
+	for _, spec := range applied(specs, changes) {
 		out = append(out, providerFlag, spec.String())
 	}
 	return out
@@ -91,4 +85,77 @@ func removeHosted(servers object, changes []providers.Spec) []change {
 		}
 	}
 	return removed
+}
+
+// rememberedFile is where setup keeps the providers a --provider asked for, so a later setup without one, as a script runs it for a new
+// Claude Code config folder, hosts them too.
+func rememberedFile(home string, env func(string) string) string {
+	config := env("XDG_CONFIG_HOME")
+	if config == "" {
+		config = filepath.Join(home, ".config")
+	}
+	return filepath.Join(config, "nib", "setup.json")
+}
+
+// remembered are the providers file holds; none when it is missing, and an error when it is not one setup wrote.
+func remembered(file string) ([]providers.Spec, error) {
+	data, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var saved struct {
+		Providers []string `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return nil, fmt.Errorf("%s is not what nib setup writes: %v", file, err)
+	}
+	var specs []providers.Spec
+	for _, text := range saved.Providers {
+		spec, err := providers.ParseSpec(text)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", file, err)
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+// remember writes specs to file, through a temporary file and a rename.
+func remember(file string, specs []providers.Spec) error {
+	texts := []string{}
+	for _, spec := range specs {
+		texts = append(texts, spec.String())
+	}
+	data, err := json.MarshalIndent(map[string][]string{"providers": texts}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	staged := file + ".tmp"
+	if err := os.WriteFile(staged, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(staged, file)
+}
+
+// applied are the providers kept after changes: each change replaces the one of its name, or with no program drops it; a new one goes last.
+func applied(specs, changes []providers.Spec) []providers.Spec {
+	specs = slices.Clone(specs)
+	for _, c := range changes {
+		at := slices.IndexFunc(specs, func(s providers.Spec) bool { return s.Name == c.Name })
+		switch {
+		case c.Program == "" && at >= 0:
+			specs = slices.Delete(specs, at, at+1)
+		case c.Program != "" && at >= 0:
+			specs[at] = c
+		case c.Program != "":
+			specs = append(specs, c)
+		}
+	}
+	return specs
 }
