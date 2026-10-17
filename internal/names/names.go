@@ -230,27 +230,37 @@ func (t *Table) Expand(input string) (string, bool) {
 	return "", false
 }
 
-// Display is canonical under the deepest named directory holding it; ok is false when none does.
+// Display is canonical under the named directory that prints it shortest, the deepest on a tie; ok is false when none does or when no name
+// prints it shorter than it prints plain: relative to Base when inside it, else whole.
 func (t *Table) Display(canonical string) (string, bool) {
 	if t == nil {
 		return "", false
 	}
-	best := -1
-	for i, entry := range t.Entries {
-		if canonical == entry.Directory || strings.HasPrefix(canonical, entry.Directory+string(filepath.Separator)) {
-			if best < 0 || len(entry.Directory) > len(t.Entries[best].Directory) {
-				best = i
-			}
+	best := ""
+	deepest := -1
+	for _, entry := range t.Entries {
+		if canonical != entry.Directory && !strings.HasPrefix(canonical, entry.Directory+string(filepath.Separator)) {
+			continue
+		}
+		shown := "~" + entry.Name + canonical[len(entry.Directory):]
+		if best == "" || len(shown) < len(best) || (len(shown) == len(best) && len(entry.Directory) > deepest) {
+			best, deepest = shown, len(entry.Directory)
 		}
 	}
-	if best < 0 {
+	if best == "" || len(best) >= len(plain(t.Base, canonical)) {
 		return "", false
 	}
-	entry := t.Entries[best]
-	if canonical == entry.Directory {
-		return "~" + entry.Name, true
+	return best, true
+}
+
+// plain is how canonical prints without names: relative to base when strictly below it, else whole.
+func plain(base, canonical string) string {
+	if base != "" {
+		if relative, err := filepath.Rel(base, canonical); err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, "../") {
+			return relative
+		}
 	}
-	return "~" + entry.Name + canonical[len(entry.Directory):], true
+	return canonical
 }
 
 // Home answers the environment's "HOME name" lookup that tilde expansion makes, for a named directory.

@@ -161,10 +161,14 @@ func printed(table *Table, directory string) string {
 	if s, ok := table.Display(directory); ok {
 		return s
 	}
-	if relative, err := filepath.Rel(table.Base, directory); err == nil && relative != "." && !strings.HasPrefix(relative, "..") {
-		return relative
-	}
-	return directory
+	return plain(table.Base, directory)
+}
+
+// useful reports whether entry prints its own directory shorter than it prints plain from base; a name that saves nothing there, such as
+// one made while an agent worked in a worktree for a folder of the server's directory, is never kept for a session in base.
+func useful(base string, entry Entry) bool {
+	_, ok := (&Table{Base: base, Entries: []Entry{entry}}).Display(entry.Directory)
+	return ok
 }
 
 // observe counts the directories from directory up, below the deepest named one holding it, and names the one that saves the most among
@@ -331,7 +335,7 @@ type learnedNames struct {
 // no name holds yet.
 func (t *Table) AddLearned(file string) {
 	for _, entry := range readLearned(file, t.Base) {
-		if !valid.MatchString(entry.Name) || isUser(entry.Name) || slices.ContainsFunc(t.Entries, func(e Entry) bool { return e.Name == entry.Name || e.Directory == entry.Directory }) {
+		if !valid.MatchString(entry.Name) || isUser(entry.Name) || !useful(t.Base, entry) || slices.ContainsFunc(t.Entries, func(e Entry) bool { return e.Name == entry.Name || e.Directory == entry.Directory }) {
 			continue
 		}
 		if canonical, err := filepath.EvalSymlinks(entry.Directory); err != nil || canonical != entry.Directory {
@@ -354,12 +358,15 @@ func readLearned(file, base string) []Entry {
 	return saved.Names
 }
 
-// learnLocked adds entry to the learned file, replacing a name of the same name or directory and keeping the newest learnedLimit.
+// learnLocked adds entry to the learned file, replacing a name of the same name or directory, dropping names that no longer print shorter
+// from the file's directory, and keeping the newest learnedLimit.
 func (d *Defined) learnLocked(entry Entry) {
-	if d.file == "" {
+	if d.file == "" || !useful(d.base, entry) {
 		return
 	}
-	kept := slices.DeleteFunc(readLearned(d.file, d.base), func(e Entry) bool { return e.Name == entry.Name || e.Directory == entry.Directory })
+	kept := slices.DeleteFunc(readLearned(d.file, d.base), func(e Entry) bool {
+		return e.Name == entry.Name || e.Directory == entry.Directory || !valid.MatchString(e.Name) || !useful(d.base, e)
+	})
 	kept = append(kept, entry)
 	if len(kept) > learnedLimit {
 		kept = kept[len(kept)-learnedLimit:]

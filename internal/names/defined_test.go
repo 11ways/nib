@@ -14,15 +14,18 @@ func TestDefinedNamesAreInheritedAsOfTheSpawnMoment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The names sit deep below the base, so they print paths shorter than the base-relative form.
+	top := root
+	root = filepath.Join(root, "some", "long", "folder", "path")
 	for _, folder := range []string{"a", "b", "c"} {
-		if err := os.Mkdir(filepath.Join(root, folder), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, folder), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	now := time.Unix(100, 0)
 	defined := NewDefined()
 	defined.Now = func() time.Time { return now }
-	static := &Table{Entries: []Entry{{"fixed", filepath.Join(root, "c")}}, Base: root}
+	static := &Table{Entries: []Entry{{"fixed", filepath.Join(root, "c")}}, Base: top}
 	parent := static.For(defined, "parent")
 	if err := parent.Define("one", filepath.Join(root, "a")); err != nil {
 		t.Fatal(err)
@@ -111,32 +114,33 @@ func TestAWorktreeViewMovesTheServersNamesIntoIt(t *testing.T) {
 	outside := filepath.Join(root, "outside")
 	project := filepath.Join(root, "project")
 	worktree := filepath.Join(project, ".claude", "worktrees", "agent-w1")
-	for _, folder := range []string{outside, filepath.Join(project, "lib"), filepath.Join(project, "only-main"), filepath.Join(worktree, "lib")} {
+	lib := filepath.Join("src", "main", "java", "lib")
+	for _, folder := range []string{outside, filepath.Join(project, lib), filepath.Join(project, "only-main"), filepath.Join(worktree, lib)} {
 		if err := os.MkdirAll(folder, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	static := &Table{Base: project, Entries: []Entry{{"lib", filepath.Join(project, "lib")}, {"only", filepath.Join(project, "only-main")}, {"out", outside}}}
+	static := &Table{Base: project, Entries: []Entry{{"lib", filepath.Join(project, lib)}, {"only", filepath.Join(project, "only-main")}, {"out", outside}}}
 	defined := NewDefined()
 	view := static.For(defined, "w1").In(worktree)
-	if err := view.Define("mine", filepath.Join(project, "lib")); err != nil {
+	if err := view.Define("mine", filepath.Join(project, lib)); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
 	for _, entry := range view.Entries() {
 		got = append(got, entry.Name+"="+entry.Directory)
 	}
-	want := []string{"lib=" + filepath.Join(worktree, "lib"), "out=" + outside, "mine=" + filepath.Join(project, "lib")}
+	want := []string{"lib=" + filepath.Join(worktree, lib), "out=" + outside, "mine=" + filepath.Join(project, lib)}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	if shown, ok := view.Display(filepath.Join(worktree, "lib", "a.go")); !ok || shown != "~lib/a.go" {
+	if shown, ok := view.Display(filepath.Join(worktree, lib, "a.go")); !ok || shown != "~lib/a.go" {
 		t.Fatalf("got %q %v", shown, ok)
 	}
 	if view.Define("only", outside) == nil {
 		t.Fatal("a name of the server's stays refused where the worktree lacks it")
 	}
-	if static.For(defined, "w1").In(project).Entries()[0].Directory != filepath.Join(project, "lib") || static.For(defined, "w1").In("").Entries()[0].Directory != filepath.Join(project, "lib") {
+	if static.For(defined, "w1").In(project).Entries()[0].Directory != filepath.Join(project, lib) || static.For(defined, "w1").In("").Entries()[0].Directory != filepath.Join(project, lib) {
 		t.Fatal("the server's own directory, or none, leaves the names where they are")
 	}
 }

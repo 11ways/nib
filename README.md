@@ -653,8 +653,9 @@ override, so check it in the [privacy settings](https://openrouter.ai/settings/p
 ### Named directories
 
 Long paths cost tokens in every row and header, so nib names deep directories: `~orm/workflow/Repo.java` stands for
-`zenit/src/server/java/be/elevenways/zenit/server/orm/workflow/Repo.java`. Every path nib prints uses the deepest named
-directory holding it, and every tool and patch header accepts the short form. In nibash it is ordinary tilde expansion,
+`zenit/src/server/java/be/elevenways/zenit/server/orm/workflow/Repo.java`. Every path nib prints uses the named directory
+that prints it shortest, but only when that is shorter than the path relative to the server's directory (or whole,
+outside it), and every tool and patch header accepts the short form. In nibash it is ordinary tilde expansion,
 so it works only unquoted, and programs receive the real path; the names never reach a program's environment.
 
 Names come from `nib.json` in the server's directory (`{"directories": {"orm": "path/to/orm"}}`) and, unless it sets
@@ -705,8 +706,10 @@ in full for the first, `[~bewidgets = ...]` after), and a subagent, whose first 
 greeted again; the server's own names are in the instructions, which a compaction keeps. Both kinds are kept for the
 next session of the same server directory, the newest 16, in `~/.local/state/nib/names/` (`$XDG_STATE_HOME` when set):
 the next server names them from the start, so they are in its instructions with the table's names, where a name a
-directory or another name already holds is left out. `NIB_AUTO_NAMES=0` turns naming and keeping off; without a home
-folder they are off too. Bare `hash -d` in nibash lists every name an agent has, the table's, its own and nib's.
+directory or another name already holds is left out, and so is one that prints nothing shorter from that directory (a
+name made while an agent worked in a worktree for a folder of the server's own). `NIB_AUTO_NAMES=0` turns naming and
+keeping off; without a home folder they are off too. Bare `hash -d` in nibash lists every name an agent has, the
+table's, its own and nib's.
 
 Subagents are not given the server instructions (Claude Code's are not), so a subagent's first nib call starts with what
 the main agent read there: the names it has, the table's and the ones it inherited, one per line, and the `hash -d`

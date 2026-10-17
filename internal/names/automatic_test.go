@@ -230,3 +230,58 @@ func TestNamesAnAgentDefinesAreLearnedToo(t *testing.T) {
 		t.Fatalf("learned %v", next.Entries)
 	}
 }
+
+func TestANameNeverPrintsAPathLongerThanItsPlainForm(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	internal := filepath.Join(root, "internal")
+	if err := os.MkdirAll(filepath.Join(internal, "tag"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	widgets := deep(t, root, "widgets")
+	table := &Table{Base: root, Entries: []Entry{{"pninternal", internal}, {"bewidgets", widgets}}}
+	if shown, ok := table.Display(filepath.Join(internal, "tag", "tag.go")); ok {
+		t.Fatalf("a path inside the base printed as %q, longer than internal/tag/tag.go", shown)
+	}
+	if shown, ok := table.Display(filepath.Join(widgets, "a.go")); !ok || shown != "~bewidgets/a.go" {
+		t.Fatalf("a deep path printed as %q, %v", shown, ok)
+	}
+	outside := &Table{Entries: []Entry{{"pninternal", internal}}}
+	if shown, ok := outside.Display(filepath.Join(internal, "tag", "tag.go")); !ok || shown != "~pninternal/tag/tag.go" {
+		t.Fatalf("outside the base the name should still shorten the absolute path: %q, %v", shown, ok)
+	}
+}
+
+func TestLearnedNamesThatSaveNothingInTheBaseAreNeitherKeptNorLoaded(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	worktree, _ := filepath.EvalSymlinks(t.TempDir())
+	internal := filepath.Join(root, "internal")
+	if err := os.MkdirAll(internal, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	widgets := deep(t, root, "widgets")
+	file := filepath.Join(t.TempDir(), "learned.json")
+	defined := NewDefined()
+	defined.Automatic(file, root)
+	// An agent in a worktree sees the server's internal folder as an absolute path, where a name saves a lot; in root it saves nothing.
+	if err := (&Table{Base: worktree}).For(defined, "main").Define("pninternal", internal); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Table{Base: root}).For(defined, "main").Define("bewidgets", widgets); err != nil {
+		t.Fatal(err)
+	}
+	next := &Table{Base: root}
+	next.AddLearned(file)
+	if len(next.Entries) != 1 || next.Entries[0].Name != "bewidgets" {
+		t.Fatalf("learned %v", next.Entries)
+	}
+	// A file written before this rule holds such a name; loading leaves it out.
+	data := `{"base": "` + root + `", "names": [{"Name": "pninternal", "Directory": "` + internal + `"}, {"Name": "bewidgets", "Directory": "` + widgets + `"}]}`
+	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded := &Table{Base: root}
+	loaded.AddLearned(file)
+	if len(loaded.Entries) != 1 || loaded.Entries[0].Name != "bewidgets" {
+		t.Fatalf("loaded %v", loaded.Entries)
+	}
+}
