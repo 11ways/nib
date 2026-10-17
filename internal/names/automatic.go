@@ -35,7 +35,8 @@ func (d *Defined) Automatic(file, base string) {
 	d.automatic, d.file, d.base = true, file, base
 }
 
-// Announced are the notes on names nib made for agent since the last call, once each.
+// Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect; call it once at the
+// end of each call.
 func (d *Defined) Announced(agent string) []string {
 	if d == nil {
 		return nil
@@ -46,8 +47,12 @@ func (d *Defined) Announced(agent string) []string {
 	if names == nil {
 		return nil
 	}
-	notes := names.pending
-	names.pending = nil
+	var notes []string
+	for _, m := range names.made {
+		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano()})
+		notes = append(notes, note(m.Name, m.prefix, m.count))
+	}
+	names.made = nil
 	return notes
 }
 
@@ -79,6 +84,13 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 	if names.counts == nil {
 		names.counts = map[string]int{}
 	}
+	// Names made in this call but not yet told count as taken and as named, so a path below one adds nothing until it takes effect.
+	if len(names.made) > 0 {
+		table = &Table{Base: table.Base, Entries: slices.Clone(table.Entries)}
+		for _, m := range names.made {
+			table.Entries = append(table.Entries, m.Entry)
+		}
+	}
 	best, saving := "", 0
 	for directory := filepath.Dir(canonical); directory != filepath.Dir(directory); directory = filepath.Dir(directory) {
 		// A named directory, or the server's own for a path inside it, prints no further up: nothing above it is ever shown.
@@ -105,9 +117,8 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 		return
 	}
 	entry := Entry{name, best}
-	names.list = append(names.list, definition{entry, d.Now().UnixNano()})
+	names.made = append(names.made, made{entry, shown(best), names.counts[best]})
 	names.auto++
-	names.pending = append(names.pending, note(name, shown(best), names.counts[best]))
 	d.learnLocked(entry)
 }
 

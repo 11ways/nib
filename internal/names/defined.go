@@ -29,13 +29,20 @@ type Defined struct {
 }
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
-// directory that automatic naming weighs, auto the names it made, and pending its notes not yet told.
+// directory that automatic naming weighs, auto the names it made, and made those not yet told, which take effect once told.
 type defined struct {
-	list    []definition
-	own     int
-	counts  map[string]int
-	auto    int
-	pending []string
+	list   []definition
+	own    int
+	counts map[string]int
+	auto   int
+	made   []made
+}
+
+// made is a name nib made and has not told of yet: the directory as it printed, and the shown paths that ran through it.
+type made struct {
+	Entry
+	prefix string
+	count  int
 }
 
 // definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited.
@@ -169,7 +176,8 @@ func (v *View) table() *Table {
 func (v *View) Expand(input string) (string, bool) { return v.table().Expand(input) }
 
 // Display is canonical under the deepest named directory holding it; ok is false when none does. With automatic naming on, the path counts
-// toward naming a directory it runs through, which may name one now.
+// toward naming a directory it runs through; a name made then takes effect once Announced tells of it, so one response prints every path the
+// same way.
 func (v *View) Display(canonical string) (string, bool) {
 	v.defined.observe(v.agent, v.table(), canonical)
 	return v.table().Display(canonical)

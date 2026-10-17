@@ -31,9 +31,8 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	if notes := defined.Announced("main"); len(notes) != 0 {
 		t.Fatalf("named too soon: %v", notes)
 	}
-	shown, _ := view.Display(filepath.Join(widgets, "Last.java"))
-	if shown != "~bewidgets/Last.java" {
-		t.Fatalf("the path that crossed the threshold prints under its new name, got %q", shown)
+	if shown, ok := view.Display(filepath.Join(widgets, "Last.java")); ok {
+		t.Fatalf("a name takes effect only once told, so a response prints its paths alike, got %q", shown)
 	}
 	notes := defined.Announced("main")
 	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through;") {
@@ -41,6 +40,9 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	}
 	if again := defined.Announced("main"); len(again) != 0 {
 		t.Fatalf("a note is told once, got %v", again)
+	}
+	if shown, _ := view.Display(filepath.Join(widgets, "Last.java")); shown != "~bewidgets/Last.java" {
+		t.Fatalf("got %q", shown)
 	}
 	// Another agent counts for itself.
 	if shown, ok := (&Table{Base: root}).For(defined, "other").Display(filepath.Join(widgets, "A.java")); ok {
@@ -68,11 +70,14 @@ func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
 	defined := NewDefined()
 	defined.Automatic("", "/elsewhere")
 	view := (&Table{Base: "/elsewhere"}).For(defined, "main")
-	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~bptypes/claude-code.d.ts" {
+	if shown, ok := view.Display(filepath.Join(skill, "claude-code.d.ts")); ok {
 		t.Fatalf("got %q", shown)
 	}
 	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, too long to print again; ~bptypes/ works") {
 		t.Fatalf("notes %v", notes)
+	}
+	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~bptypes/claude-code.d.ts" {
+		t.Fatalf("got %q", shown)
 	}
 }
 
@@ -97,6 +102,7 @@ func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	for i := range 8 {
 		view.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
 	}
+	defined.Announced("main")
 	if shown, _ := view.Display(filepath.Join(widgets, "X.java")); shown != "~bewidgets2/X.java" {
 		t.Fatalf("got %q", shown)
 	}
