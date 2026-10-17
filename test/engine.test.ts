@@ -1045,7 +1045,7 @@ describe("snapshots", () => {
 })
 
 describe("created files", () => {
-  test("a small created file is editable at once; a larger one shows the anchored lines first; a full overwrite needs no lines", async () => {
+  test("a created file is editable at once, whatever its size, since the agent wrote every line; a full overwrite needs no lines", async () => {
     const f = await fixture()
     const small = await f.engine.write(f.ctx, { path: "small.txt", content: "a\nb\nc\n" })
     const smallTag = /#([0-9A-F]{4})\]/.exec(small.text)![1]!
@@ -1053,12 +1053,9 @@ describe("created files", () => {
     const content = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n"
     const large = await f.engine.write(f.ctx, { path: "large.txt", content })
     const largeTag = /#([0-9A-F]{4})\]/.exec(large.text)![1]!
-    const refused = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`).catch((error: Error) => error.message)
-    expect(refused).toContain("5:line 5")
-    expect(await readFile(path.join(f.directory, "large.txt"), "utf8")).toBe(content)
-    const retried = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`)
-    expect(retried.text).toContain("4:line 4\n5:five\n6:line 6")
-    const overwritten = await f.engine.write(f.ctx, { path: "large.txt", content: "x\n", tag: retried.tag })
+    const edited = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`)
+    expect(edited.text).toContain("4:line 4\n5:five\n6:line 6")
+    const overwritten = await f.engine.write(f.ctx, { path: "large.txt", content: "x\n", tag: edited.tag })
     expect(overwritten.text).toStartWith("Overwrote [large.txt#")
   })
 })
@@ -1339,7 +1336,7 @@ describe("row maps and ~ checks", () => {
   const tag = fileTag(brief)
   const lineOf = async (f: Awaited<ReturnType<typeof fixture>>, name: string, line: number) => (await readFile(path.join(f.directory, name), "utf8")).split("\n")[line - 1]
 
-  test("write answers with a row map whose rows are anchors at once", async () => {
+  test("write answers with a row map, and every line it wrote is an anchor at once", async () => {
     const f = await fixture()
     const created = await f.engine.write(f.ctx, { path: "brief.md", content: brief })
     expect(created.text).toBe([
@@ -1349,35 +1346,22 @@ describe("row maps and ~ checks", () => {
       "15~- item 15",
       "19~## Do the remaining work befor...",
       "23~Last line",
-      // The other lines are known content, anchored with a ~ check; a small file needs none, since it is trusted whole.
-      "[to anchor a line not shown, put a ~TEXT row with its start under the PUT or CUT; no read needed]",
     ].join("\n"))
-    const edited = await f.patch(`[brief.md#${tag}]\nPUT >19:\n+\n+Context.\nPUT 15.=15:\n+- item fifteen`)
-    expect(edited.text).toContain("14:- item 14\n15:- item fifteen\n16:- item 16\n...\n19:## Do the remaining work before the deadline\n20:\n21:Context.\n22:")
-    expect(await lineOf(f, "brief.md", 21)).toBe("Context.")
+    const edited = await f.patch(`[brief.md#${tag}]\nPUT >19:\n+\n+Context.\nPUT 15.=15:\n+- item fifteen\nPUT 6.=7:\n+- items 6 and 7`)
+    expect(edited.text).toContain("6:- items 6 and 7\n7:- item 8\n[lines 8-12 are old lines 9-13, moved up by 1]\n13:- item 14\n14:- item fifteen\n15:- item 16\n[lines 16-17 are old lines 17-18, moved up by 1]\n18:## Do the remaining work before the deadline\n19:\n20:Context.\n21:\n")
+    expect(await lineOf(f, "brief.md", 20)).toBe("Context.")
+    expect(await lineOf(f, "brief.md", 6)).toBe("- items 6 and 7")
   })
 
-  test("a written line without a shown number needs a ~ check; a wrong check shows the real rows", async () => {
+  test("a ~ check on a written line still verifies its number; a wrong one shows the real rows", async () => {
     const f = await fixture()
-    for (const name of ["a.md", "b.md", "c.md"]) await f.engine.write(f.ctx, { path: name, content: brief })
-    const unchecked = await refusal(f.patch(`[a.md#${tag}]\nPUT 21.=21:\n+1. first step`))
-    expect(unchecked).toContain("Lines you wrote, or saw before an edit moved them, can skip this step")
-    expect(tokenOf(unchecked)).toBeDefined()
+    for (const name of ["b.md", "c.md"]) await f.engine.write(f.ctx, { path: name, content: brief })
     const wrong = await refusal(f.patch(`[b.md#${tag}]\nPUT 21.=21:\n~2. step\n+x`))
     expect(wrong).toContain(`[b.md#${tag}]: ~ check rows do not match, so these line numbers are off:\nline 21 does not start with "2. step"`)
     expect(wrong).toContain(" 20:\n*21:1. step\n 22:2. step")
     expect(wrong).not.toContain("REAPPLY")
     expect(await lineOf(f, "b.md", 21)).toBe("1. step")
-    await f.patch(`[c.md#${tag}]\nPUT 21.=21:\n~1. st\n+1. first step`)
-    expect(await lineOf(f, "c.md", 21)).toBe("1. first step")
-  })
-
-  test("a range over written lines needs a check on each end it does not show; an empty check means a blank line", async () => {
-    const f = await fixture()
-    for (const name of ["a.md", "b.md", "c.md"]) await f.engine.write(f.ctx, { path: name, content: brief })
-    expect(await refusal(f.patch(`[a.md#${tag}]\nPUT 6.=17:\n~- item 6\n+- all items`))).toContain("This edit anchors to lines 17 of a.md")
-    await f.patch(`[b.md#${tag}]\nPUT 6.=17:\n~- item 6\n~- item 17\n+- all items`)
-    expect((await readFile(path.join(f.directory, "b.md"), "utf8")).split("\n").slice(4, 7)).toEqual(["## Settled", "- all items", ""])
+    // An empty check means a blank line.
     await f.patch(`[c.md#${tag}]\nCUT 18.=18\n~`)
     expect(await lineOf(f, "c.md", 18)).toBe("## Do the remaining work before the deadline")
   })
@@ -1414,9 +1398,7 @@ describe("row maps and ~ checks", () => {
     const lines = (await f.engine.write(f.ctx, { path: "big.ts", content })).text.split("\n")
     expect(lines[0]).toBe(`Created [big.ts#${fileTag(content)}] (3000 lines, 3000 non-blank; outline only)`)
     expect(lines.slice(1, 3)).toEqual(["1:export function f0() {", "4:export function f1() {"])
-    expect(lines.at(-2)).toBe("[outline capped at 150 rows; 850 more members or declarations not shown]")
-    // The model wrote every line, so the response says how to reach the rest instead of asking for a read.
-    expect(lines.at(-1)).toBe("[every line is known: grep finds a line's number, and a ~TEXT row with its start under the PUT or CUT anchors it; no read needed]")
+    expect(lines.at(-1)).toBe("[outline capped at 150 rows; 850 more members or declarations not shown]")
     await f.patch(`[big.ts#${fileTag(content)}]\nPUT 4.=4:\n+export function g1() {`)
     expect(await lineOf(f, "big.ts", 4)).toBe("export function g1() {")
   })

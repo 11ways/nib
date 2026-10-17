@@ -25,7 +25,6 @@ const (
 	writtenRows       = 5
 	revealLines       = 40
 	revealContext     = 2
-	trustedCreate     = 10
 	revealColumns     = 512
 	grepColumns       = 512
 	grepFiles         = 20

@@ -556,8 +556,6 @@ func finalNewline(s string) string {
 const (
 	// finalNewlineHint is how a file without a final newline gets one; edits keep a file's final-newline state otherwise.
 	finalNewlineHint = "PUT >$: with a lone + row adds one"
-	writtenCheck     = "[to anchor a line not shown, put a ~TEXT row with its start under the PUT or CUT; no read needed]"
-	writtenUnmapped  = "[every line is known: grep finds a line's number, and a ~TEXT row with its start under the PUT or CUT anchors it; no read needed]"
 	// movedLesson is told once per agent: a moved line is anchored without a read, by a check of its start at its new number.
 	movedLesson = "[a line you saw or wrote that an edit moved is anchored by a ~TEXT row with its start under the PUT or CUT; no read needed]"
 )
@@ -1706,18 +1704,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	case stagedRemove:
 		return response{"Deleted " + display, nothing}
 	case stagedCreate:
-		// The model wrote every line but saw no numbers: the row map shows some, a small file is trusted whole, and the rest is known content.
+		// The model wrote every line, so all of them count as seen; the row map shows where some of them are.
 		lines := item.created.Lines
 		m := writtenMap(display, lines)
-		trusted := len(lines) < trustedCreate
-		var hint []string
-		if !trusted && len(m.seen) != len(lines) {
-			if m.mapped {
-				hint = []string{writtenCheck}
-			} else {
-				hint = []string{writtenUnmapped}
-			}
-		}
 		verb := "Created"
 		if item.replace != nil {
 			verb = "Overwrote"
@@ -1727,16 +1716,11 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 			kept = "; kept its " + strings.Join(item.kept, " and ")
 		}
 		out := append([]string{fmt.Sprintf("%s [%s#%s] (%s%s)", verb, display, item.created.Tag, m.summary, kept)}, m.rows...)
-		out = append(out, hint...)
 		if len(item.warnings) > 0 {
 			out = append(append(out, "", "Warnings:"), item.warnings...)
 		}
 		return response{strings.Join(out, "\n"), func() {
-			seen := m.seen
-			if trusted {
-				seen = allLines(len(lines))
-			}
-			store.Record(ctx.Session, canonical, item.created, nonNil(seen), allLines(len(lines)))
+			store.Record(ctx.Session, canonical, item.created, allLines(len(lines)), allLines(len(lines)))
 		}}
 	}
 	// Like oh-my-pi, only lines that kept both number and content stay anchorable, plus the rows shown below.

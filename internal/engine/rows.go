@@ -241,8 +241,6 @@ func mapLines(lines []string, from, to int, options mapOptions) []int {
 type writtenRowsMap struct {
 	summary string
 	rows    []string
-	seen    []int
-	mapped  bool
 }
 
 // writtenMap is the response rows for a file the agent just wrote: a row map, or past mapRows rows the outline a read would give.
@@ -261,7 +259,7 @@ func writtenMap(display string, created viewLines) writtenRowsMap {
 		for i, line := range picked {
 			rows[i] = fmt.Sprintf("%d~%s", line, clip(lines[line-1]))
 		}
-		return writtenRowsMap{summary: fmt.Sprintf("%s, %d shown", counts, len(picked)), rows: rows, seen: picked, mapped: true}
+		return writtenRowsMap{summary: fmt.Sprintf("%s, %d shown", counts, len(picked)), rows: rows}
 	}
 	sketch := outline(display, lines)
 	anchors := 0
@@ -271,16 +269,12 @@ func writtenMap(display string, created viewLines) writtenRowsMap {
 		}
 	}
 	if anchors < outlineMinRows || sketch.candidates*2 > nonBlank {
-		return writtenRowsMap{summary: counts + "; too long to map", rows: []string{}, seen: []int{}}
+		return writtenRowsMap{summary: counts + "; too long to map", rows: []string{}}
 	}
-	result := writtenRowsMap{summary: counts + "; outline only", seen: []int{}}
+	result := writtenRowsMap{summary: counts + "; outline only"}
 	for _, r := range sketch.rows {
 		if r.line > 0 {
-			lr := lineRow(r.line, lines[r.line-1], LineLimit)
-			result.rows = append(result.rows, lr.text)
-			if lr.anchor {
-				result.seen = append(result.seen, r.line)
-			}
+			result.rows = append(result.rows, lineRow(r.line, lines[r.line-1], LineLimit).text)
 		} else {
 			result.rows = append(result.rows, r.text)
 		}
