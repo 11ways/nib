@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/hook"
 	"github.com/11ways/nib/internal/providers"
 )
@@ -34,8 +35,10 @@ type Options struct {
 	// Providers are the --provider changes: a program for nib to host under a name, or none to stop hosting it; what an entry hosts
 	// already stays.
 	Providers []providers.Spec
-	Home      string
-	Env       func(string) string
+	// Decider are the --decider and --summary changes, by variable (decider.Remembered); an empty value forgets one.
+	Decider map[string]string
+	Home    string
+	Env     func(string) string
 	// Claude runs `claude` with arguments in dir ("" for the current one), for the MCP registrations Claude Code's own CLI makes; nil when it
 	// is not installed.
 	Claude func(dir string, args []string) (int, string)
@@ -683,28 +686,61 @@ func Setup(options Options) []string {
 		}
 		return file
 	}
-	// The providers asked for before are hosted again, so a later setup without --provider, as a script runs it for a new config folder, keeps
-	// them; this run's --provider changes what is remembered.
+	// The providers and decider asked for before are kept, so a later setup without --provider or --decider, as a script runs it for a new
+	// config folder, keeps them; this run's flags change what is remembered.
 	rememberedPath := rememberedFile(home, env)
 	kept, err := remembered(rememberedPath)
 	if err != nil {
 		report = append(report, fmt.Sprintf("%s: left as it is and not used, since %v", tilde(rememberedPath), err))
 	}
-	hosting := applied(kept, options.Providers)
+	hosting := applied(kept.Providers, options.Providers)
 	var dropped []providers.Spec
 	for _, c := range options.Providers {
 		if c.Program == "" {
 			dropped = append(dropped, c)
 		}
 	}
-	if len(options.Providers) > 0 && err == nil && !slices.Equal(hosting, kept) {
+	choice := maps.Clone(kept.Decider)
+	if choice == nil {
+		choice = map[string]string{}
+	}
+	for name, value := range options.Decider {
+		if value == "" {
+			delete(choice, name)
+		} else {
+			choice[name] = value
+		}
+	}
+	if len(options.Decider) > 0 && err == nil {
+		// A choice nib would refuse to start with is never remembered: every nib started from now on reads it.
+		check := func(name string) string {
+			if slices.Contains(decider.Remembered, name) {
+				return choice[name]
+			}
+			return env(name)
+		}
+		if _, problem := decider.Parse(check); problem != nil {
+			report = append(report, fmt.Sprintf("%s: --decider and --summary not remembered, since a nib started with them would stop: %v", tilde(rememberedPath), problem))
+			choice = kept.Decider
+		}
+	}
+	changedProviders := len(options.Providers) > 0 && !slices.Equal(hosting, kept.Providers)
+	changedDecider := !maps.Equal(choice, kept.Decider) && !(len(choice) == 0 && len(kept.Decider) == 0)
+	if (changedProviders || changedDecider) && err == nil {
 		verb := "remembers"
 		if options.DryRun {
 			verb = "would remember"
 		}
-		line := fmt.Sprintf("%s: %s %s for later setups", tilde(rememberedPath), verb, hostingText(wanted(nil, nil, hosting)))
+		var parts []string
+		if changedProviders {
+			parts = append(parts, verb+" "+hostingText(wanted(nil, nil, hosting))+" for later setups")
+		}
+		if changedDecider {
+			parts = append(parts, verb+" "+deciderText(choice)+" for every nib started")
+		}
+		line := fmt.Sprintf("%s: %s", tilde(rememberedPath), strings.Join(parts, "; "))
 		if !options.DryRun {
-			if err := remember(rememberedPath, hosting); err != nil {
+			if err := remember(rememberedPath, saved{Providers: hosting, Decider: choice}); err != nil {
 				line = fmt.Sprintf("%s: could not be written: %v", tilde(rememberedPath), err)
 			}
 		}
@@ -1074,7 +1110,7 @@ func runClaude(dir string, args []string) (int, string) {
 	return 0, string(output)
 }
 
-var usage = `Usage: nib setup [--user] [--dry-run] [--quiet] [--provider NAME=PROGRAM]...
+var usage = `Usage: nib setup [--user] [--dry-run] [--quiet] [--provider NAME=PROGRAM]... [--decider KIND[:MODEL,...]] [--summary LIST]
 Registers nib in this folder: the MCP server in .mcp.json; its approval, its Claude Code hook and deny rules for the built-in tools nib replaces
 (` + strings.Join(ClaudeDenied, ", ") + `) and an allow rule for ` + strings.Join(ClaudeAllowed, ", ") + `, which the nibash mod polls, in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
@@ -1084,12 +1120,24 @@ it replaces, in this folder or, with --user, for this user; NAME= stops hosting 
 providers asked for are remembered in ~/.config/nib/setup.json, so a later setup without --provider (a new project, a new config folder)
 hosts them too. With --user it also installs the nibash mod this nib carries to ~/.local/share/nib/mods/nibash and names that folder in
 env.CLAUDE_CODE_PLUGIN_DIRS of the config folder's settings.json. --quiet leaves out what was set up already, for a script that runs
-setup each time it starts Claude Code.`
+setup each time it starts Claude Code.
+--decider KIND (fixed, keywords, or openrouter:MODEL,... for decision models in order of preference) and --summary LIST (summarizers, as
+NIB_DECIDER_SUMMARY takes them) are remembered in the same file, and every nib reads them when it starts, unless its environment sets a
+NIB_DECIDER variable itself; an empty value (--decider= or --summary=) forgets one. A choice nib would refuse is not remembered. The
+OpenRouter key is never written anywhere: nib reads NIB_DECIDER_KEY or OPENROUTER_API_KEY, else ~/.config/nib/openrouter-key (mode 600),
+else the openrouter entry of OpenCode's auth.json.`
 
 // Main is `nib setup` from the command line; it returns the exit code.
 func Main(args []string) int {
 	user, dryRun, quiet := false, false, false
 	var changes []providers.Spec
+	var choice map[string]string
+	choose := func(vars map[string]string) {
+		if choice == nil {
+			choice = map[string]string{}
+		}
+		maps.Copy(choice, vars)
+	}
 	directory, _ := os.Getwd()
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -1098,7 +1146,33 @@ func Main(args []string) int {
 			i++
 			value, isProvider = args[i], true
 		}
+		flagValue := func(flag string) (string, bool) {
+			if v, ok := strings.CutPrefix(arg, flag+"="); ok {
+				return v, true
+			}
+			if arg == flag && i+1 < len(args) {
+				i++
+				return args[i], true
+			}
+			return "", false
+		}
+		deciderValue, isDecider := "", false
+		summaryValue, isSummary := "", false
+		if !isProvider {
+			if deciderValue, isDecider = flagValue("--decider"); !isDecider {
+				summaryValue, isSummary = flagValue("--summary")
+			}
+		}
 		switch {
+		case isDecider:
+			vars, err := decider.DeciderVars(deciderValue)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n%s\n", err, usage)
+				return 2
+			}
+			choose(vars)
+		case isSummary:
+			choose(decider.SummaryVars(summaryValue))
 		case isProvider:
 			change, err := ParseChange(value)
 			if err != nil {
@@ -1124,7 +1198,7 @@ func Main(args []string) int {
 			return 2
 		}
 	}
-	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun, Quiet: quiet, Providers: changes}) {
+	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun, Quiet: quiet, Providers: changes, Decider: choice}) {
 		fmt.Println(line)
 	}
 	return 0

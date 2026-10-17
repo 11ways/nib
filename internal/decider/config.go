@@ -87,9 +87,16 @@ func Parse(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("NIB_DECIDER is %q; use one of %s", name, strings.Join(names, ", "))
 		}
 	}
-	key := getenv("NIB_DECIDER_KEY")
-	if key == "" {
-		key = getenv("OPENROUTER_API_KEY")
+	// The key is looked for only when something needs it, so a keywords setup never reads a key file.
+	needKey := func(what string) (string, error) {
+		key, looked, err := findKey(getenv)
+		if err != nil {
+			return "", err
+		}
+		if key == "" {
+			return "", fmt.Errorf("%s needs an OpenRouter key; nib looked in %s", what, looked)
+		}
+		return key, nil
 	}
 	c.Cache = getenv("NIB_DECIDER_CACHE")
 	if list := getenv("NIB_DECIDER_SUMMARY"); list != "" {
@@ -102,10 +109,9 @@ func Parse(getenv func(string) string) (Config, error) {
 		}
 		c.Summary = entries
 		if slices.ContainsFunc(entries, func(e SummaryEntry) bool { return !e.Claude }) {
-			if key == "" {
-				return Config{}, errors.New("NIB_DECIDER_SUMMARY names an OpenRouter model, which needs a key in NIB_DECIDER_KEY or OPENROUTER_API_KEY")
+			if c.Key, err = needKey("NIB_DECIDER_SUMMARY names an OpenRouter model, which"); err != nil {
+				return Config{}, err
 			}
-			c.Key = key
 		}
 		if url := getenv("NIB_DECIDER_SUMMARY_URL"); url != "" {
 			c.SummaryURL = url
@@ -117,9 +123,11 @@ func Parse(getenv func(string) string) (Config, error) {
 	if c.Kind != OpenRouter {
 		return c, nil
 	}
-	c.Key = key
+	var err error
 	if c.Key == "" {
-		return Config{}, errors.New("NIB_DECIDER=openrouter needs a key in NIB_DECIDER_KEY or OPENROUTER_API_KEY")
+		if c.Key, err = needKey("NIB_DECIDER=openrouter"); err != nil {
+			return Config{}, err
+		}
 	}
 	if getenv("NIB_SANDBOX") == "1" && getenv("NIB_DECIDER_SANDBOX") != "1" {
 		return Config{}, errors.New("NIB_DECIDER=openrouter sends program output to OpenRouter, which NIB_SANDBOX=1 allows only with NIB_DECIDER_SANDBOX=1")
@@ -138,7 +146,6 @@ func Parse(getenv func(string) string) (Config, error) {
 	if url := getenv("NIB_DECIDER_URL"); url != "" {
 		c.URL = url
 	}
-	var err error
 	if c.Timeout, err = milliseconds(getenv, "NIB_DECIDER_TIMEOUT", c.Timeout); err != nil {
 		return Config{}, err
 	}

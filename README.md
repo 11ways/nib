@@ -227,7 +227,7 @@ When output is cut, a decider chooses which rows stay. It only chooses among rea
 | variable | default | meaning |
 | --- | --- | --- |
 | `NIB_DECIDER` | `keywords` | `fixed`, `keywords` or `openrouter`; anything else stops nib at startup |
-| `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | the OpenRouter key; `openrouter` without one stops nib at startup |
+| `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | the OpenRouter key; without either, nib reads `~/.config/nib/openrouter-key` (refused unless only you may read it), then the `openrouter` entry of OpenCode's `auth.json` (`$XDG_DATA_HOME/opencode/`); `openrouter` with no key found stops nib at startup, naming where it looked |
 | `NIB_DECIDER_MODEL` | `typesafe/jev-1.14` | models of OpenRouter's Decisions endpoint, comma separated, in order of preference |
 | `NIB_DECIDER_URL` | `https://openrouter.ai/api/alpha/decisions` | the endpoint |
 | `NIB_DECIDER_TIMEOUT` | `30000` | milliseconds for the whole decision, every model of the list included |
@@ -237,6 +237,8 @@ When output is cut, a decider chooses which rows stay. It only chooses among rea
 | `NIB_DECIDER_CACHE` | unset | a directory for answers on disk, decisions and summaries |
 | `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1`; without it, that combination stops nib at startup |
 | `NIB_AUTO_NAMES` | unset | `0` turns off naming the directories agents keep seeing and keeping names for the next session ([named directories](#named-directories)) |
+
+**Choosing once for every nib.** `nib setup --decider KIND` (`fixed`, `keywords`, or `openrouter:MODEL,...` for decision models in order of preference) and `nib setup --summary LIST` remember `NIB_DECIDER`, `NIB_DECIDER_MODEL` and `NIB_DECIDER_SUMMARY` in `~/.config/nib/setup.json`, beside the providers; every nib reads them when it starts, unless its own environment sets one of the three, which then replaces the remembered choice whole. `--decider=` and `--summary=` forget them. A choice nib would refuse to start with is not remembered, and the key never is: nib finds it as above. Since claude-capture and zenit-workspace's bootstrap run `nib setup` anyway, the choice made once on a machine holds for every Claude Code profile and every OpenCode session there.
 
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the exit status and the rows between the kept start and end of each output long enough to be cut. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in it; setting the variable is consent to that. File rows of nib's own commands, the log path, the working directory and anything the command did not print are never sent. Every request asks for zero data retention and no data collection (`provider: {"zdr": true, "data_collection": "deny"}`); OpenRouter's own prompt logging is an account setting nib cannot override, so check it in the [privacy settings](https://openrouter.ai/settings/privacy).
 

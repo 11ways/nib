@@ -18,6 +18,7 @@ import (
 	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/providers"
 	"github.com/11ways/nib/internal/server"
+	"github.com/11ways/nib/internal/setup"
 )
 
 const usage = `nib: hashline file tools and a shell for coding agents
@@ -25,7 +26,7 @@ const usage = `nib: hashline file tools and a shell for coding agents
   nib --provider NAME=PROGRAM
                        also offer the tools of PROGRAM (run as PROGRAM nib-provider) as NAME_TOOL; repeatable
   nib setup            register nib in this folder (.mcp.json, .claude/settings.local.json, opencode.json); --user for every project, --dry-run to preview,
-                       --provider NAME=PROGRAM to host a provider (NAME= stops hosting it)
+                       --provider NAME=PROGRAM to host a provider (NAME= stops hosting it), --decider KIND[:MODEL,...] and --summary LIST for every nib
   nib hook             Claude Code PreToolUse hook: refuses the built-in Read for files nib reads better, and tells nib's server which subagent calls it
   nib --version        print the version`
 
@@ -92,7 +93,13 @@ func main() {
 	for _, note := range notes {
 		fmt.Fprintln(os.Stderr, "nib: "+note)
 	}
-	choice, err := decider.Parse(os.Getenv)
+	// A decider choice nib setup remembered applies unless this server's environment makes one of its own.
+	home, _ := os.UserHomeDir()
+	saved, err := setup.RememberedDecider(home, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nib: the decider choice nib setup remembered is not used:", err)
+	}
+	choice, err := decider.Parse(decider.Layered(os.Getenv, saved))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nib:", err)
 		os.Exit(1)

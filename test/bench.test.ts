@@ -169,7 +169,7 @@ describe("harness output", () => {
     await writeFile(file, "one\ntwo\nthree\nfour\nfive\n")
     const client = new Client({ name: "test", version: "1" })
     // The shell is on for nibash's notes on cut output, and its logs go to the scratch directory.
-    await client.connect(new StdioClientTransport({ command: await binary(), cwd: directory, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", TMPDIR: directory, NIB_SHELL: "1" }, stderr: "pipe" }))
+    await client.connect(new StdioClientTransport({ command: await binary(), cwd: directory, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "", TMPDIR: directory, NIB_SHELL: "1" }, stderr: "pipe" }))
     const call = async (name: string, args: Record<string, unknown>) => {
       const result = await client.callTool({ name, arguments: args }) as { isError?: boolean; content: { text?: string }[] }
       if (result.isError) throw new Error(`${name} failed: ${result.content[0]?.text}`)

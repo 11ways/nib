@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/providers"
 )
 
@@ -87,8 +88,8 @@ func removeHosted(servers object, changes []providers.Spec) []change {
 	return removed
 }
 
-// rememberedFile is where setup keeps the providers a --provider asked for, so a later setup without one, as a script runs it for a new
-// Claude Code config folder, hosts them too.
+// rememberedFile is where setup keeps what a --provider, --decider or --summary asked for, so a later setup without them, as a script runs
+// it for a new Claude Code config folder, keeps them too; every nib reads the decider choice from it when it starts.
 func rememberedFile(home string, env func(string) string) string {
 	config := env("XDG_CONFIG_HOME")
 	if config == "" {
@@ -97,39 +98,64 @@ func rememberedFile(home string, env func(string) string) string {
 	return filepath.Join(config, "nib", "setup.json")
 }
 
-// remembered are the providers file holds; none when it is missing, and an error when it is not one setup wrote.
-func remembered(file string) ([]providers.Spec, error) {
-	data, err := os.ReadFile(file)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var saved struct {
-		Providers []string `json:"providers"`
-	}
-	if err := json.Unmarshal(data, &saved); err != nil {
-		return nil, fmt.Errorf("%s is not what nib setup writes: %v", file, err)
-	}
-	var specs []providers.Spec
-	for _, text := range saved.Providers {
-		spec, err := providers.ParseSpec(text)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %v", file, err)
-		}
-		specs = append(specs, spec)
-	}
-	return specs, nil
+// saved is what setup.json holds: the providers to host and the decider variables (decider.Remembered) every nib starts with.
+type saved struct {
+	Providers []providers.Spec
+	Decider   map[string]string
 }
 
-// remember writes specs to file, through a temporary file and a rename.
-func remember(file string, specs []providers.Spec) error {
+// remembered is what file holds; nothing when it is missing, and an error when it is not one setup wrote.
+func remembered(file string) (saved, error) {
+	data, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return saved{}, nil
+	}
+	if err != nil {
+		return saved{}, err
+	}
+	var raw struct {
+		Providers []string          `json:"providers"`
+		Decider   map[string]string `json:"decider"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return saved{}, fmt.Errorf("%s is not what nib setup writes: %v", file, err)
+	}
+	out := saved{Decider: map[string]string{}}
+	for _, text := range raw.Providers {
+		spec, err := providers.ParseSpec(text)
+		if err != nil {
+			return saved{}, fmt.Errorf("%s: %v", file, err)
+		}
+		out.Providers = append(out.Providers, spec)
+	}
+	for name, value := range raw.Decider {
+		if !slices.Contains(decider.Remembered, name) {
+			return saved{}, fmt.Errorf("%s: %s is not a variable setup remembers", file, name)
+		}
+		if value != "" {
+			out.Decider[name] = value
+		}
+	}
+	return out, nil
+}
+
+// RememberedDecider are the decider variables setup.json holds, for a nib starting; a file setup did not write gives none and a note.
+func RememberedDecider(home string, env func(string) string) (map[string]string, error) {
+	s, err := remembered(rememberedFile(home, env))
+	return s.Decider, err
+}
+
+// remember writes s to file, through a temporary file and a rename.
+func remember(file string, s saved) error {
 	texts := []string{}
-	for _, spec := range specs {
+	for _, spec := range s.Providers {
 		texts = append(texts, spec.String())
 	}
-	data, err := json.MarshalIndent(map[string][]string{"providers": texts}, "", "  ")
+	out := map[string]any{"providers": texts}
+	if len(s.Decider) > 0 {
+		out["decider"] = s.Decider
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -141,6 +167,20 @@ func remember(file string, specs []providers.Spec) error {
 		return err
 	}
 	return os.Rename(staged, file)
+}
+
+// deciderText names a remembered decider choice, for a report.
+func deciderText(vars map[string]string) string {
+	if len(vars) == 0 {
+		return "no decider choice"
+	}
+	var parts []string
+	for _, name := range decider.Remembered {
+		if value := vars[name]; value != "" {
+			parts = append(parts, name+"="+value)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // applied are the providers kept after changes: each change replaces the one of its name, or with no program drops it; a new one goes last.

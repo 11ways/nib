@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { binary } from "./support/engine"
@@ -19,7 +19,7 @@ async function workspace() {
   return directory
 }
 
-const base = () => ({ PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", NIB_SHELL: "1" })
+const base = () => ({ PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? "", XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "", NIB_SHELL: "1" })
 
 async function connect(directory: string, env: Record<string, string>) {
   const client = new Client({ name: "test", version: "1" })
@@ -103,7 +103,7 @@ describe("deciders", () => {
   test("configuration it cannot honour stops nib at startup with the reason", async () => {
     const cases: [Record<string, string>, string][] = [
       [{ NIB_DECIDER: "magic" }, "NIB_DECIDER is \"magic\"; use one of fixed, keywords, openrouter"],
-      [{ NIB_DECIDER: "openrouter" }, "NIB_DECIDER=openrouter needs a key in NIB_DECIDER_KEY or OPENROUTER_API_KEY"],
+      [{ NIB_DECIDER: "openrouter" }, "NIB_DECIDER=openrouter needs an OpenRouter key; nib looked in NIB_DECIDER_KEY, OPENROUTER_API_KEY, "],
       [{ NIB_DECIDER: "openrouter", NIB_DECIDER_KEY: "k", NIB_SANDBOX: "1" }, "which NIB_SANDBOX=1 allows only with NIB_DECIDER_SANDBOX=1"],
     ]
     const directory = await workspace()
@@ -113,5 +113,22 @@ describe("deciders", () => {
       expect(await child.exited).toBe(1)
       expect(await new Response(child.stderr).text()).toContain(message)
     }
+  })
+
+  test("a decider choice nib setup remembered is read at startup, and a choice in the environment replaces it", async () => {
+    const config = await mkdtemp(path.join(tmpdir(), "nib-remembered-"))
+    await mkdir(path.join(config, "nib"))
+    await writeFile(path.join(config, "nib", "setup.json"), JSON.stringify({ providers: [], decider: { NIB_DECIDER: "openrouter" } }))
+    const directory = await workspace()
+    const start = async (env: Record<string, string>) => {
+      const child = Bun.spawn([await binary()], { cwd: directory, env: { ...base(), XDG_CONFIG_HOME: config, ...env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+      child.stdin.end()
+      return { exit: await child.exited, stderr: await new Response(child.stderr).text() }
+    }
+    const remembered = await start({})
+    expect(remembered.exit).toBe(1)
+    expect(remembered.stderr).toContain("NIB_DECIDER=openrouter needs an OpenRouter key")
+    expect((await start({ NIB_DECIDER: "keywords" })).exit).toBe(0)
+    await rm(config, { recursive: true, force: true })
   })
 })
