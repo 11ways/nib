@@ -102,6 +102,19 @@ func TestUserSetupInstallsTheNibashModOnce(t *testing.T) {
 	}
 }
 
+func TestQuietSetupSaysOnlyWhatChanged(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(home, "claude")}
+	writeJSON(t, filepath.Join(home, "claude/.claude.json"), map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "nib", "args": []any{}}}})
+	options := Options{User: true, Quiet: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: func(string, []string) (int, string) { return 0, "" }}
+	if report := Setup(options); len(report) != 2 || !strings.Contains(report[0], "installed the nibash mod") || !strings.HasSuffix(report[1], "and the nibash mod in env.CLAUDE_CODE_PLUGIN_DIRS") {
+		t.Fatalf("a first quiet setup says what it did, got %v", report)
+	}
+	if report := Setup(options); len(report) != 0 {
+		t.Fatalf("a quiet setup with nothing to do says nothing, got %v", report)
+	}
+}
+
 func TestAUserHostsAProviderInsteadOfRunningItBeside(t *testing.T) {
 	home := t.TempDir()
 	project, gone := filepath.Join(home, "project"), filepath.Join(home, "gone")

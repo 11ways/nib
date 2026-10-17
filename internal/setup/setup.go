@@ -26,8 +26,10 @@ import (
 type Options struct {
 	Directory string
 	// User registers nib for every project of this user instead of for Directory.
-	User    bool
-	DryRun  bool
+	User   bool
+	DryRun bool
+	// Quiet leaves out the lines for what was set up already, for a script that runs setup every time it starts Claude Code.
+	Quiet   bool
 	Command []string
 	// Providers are the --provider changes: a program for nib to host under a name, or none to stop hosting it; what an entry hosts
 	// already stays.
@@ -739,7 +741,9 @@ func Setup(options Options) []string {
 			extra = " (" + strings.Join(notes, "; ") + ")"
 		}
 		if len(changes) == 0 {
-			report = append(report, fmt.Sprintf("%s: already set up%s", display(file), extra))
+			if !options.Quiet || extra != "" {
+				report = append(report, fmt.Sprintf("%s: already set up%s", display(file), extra))
+			}
 			return
 		}
 		var added, removed []string
@@ -921,7 +925,7 @@ func Setup(options Options) []string {
 		userWords, _ := program(user)
 		if _, stale := staleProgram(user, wanted(command, userWords, options.Providers)); stale {
 			replace("user", "", user)
-		} else {
+		} else if !options.Quiet {
 			report = append(report, "claude mcp: nib is already registered for this user")
 		}
 	case claude == nil:
@@ -1049,7 +1053,7 @@ func runClaude(dir string, args []string) (int, string) {
 	return 0, string(output)
 }
 
-var usage = `Usage: nib setup [--user] [--dry-run] [--provider NAME=PROGRAM]...
+var usage = `Usage: nib setup [--user] [--dry-run] [--quiet] [--provider NAME=PROGRAM]...
 Registers nib in this folder: the MCP server in .mcp.json; its approval, its Claude Code hook and deny rules for the built-in tools nib replaces
 (` + strings.Join(ClaudeDenied, ", ") + `) and an allow rule for ` + strings.Join(ClaudeAllowed, ", ") + `, which the nibash mod polls, in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
@@ -1058,11 +1062,12 @@ tools Claude Code no longer has (` + strings.Join(ClaudeUndenied, ", ") + `) are
 it replaces, in this folder or, with --user, for this user; NAME= stops hosting it. The providers an entry hosts already stay, and the
 providers asked for are remembered in ~/.config/nib/setup.json, so a later setup without --provider (a new project, a new config folder)
 hosts them too. With --user it also installs the nibash mod this nib carries to ~/.local/share/nib/mods/nibash and names that folder in
-env.CLAUDE_CODE_PLUGIN_DIRS of the config folder's settings.json.`
+env.CLAUDE_CODE_PLUGIN_DIRS of the config folder's settings.json. --quiet leaves out what was set up already, for a script that runs
+setup each time it starts Claude Code.`
 
 // Main is `nib setup` from the command line; it returns the exit code.
 func Main(args []string) int {
-	user, dryRun := false, false
+	user, dryRun, quiet := false, false, false
 	var changes []providers.Spec
 	directory, _ := os.Getwd()
 	for i := 0; i < len(args); i++ {
@@ -1088,6 +1093,8 @@ func Main(args []string) int {
 			user = true
 		case arg == "--dry-run":
 			dryRun = true
+		case arg == "--quiet":
+			quiet = true
 		case arg == "--help" || arg == "-h":
 			fmt.Println(usage)
 			return 0
@@ -1096,7 +1103,7 @@ func Main(args []string) int {
 			return 2
 		}
 	}
-	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun, Providers: changes}) {
+	for _, line := range Setup(Options{Directory: directory, User: user, DryRun: dryRun, Quiet: quiet, Providers: changes}) {
 		fmt.Println(line)
 	}
 	return 0
