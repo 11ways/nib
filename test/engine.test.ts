@@ -1445,6 +1445,35 @@ describe("SUB", () => {
     expect(await readFile(f.filePath, "utf8")).toBe("aaa b\nother\n")
   })
 
+  test("an old text missing from its line applies on the one nearby line of the file that holds it, saying so", async () => {
+    const content = "func a() {\n\twhy := \"one of its options\"\n\treturn why\n}\n\nfunc b() {\n\tnote := \"short\"\n}\n"
+    const f = await fixture(content)
+    const r = await f.read()
+    const result = await f.patch(`[file.txt#${r.tag}]\nSUB 1: "one of its options"\n+"this form of it"`)
+    expect(await readFile(f.filePath, "utf8")).toBe(content.replace("one of its options", "this form of it"))
+    expect(result.text).toContain("SUB 1: its old text is not on line 1 but on line 2, the one line of the file that holds it, so it applied there")
+    expect(result.text).toContain('2:\twhy := "this form of it"')
+  })
+
+  test("an old text missing from its line is still refused when its line is in doubt", async () => {
+    const content = "alpha\n\tvalue := compute(1)\n\tvalue := compute(1)\nbeta\ngamma\ndelta\nepsilon\n\tfar := somewhere(2)\n\tnote := x\n"
+    const f = await fixture(content)
+    const r = await f.read()
+    const doubt = async (input: string, why: string) => {
+      const message = await refusal(f.patch(`[file.txt#${r.tag}]\n${input}`))
+      expect(message, why).toContain("does not occur on line")
+    }
+    await doubt("SUB 1: value := compute(1)\n+x", "on two lines of the file")
+    await doubt("SUB 4: somewhere(2)\n+x", "more than 2 lines away")
+    await doubt("SUB 8: x\n+y", "too short to tell")
+    await doubt("SUB 7: somewhere(2)\n+x\nPUT 8:\n+y", "on a line another hunk anchors")
+    expect(await readFile(f.filePath, "utf8")).toBe(content)
+    // A line the agent was never shown is not taken either.
+    const g = await fixture(content.replace("\tnote := x", "\tnote := unique(3)"))
+    const head = await g.read(":1-7")
+    expect(await refusal(g.patch(`[file.txt#${head.tag}]\nSUB 7: unique(3)\n+x`))).toContain("does not occur on line 7")
+  })
+
   test("SUB edits a cut long line without reading it whole, and its result does not become known content", async () => {
     const long = "x".repeat(3000) + " marker " + "y".repeat(100)
     const f = await fixture(long + "\nshort\n")

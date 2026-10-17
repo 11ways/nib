@@ -70,10 +70,12 @@ const (
 	maxVersions = 4
 	maxUnits    = 64 * 1024 * 1024
 	// maxForgotten bounds the evicted pairs remembered, so a refusal can say its earlier views were dropped.
-	maxForgotten    = 16384
-	diffTimeout     = time.Second
-	evidenceMinRune = 8
+	maxForgotten = 16384
+	diffTimeout  = time.Second
 )
+
+// EvidenceMinRunes is the shortest trimmed text that, unique in a file, tells which line an anchor meant.
+const EvidenceMinRunes = 8
 
 // Limits bound a Store.
 type Limits struct{ Paths, Versions, Units int }
@@ -533,7 +535,7 @@ func uniqueEvidence(lines []string, line int) (string, bool) {
 		return "", false
 	}
 	content := js.Trim(lines[line-1])
-	if content == "" || utf8.RuneCountInString(content) < evidenceMinRune {
+	if content == "" || utf8.RuneCountInString(content) < EvidenceMinRunes {
 		return "", false
 	}
 	count := 0

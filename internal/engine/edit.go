@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/patch"
@@ -177,8 +178,9 @@ func confirmChecks(named, display string, lines []string, edits []snapshots.Line
 
 // resolveSubs turns SUB edits into one replace per line; each old text must occur exactly once in that line, and two on one line must not overlap.
 // Old text that starts where a line's indentation ends, replaced by rows whose first one repeats that indentation, gets it once, with a lesson:
-// SUB keeps the text around its old text, which models forget.
-func resolveSubs(named, display string, lines []string, edits []snapshots.LineEdit, record recorder) (checked, error) {
+// SUB keeps the text around its old text, which models forget. A SUB whose old text is on a nearby line instead applies there when subTarget
+// finds that line certain, with a lesson naming both.
+func resolveSubs(named, display string, lines []string, edits []snapshots.LineEdit, known func(line int) bool, record recorder) (checked, error) {
 	if !slices.ContainsFunc(edits, func(e snapshots.LineEdit) bool { return e.Sub != nil }) {
 		return checked{edits: edits}, nil
 	}
@@ -191,6 +193,16 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 	var doneOrder []int
 	var resolved []snapshots.LineEdit
 	var lessons []string
+	edits = slices.Clone(edits)
+	for i, edit := range edits {
+		if edit.Sub == nil || edit.Start > len(lines) || strings.Contains(lines[edit.Start-1], *edit.Sub) {
+			continue
+		}
+		if to, ok := subTarget(lines, edits, i, known); ok {
+			lessons = append(lessons, fmt.Sprintf("SUB %d: its old text is not on line %d but on line %d, the one line of the file that holds it, so it applied there; take line numbers from the rows you were shown.", edit.Start, edit.Start, to))
+			edits[i].Start, edits[i].End = to, to
+		}
+	}
 	failedLine := func(line int) bool {
 		return slices.ContainsFunc(failures, func(f failure) bool { return f.line == line })
 	}
@@ -280,6 +292,38 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 	message = append(message, f.rows...)
 	message = append(message, rowNotes(display, f.marks)...)
 	return checked{edits: resolved, refusal: &Refusal{message: strings.Join(message, "\n")}, lessons: lessons}, nil
+}
+
+// subReach is how far from its line a SUB's old text may be and still be taken as meant there.
+const subReach = 2
+
+// subTarget is the line a SUB whose old text is not on its own line meant: the one line of the file holding that text, long enough to tell
+// (snapshots.EvidenceMinRunes), at most subReach lines away, known to the agent and anchored by no other hunk; ok is false when any of that
+// is in doubt, so the SUB is refused as before.
+func subTarget(lines []string, edits []snapshots.LineEdit, index int, known func(line int) bool) (int, bool) {
+	edit := edits[index]
+	old := *edit.Sub
+	if utf8.RuneCountInString(js.Trim(old)) < snapshots.EvidenceMinRunes {
+		return 0, false
+	}
+	found := 0
+	for n, line := range lines {
+		if strings.Contains(line, old) {
+			if found != 0 {
+				return 0, false
+			}
+			found = n + 1
+		}
+	}
+	if found == 0 || found < edit.Start-subReach || found > edit.Start+subReach || !known(found) {
+		return 0, false
+	}
+	for j, other := range edits {
+		if j != index && other.Sub == nil && (slices.Contains(snapshots.AnchorLines(other), found) || other.Start <= found && found <= other.End) {
+			return 0, false
+		}
+	}
+	return found, true
 }
 
 func trailing(line string) string { return strings.TrimRight(line, " \t\r") }
@@ -1353,7 +1397,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 	if err != nil {
 		return nil, err
 	}
-	subs, err := resolveSubs(named, t.display, basis.Lines, checks.edits, record)
+	subs, err := resolveSubs(named, t.display, basis.Lines, checks.edits, func(line int) bool { return knownLine(basis, line) }, record)
 	if err != nil {
 		return nil, err
 	}
