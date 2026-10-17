@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -210,6 +211,28 @@ func TestRequestsNameWindowsAndAskTheWholeQuestionOnce(t *testing.T) {
 	}
 }
 
+func TestAnOffsetSetOfWindowsJudgesWhatStraddlesABoundary(t *testing.T) {
+	f := &fake{answer: func(_ int, req map[string]any) (int, string) {
+		output := req["state"].(map[string]any)["output"].(map[string]any)
+		return 200, answerAll(req, func(id string) float64 {
+			if strings.Contains(output[id].(string), "error: the cause") && strings.Contains(output[id].(string), "module30.ts") {
+				return 0.9
+			}
+			return 0.1
+		})
+	}}
+	o := openRouterFor(f.serve(t), 5*time.Second, "")
+	// The cause at row 24 ends the first window; only the window offset by half a window holds what follows it as well.
+	choice := o.Decide(context.Background(), Input{Command: "c", Exit: 1, Rows: rowsOf(50, map[int]string{24: "error: the cause"})})
+	if f.count() != 1 || len(choice.Picks) < 3 || choice.Picks[0].Range != (Range{12, 37}) || choice.Picks[0].Score != 0.9 {
+		t.Fatalf("%d requests, picks %+v", f.count(), choice.Picks)
+	}
+	output := f.requests[0]["state"].(map[string]any)["output"].(map[string]any)
+	if len(output) != 3 {
+		t.Fatalf("windows %v", slices.Collect(maps.Keys(output)))
+	}
+}
+
 func TestTheRequestCapLeavesWindowsUnjudgedKeywordsFirst(t *testing.T) {
 	f := &fake{answer: func(_ int, req map[string]any) (int, string) {
 		return 200, answerAll(req, func(string) float64 { return 0.1 })
@@ -377,10 +400,22 @@ func TestARecordedJevAnswerDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fake{answer: func(int, map[string]any) (int, string) { return 200, string(recorded) }}
+	// The recording answers the first set of windows; the offset set the request also asks about gets a low score.
+	f := &fake{answer: func(_ int, req map[string]any) (int, string) {
+		var reply map[string]any
+		json.Unmarshal(recorded, &reply)
+		answers := reply["answers"].(map[string]any)
+		for id := range req["questions"].(map[string]any) {
+			if _, ok := answers[id]; !ok {
+				answers[id] = map[string]any{"type": "noul", "noul": 0.1}
+			}
+		}
+		data, _ := json.Marshal(reply)
+		return 200, string(data)
+	}}
 	o := openRouterFor(f.serve(t), 5*time.Second, "")
 	choice := o.Decide(context.Background(), Input{Command: "bun scripts/build.ts", Exit: 1, Rows: rowsOf(16*windowRows, nil)})
-	if choice.Failure != "" || len(choice.Picks) != 16 || choice.Picks[0].Score != 0.74 || choice.Picks[0].Start != 7*windowRows {
+	if choice.Failure != "" || len(choice.Picks) != 31 || choice.Picks[0].Score != 0.74 || choice.Picks[0].Start != 7*windowRows {
 		t.Fatalf("choice %+v", choice)
 	}
 }

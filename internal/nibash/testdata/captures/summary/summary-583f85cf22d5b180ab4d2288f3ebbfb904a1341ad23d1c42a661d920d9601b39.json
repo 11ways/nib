@@ -1,1 +1,0 @@
-"{\"summary\": \"One test fails: 'durations \u003e parses \\\"-90s\\\"' in src/router22.test.ts, reporting got 90, want -90 at parseDuration (src/duration.ts:41). The run ends with 2393 pass, 1 fail, 7182 expect() calls across 2394 tests in 38 files.\", \"ranges\": [[1445, 1447], [2473, 2476]]}"

@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	// A second set of windows starts windowRows/2 rows later, so a line that matters is judged in a window that holds what leads up to it
+	// and in one that holds what follows, and where the windows happen to start cannot decide whether it is shown.
 	windowRows = 25
 	// rowChars cuts each row for the question only; what is shown stays whole.
 	rowChars = 400
@@ -179,12 +181,11 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// plan splits the rows into windows and packs them into at most maxRequests batches; past that, windows with keyword hits go first, then
-// those nearest the end, then those nearest the start, and the rest are not judged.
+// plan splits the rows into windows, a second set offset by half a window after the first, and packs them into at most maxRequests batches;
+// past that, windows with keyword hits go first, then those nearest the end, then those nearest the start, and the rest are not judged.
 func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjudged) {
 	var windows []window
-	for start := 0; start < len(in.Rows); start += windowRows {
-		end := min(start+windowRows, len(in.Rows))
+	add := func(start, end int) {
 		rows := make([]string, 0, end-start)
 		for _, row := range in.Rows[start:end] {
 			if len([]rune(row)) > rowChars {
@@ -198,6 +199,16 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 			w.size += jsonSize(in.Legend[name]) + len(name) + 4
 		}
 		windows = append(windows, w)
+	}
+	for start := 0; start < len(in.Rows); start += windowRows {
+		add(start, min(start+windowRows, len(in.Rows)))
+	}
+	// The offset set comes after the first, so the first set's batches stay what they were and their cached answers hold; each of its
+	// windows straddles a boundary of the first set, and one past the last boundary would only repeat the last window.
+	if len(in.Rows) > windowRows {
+		for start := windowRows / 2; start+windowRows-windowRows/2 < len(in.Rows); start += windowRows {
+			add(start, min(start+windowRows, len(in.Rows)))
+		}
 	}
 	base := jsonSize(request{Model: model, State: in.state()})
 	whole := 0
@@ -225,14 +236,15 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 		return all, nil
 	}
 	hit := map[int]bool{}
-	for _, p := range hits {
-		hit[p.Start/windowRows] = true
+	for i, w := range windows {
+		hit[i] = slices.ContainsFunc(hits, func(p Pick) bool { return p.Start < w.rows.End && p.End > w.rows.Start })
 	}
 	order := make([]int, len(windows))
 	for i := range order {
 		order[i] = i
 	}
-	last := len(windows) - 1
+	// Distance from the ends goes by where a window starts, so the two sets interleave.
+	last := len(in.Rows)
 	slices.SortStableFunc(order, func(a, b int) int {
 		if hit[a] != hit[b] {
 			if hit[a] {
@@ -240,7 +252,7 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 			}
 			return 1
 		}
-		da, db := min(last-a, a), min(last-b, b)
+		da, db := min(last-windows[a].rows.Start, windows[a].rows.Start), min(last-windows[b].rows.Start, windows[b].rows.Start)
 		if da != db {
 			return da - db
 		}
@@ -260,14 +272,28 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 		}
 	}
 	var chosen []window
-	var unjudged []Unjudged
 	for i, w := range windows {
 		if taken[i] {
 			chosen = append(chosen, w)
-		} else if n := len(unjudged); n > 0 && unjudged[n-1].End == w.rows.Start {
-			unjudged[n-1].End = w.rows.End
+		}
+	}
+	// What no window judged is the rows no taken window covers, merged into runs.
+	covered := make([]bool, len(in.Rows))
+	for _, w := range chosen {
+		for i := w.rows.Start; i < w.rows.End; i++ {
+			covered[i] = true
+		}
+	}
+	var unjudged []Unjudged
+	reason := fmt.Sprintf("over the %d-request limit", maxRequests)
+	for i := range in.Rows {
+		if covered[i] {
+			continue
+		}
+		if n := len(unjudged); n > 0 && unjudged[n-1].End == i {
+			unjudged[n-1].End = i + 1
 		} else {
-			unjudged = append(unjudged, Unjudged{w.rows, fmt.Sprintf("over the %d-request limit", maxRequests)})
+			unjudged = append(unjudged, Unjudged{Range{i, i + 1}, reason})
 		}
 	}
 	return pack(chosen), unjudged

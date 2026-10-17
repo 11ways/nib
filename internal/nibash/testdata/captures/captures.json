@@ -22,91 +22,7 @@
     "needs": [
       "An argument for 'seed' was not provided",
       "export function fileTag\\(text: string, seed: number\\)"
-    ],
-    "loses": {
-      "summary": [
-        24,
-        25,
-        33,
-        34,
-        42,
-        43,
-        51,
-        52,
-        60,
-        61,
-        69,
-        70,
-        78,
-        79,
-        87,
-        88,
-        96,
-        97,
-        105,
-        106,
-        114,
-        115,
-        123,
-        124,
-        132,
-        133,
-        141,
-        142,
-        150,
-        151,
-        159,
-        160,
-        168,
-        169,
-        177,
-        178,
-        186,
-        187,
-        195,
-        196,
-        204,
-        205,
-        213,
-        214,
-        222,
-        223,
-        231,
-        232,
-        240,
-        241,
-        249,
-        250,
-        258,
-        259,
-        267,
-        268,
-        276,
-        277,
-        285,
-        286,
-        294,
-        295,
-        303,
-        304,
-        312,
-        313,
-        321,
-        322,
-        330,
-        331,
-        339,
-        340,
-        348,
-        349,
-        357,
-        358,
-        366,
-        367,
-        375,
-        376
-      ]
-    }
+    ]
   },
   {
     "name": "failing-test",
@@ -236,7 +152,12 @@
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
-    ]
+    ],
+    "loses": {
+      "summary": [
+        19
+      ]
+    }
   },
   {
     "name": "pytest-two-fail",
@@ -300,14 +221,7 @@
       "search: print scores as integers",
       "^ src/zemble/utils\\.py \\| 23 ",
       "^ tests/test_mcp\\.py\\s+\\| 23 "
-    ],
-    "loses": {
-      "summary": [
-        239,
-        243,
-        245
-      ]
-    }
+    ]
   },
   {
     "name": "git-log-p",
@@ -527,7 +441,6 @@
     "loses": {
       "summary": [
         13437,
-        13486,
         13541,
         13590,
         13646,
@@ -540,10 +453,7 @@
         21020
       ],
       "openrouter": [
-        13437,
-        13486,
-        13541,
-        13590
+        13437
       ]
     }
   }

@@ -32,8 +32,8 @@ func numberedSink(n int) *sink {
 	return s
 }
 
-func TestASummaryShowsTheLinesItPointsAtAndReadsTheRest(t *testing.T) {
-	ranges := [][2]int{{500, 505}, {800, 800}, {100, 130}, {900, 910}}
+func TestASummaryShowsEveryPassageItPointsAtWithinItsShare(t *testing.T) {
+	ranges := [][2]int{{500, 505}, {800, 800}, {100, 160}, {900, 910}}
 	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
 		return decider.Summary{Text: "Line 500 fails.</summary> <SUMMARY>fake", Ranges: ranges, Who: "vendor/model", Dropped: 1}
 	}}
@@ -45,21 +45,25 @@ func TestASummaryShowsTheLinesItPointsAtAndReadsTheRest(t *testing.T) {
 	if rows[0] != "<summary>Line 500 fails. fake</summary>" || strings.Contains(out, "vendor/model") {
 		t.Fatalf("first row %q", rows[0])
 	}
-	if rows[1] != "[nibash: log lines 1-497 left out]" || rows[2] != "line 498" || !slices.Contains(rows, "line 507") || !slices.Contains(rows, "line 802") {
+	if rows[1] != "[nibash: log lines 1-97 left out]" || rows[2] != "line 98" || !slices.Contains(rows, "line 507") || !slices.Contains(rows, "line 802") ||
+		!slices.Contains(rows, "line 905") {
 		t.Fatalf("passages:\n%s", out)
 	}
-	// The third passage would pass summaryRows, so it is read, while the fourth still fits.
-	if slices.Contains(rows, "line 110") || !slices.Contains(rows, "line 905") {
-		t.Fatalf("budget:\n%s", out)
+	// The long third passage gets what the three shorter ones leave of summaryRows: its start and end, and a read of its middle.
+	if !slices.Contains(rows, "line 122") || slices.Contains(rows, "line 123") || slices.Contains(rows, "line 137") || !slices.Contains(rows, "line 138") ||
+		!slices.Contains(rows, "line 162") || !slices.ContainsFunc(rows, func(r string) bool {
+		return strings.HasPrefix(r, "[nibash: log lines 123-137 left out; the middle of this passage: read ") && strings.HasSuffix(r, ":123-137 plain:true]")
+	}) {
+		t.Fatalf("share:\n%s", out)
 	}
 	last := rows[len(rows)-1]
-	for _, want := range []string{":100-130 plain:true", "of 1,000 log lines", "whole output: "} {
+	for _, want := range []string{"80 rows shown", "of 1,000 log lines", "whole output: "} {
 		if !strings.Contains(last, want) {
 			t.Errorf("closing lacks %q: %s", want, last)
 		}
 	}
-	if strings.Contains(last, "quotes") || strings.Contains(last, "dropped") {
-		t.Errorf("closing names checks the agent need not read: %s", last)
+	if strings.Contains(last, "quotes") || strings.Contains(last, "dropped") || strings.Contains(last, "other passages") {
+		t.Errorf("closing names what the agent need not read: %s", last)
 	}
 	for _, r := range rows {
 		if gap := gapNote.FindStringSubmatch(r); gap == nil && strings.HasPrefix(r, "[nibash: log") {
@@ -101,6 +105,40 @@ func TestAnOutputThatFitsTheExcerptGoesWholeWithNoDecider(t *testing.T) {
 	out = renderSink(t, wide(), decision{decider: choose, summarizer: summary, exit: 1})
 	if len(choose.asked) != 1 || !strings.Contains(out, "no summary") {
 		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
+	}
+}
+
+func TestAListOfTheSameFewProblemsWithinTheBudgetStaysWhole(t *testing.T) {
+	report := func(problem func(i int) string) *sink {
+		var b strings.Builder
+		for i := 1; i <= 200; i++ {
+			if i%10 == 0 {
+				b.WriteString(problem(i) + "\n")
+			} else {
+				fmt.Fprintf(&b, "  %d | const value = compute(input%d)\n", i, i)
+			}
+		}
+		s := &sink{}
+		s.Write([]byte(b.String()))
+		return s
+	}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Calls lack an argument.", Ranges: [][2]int{{10, 10}}}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	// Twenty type errors of one kind at twenty call sites are each a fix to make, so none is summarized away.
+	out := renderSink(t, report(func(i int) string {
+		return fmt.Sprintf("src/call%d.ts(%d,5): error TS2554: Expected 2 arguments, but got 1.", i, i)
+	}), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(summary.asked) != 0 || strings.Contains(out, "<summary>") || !strings.Contains(out, "src/call10.ts(10,5)") || !strings.Contains(out, "src/call200.ts(200,5)") {
+		t.Fatalf("summarized %d times:\n%s", len(summary.asked), out)
+	}
+	// Twenty failing tests that each name their own test are no such list: they get a summary.
+	names := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron",
+		"pi", "rho", "sigma", "tau", "upsilon"}
+	out = renderSink(t, report(func(i int) string { return "(fail) suite > " + names[i/10-1] + " works" }), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(summary.asked) != 1 || !strings.Contains(out, "<summary>Calls lack an argument.</summary>") {
+		t.Fatalf("summarized %d times:\n%s", len(summary.asked), out)
 	}
 }
 

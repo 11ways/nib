@@ -1,0 +1,1 @@
+"{\"summary\": \"bun install failed with exit status 1: the package diff-sequences-nonexistent-pkg-zz returned a 404 from the registry and failed to resolve. The rest of the run resolved, downloaded and extracted 101 packages.\", \"ranges\": [[2651, 2654], [1186, 1201], [1, 6]]}"

@@ -88,6 +88,10 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		s := d.summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}
+	// A list of the same few problems at many places, short enough to show whole, stays whole: each place is work the agent must do.
+	if !over && problemList(lines) {
+		return rows
+	}
 	if len(entries) <= excerptLines {
 		if s, ok := ask(entries); ok {
 			return summarized(rows, s, log)
@@ -243,6 +247,19 @@ var qualified = regexp.MustCompile(`[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+`)
 // likeness is what a row is like with its numbers and dotted names masked: the same failure reported for another test class is alike.
 func likeness(text string) string { return qualified.ReplaceAllString(engine.MaskDigits(text), "X") }
 
+// problemList says whether lines report at least listProblems different problem lines that are, on average, listPerKind or more copies of
+// each kind: type errors at many call sites are; hundreds of failing tests that each name their own test are not.
+func problemList(lines []string) bool {
+	distinct, kinds := map[string]bool{}, map[string]bool{}
+	for _, line := range lines {
+		if decider.Hit(line) {
+			distinct[line] = true
+			kinds[likeness(line)] = true
+		}
+	}
+	return len(distinct) >= listProblems && len(distinct) >= listPerKind*len(kinds)
+}
+
 func cmpScore(a, b float64) int {
 	switch {
 	case a < b:
@@ -253,47 +270,79 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// summarized shows a checked summary in place of a decider's cut: the summary as a <summary> element, the rows of the log lines it points
-// at with summaryContext lines around each while they fit summaryRows (the first passage always), a read of the passages that did not
-// fit, and the gaps named.
+// summarized shows a checked summary in place of a decider's cut: the summary as a <summary> element, then every passage it points at,
+// each widened by summaryContext lines and given a share of summaryRows; a passage longer than its share shows its start and end, with
+// the read of what it leaves out in between.
 func summarized(rows []row, s decider.Summary, log saved) []row {
-	keep := make([]bool, len(rows))
-	shown := 0
-	var rest [][2]int
-	for k, r := range s.Ranges {
+	taken := make([]bool, len(rows))
+	var passages [][]int
+	for _, r := range s.Ranges {
 		var add []int
 		for i, row := range rows {
-			if !keep[i] && row.first > 0 && row.first <= r[1]+summaryContext && row.last >= r[0]-summaryContext {
+			if !taken[i] && row.first > 0 && row.first <= r[1]+summaryContext && row.last >= r[0]-summaryContext {
 				add = append(add, i)
+				taken[i] = true
 			}
 		}
-		if k > 0 && shown+len(add) > summaryRows {
-			rest = append(rest, r)
+		if len(add) > 0 {
+			passages = append(passages, add)
+		}
+	}
+	shares := shared(passages, summaryRows, summaryShare)
+	keep := make([]bool, len(rows))
+	notes := map[int]string{}
+	shown := 0
+	for k, add := range passages {
+		share := shares[k]
+		if share >= len(add) {
+			for _, i := range add {
+				keep[i] = true
+			}
+			shown += len(add)
 			continue
 		}
-		for _, i := range add {
+		head := (share + 1) / 2
+		for _, i := range append(slices.Clone(add[:head]), add[len(add)-(share-head):]...) {
 			keep[i] = true
 		}
-		shown += len(add)
-	}
-	out := append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep)...)
-	var clauses []string
-	if len(rest) > 0 {
-		var parts []string
-		for _, r := range rest {
-			part := fmt.Sprint(r[0])
-			if r[1] > r[0] {
-				part += fmt.Sprintf("-%d", r[1])
+		shown += share
+		if first, last := logLines(rowsAt(rows, add[head:len(add)-(share-head)])); first > 0 {
+			note := "[nibash: log " + lineSpan(first, last) + " left out; the middle of this passage"
+			if log.path != "" {
+				note += fmt.Sprintf(": read %s:%d-%d plain:true", log.path, first, last)
 			}
-			parts = append(parts, part)
+			notes[add[head]] = note + "]"
 		}
-		more := "other passages: log " + spans(rest)
-		if log.path != "" {
-			more = "other passages: read " + log.path + ":" + strings.Join(parts, ",") + " plain:true"
-		}
-		clauses = append(clauses, more)
 	}
-	return append(out, row{text: closing(shown, log, clauses), header: -1})
+	out := append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes)...)
+	return append(out, row{text: closing(shown, log, nil), header: -1})
+}
+
+// shared splits budget rows among passages of the given sizes: one that fits an even split of what is left keeps all its rows, and the rest
+// share what remains, each at least least rows.
+func shared(passages [][]int, budget, least int) []int {
+	order := make([]int, len(passages))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return len(passages[a]) - len(passages[b]) })
+	shares := make([]int, len(passages))
+	left := budget
+	for k, i := range order {
+		even := max(least, left/(len(order)-k))
+		shares[i] = min(len(passages[i]), even)
+		left = max(0, left-shares[i])
+	}
+	return shares
+}
+
+// rowsAt is the rows at the given indexes.
+func rowsAt(rows []row, at []int) []row {
+	out := make([]row, 0, len(at))
+	for _, i := range at {
+		out = append(out, rows[i])
+	}
+	return out
 }
 
 // summaryTag matches the element's own tags in any case, which a summary's text could otherwise use to close it early or fake another.
@@ -304,8 +353,9 @@ func summaryText(text string) string {
 	return strings.Join(strings.Fields(summaryTag.ReplaceAllString(text, " ")), " ")
 }
 
-// gapped is the rows keep marks, with a row naming the log lines of each run left out between them.
-func gapped(rows []row, keep []bool) []row {
+// gapped is the rows keep marks, with a row naming the log lines of each run left out between them, or the note given for the run's first
+// row.
+func gapped(rows []row, keep []bool, notes map[int]string) []row {
 	var out []row
 	for i := 0; i < len(rows); {
 		if keep[i] {
@@ -317,7 +367,11 @@ func gapped(rows []row, keep []bool) []row {
 		for j < len(rows) && !keep[j] {
 			j++
 		}
-		out = append(out, row{text: "[nibash: " + leftOut(rows[i:j]) + "]", header: -1})
+		text, ok := notes[i]
+		if !ok {
+			text = "[nibash: " + leftOut(rows[i:j]) + "]"
+		}
+		out = append(out, row{text: text, header: -1})
 		i = j
 	}
 	return out
@@ -396,7 +450,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	if !chose && len(missed) == 0 {
 		return fixedCut(rows, log, strings.Join(append([]string{who + " found nothing in them" + purpose}, notes...), "; "))
 	}
-	out := gapped(rows, keep)
+	out := gapped(rows, keep, nil)
 	clauses := []string{who + " chose the middle" + purpose}
 	if len(missed) > 0 {
 		passages := "passages"

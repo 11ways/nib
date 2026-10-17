@@ -36,10 +36,15 @@ const (
 	excerptScore   = 0.3
 	excerptContext = 10
 	excerptLines   = 600
-	// A summary shows the rows of the passages it points at, each widened by summaryContext lines, up to summaryRows rows past the first.
+	// A summary shows every passage it points at, each widened by summaryContext lines, sharing summaryRows rows, at least summaryShare each.
 	summaryContext = 2
-	summaryRows    = 40
-	rowLimit       = engine.LineLimit
+	summaryRows    = 80
+	summaryShare   = 6
+	// Output within the budget that reports listProblems or more problem lines, listPerKind or more of each kind, is shown whole rather
+	// than summarized (problemList).
+	listProblems = 10
+	listPerKind  = 3
+	rowLimit     = engine.LineLimit
 	// With a summarizer, plain output past summaryLines lines or summaryBytes gets a summary even within the budget: at 8 KB the captures
 	// lost an end-to-end run's results to it, at 12 KB none but a list whose every line counted.
 	summaryLines = 150
