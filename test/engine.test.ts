@@ -1930,7 +1930,10 @@ describe("plain reads", () => {
       "[the line above repeats 2 more times]",
       "done",
       "[repeats were matched with their numbers ignored; read with collapse: false to see every line]",
+      // The markers are explained to an agent once.
+      "[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]",
     ].join("\n"))
+    expect((await f.engine.read(f.ctx, { paths: ["file.txt"], plain: true })).text).not.toContain("a row starting [#N")
     expect((await f.engine.read(f.ctx, { paths: ["file.txt"], plain: true, collapse: false })).text).toBe(["[file.txt] 27 lines, plain", ...lines].join("\n"))
     // Three similar lines print the same number of rows collapsed or not, so they stay as they are.
     await writeFile(f.filePath, "1 tick\n2 tick\n3 tick\n")
@@ -1972,6 +1975,7 @@ describe("plain reads", () => {
       "[3 more like the line above; the last one:]",
       "2026-10-14 12:01:13 WARN retrying in 4s",
       "[repeats were matched with their numbers ignored; read with collapse: false to see every line]",
+      "[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]",
     ])
   })
 

@@ -170,7 +170,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	s.mu.Lock()
 	facts := s.facts
 	s.mu.Unlock()
-	rows, raw := s.collect(e, ctx)
+	rows, raw, echoed := s.collect(e, ctx)
 	rows, footer := fit(ctx.Ctx, rows, raw, logs, d)
 	// Only rows that are shown count as seen.
 	seen := map[*engine.Source][]int{}
@@ -185,6 +185,9 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		e.Seen(ctx, source.Canonical, *source.View, lines, nil)
 	}
 	texts = append(texts, footer...)
+	if echoed {
+		texts = append(texts, e.EchoNote(ctx)...)
+	}
 	out := strings.Join(texts, "\n")
 	var extra []string
 	for _, f := range facts {
@@ -220,8 +223,9 @@ func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d deci
 	return rows, []string{fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)}
 }
 
-// collect lays out what the sink holds as rows, each with the log lines it stands for, and the log's text.
-func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
+// collect lays out what the sink holds as rows, each with the log lines it stands for, and the log's text; echoed is whether a recurring block
+// of program output got [#N] markers.
+func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bool) {
 	s.mu.Lock()
 	entries := s.entries
 	s.mu.Unlock()
@@ -229,6 +233,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 	var raw strings.Builder
 	log := &rawLog{w: &raw}
 	var plain []engine.PlainLine
+	echoed := false
 	var plainAt []int
 	flushPlain := func() {
 		if len(plain) == 0 {
@@ -238,7 +243,9 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 		// enough of it that collapsing pays.
 		rows := plain
 		if len(plain) > collapseAfter {
-			rows, _ = engine.Compress(plain, false)
+			var echo bool
+			rows, _, echo = engine.Compress(plain, false)
+			echoed = echoed || echo
 		}
 		// A row stands for the log lines from its own to the next row's, which covers what a collapsed run left out.
 		end := plainAt[len(plainAt)-1]
@@ -291,7 +298,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string) {
 		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, first: at, last: at})
 	}
 	flushPlain()
-	return s.layout(e, ctx, items), raw.String()
+	return s.layout(e, ctx, items), raw.String(), echoed
 }
 
 func size(rows []row) int {

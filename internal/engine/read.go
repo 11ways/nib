@@ -254,9 +254,20 @@ type PlainLine struct {
 
 var digits = regexp.MustCompile(`\d+`)
 
-// Compress collapses repetition among plain rows; with masked, lines compare with their digits masked, and similar reports whether anything
-// collapsed had other numbers than what is shown.
-func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar bool) {
+// echoLesson explains the markers of a recurring block, once per agent.
+const echoLesson = "[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]"
+
+// EchoNote is echoLesson the first time an agent sees those markers, else nothing.
+func (e *Engine) EchoNote(ctx *Context) []string {
+	if e.Store.Teach(ctx.Session, "echo") {
+		return []string{echoLesson}
+	}
+	return nil
+}
+
+// Compress collapses repetition among plain rows; with masked, lines compare with their digits masked, similar reports whether anything
+// collapsed had other numbers than what is shown, and echoed whether a recurring block got [#N] markers.
+func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed bool) {
 	keys := make([]string, len(lines))
 	for i, l := range lines {
 		keys[i] = l.Text
@@ -442,7 +453,7 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar bool) {
 			rows = append(rows, PlainLine{At: line.At, Text: fmt.Sprintf("[#%d again, %s lines] %s", o.id, count, line.Text)})
 		}
 	}
-	return rows, similar
+	return rows, similar, len(originals) > 0
 }
 
 // selectedLines says whether a line falls inside any of a file's line selections; unlike a read, an open range runs to the end of the file.
@@ -1190,14 +1201,15 @@ func (e *Engine) plainBlock(ctx *Context, t *target, file *os.File, sel selectio
 		return nil, err
 	}
 	var rows []PlainLine
-	similar := false
+	similar, echoed := false, false
 	// Repetition is collapsed per selected range, never across a gap between ranges.
 	var segment []PlainLine
 	flush := func() {
 		if collapse {
-			compressed, s := Compress(segment, true)
+			compressed, s, echo := Compress(segment, true)
 			rows = append(rows, compressed...)
 			similar = similar || s
+			echoed = echoed || echo
 		} else {
 			rows = append(rows, segment...)
 		}
@@ -1252,6 +1264,9 @@ func (e *Engine) plainBlock(ctx *Context, t *target, file *os.File, sel selectio
 		var notes []string
 		if similar {
 			notes = []string{"[repeats were matched with their numbers ignored; read with collapse: false to see every line]"}
+		}
+		if echoed {
+			notes = append(notes, e.EchoNote(ctx)...)
 		}
 		if shown < len(blockRows) {
 			next := blockRows[shown]

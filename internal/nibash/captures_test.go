@@ -182,7 +182,7 @@ func readCapture(t *testing.T, name string) []byte {
 func score(t *testing.T, c capture, raw []byte, d decider.Decider) scored {
 	s := &sink{}
 	s.Write(raw)
-	rows, text := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
+	rows, text, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
 	shown, _ := fit(context.Background(), rows, text, &logDirectory{path: t.TempDir()}, decision{decider: d, command: c.Command, purpose: c.Purpose, exit: c.Exit})
 	var patterns []*regexp.Regexp
 	for _, need := range c.Needs {
