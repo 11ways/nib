@@ -90,6 +90,7 @@ The tool description says plainly:
 - this is nibash, a bash interpreter (mvdan/sh, bash dialect);
 - `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` and `wc` are nib's own when their output goes to the model or into another of them, and then print anchored rows;
 - `git` is nib's own for the forms it reshapes (status, `add -v`, `rm`, `ls-files`, diffs and stats of `diff`, `show` and `log`) when its output goes to the model: it runs the real git and prints each folder of a path list once, and a diff's lines as rows of the files as they are now;
+- `find` and `ls` are nib's own the same way for the forms that print one path a line: the real program runs, and each folder of its paths prints once;
 - every other command, and those names in any other position or written as a path (`/usr/bin/grep`), is the real program;
 - `type cat` and `command -v cat` name the system program, since that is what runs elsewhere [missing].
 

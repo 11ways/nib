@@ -62,6 +62,8 @@ var commands = map[string]command{
 	"sed":   {prepare: prepareSed},
 	"wc":    {prepare: prepareWc},
 	"git":   {prepare: prepareGit, renders: true},
+	"find":  {prepare: prepareFind, renders: true},
+	"ls":    {prepare: prepareLs, renders: true},
 }
 
 // fail prints a GNU-style error for a command.

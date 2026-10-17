@@ -1,10 +1,42 @@
 package nibash
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+
+	"mvdan.cc/sh/v3/interp"
 
 	"github.com/11ways/nib/internal/engine"
 )
+
+// captured runs a real program as the shell runs any, and returns the lines it printed and its exit status. Its standard error goes where the
+// shell sends it, or into the lines when the shell sends both to one place, as 2>&1 does, so they keep their order.
+func captured(inv *invocation, args []string) ([]string, int) {
+	hc := interp.HandlerCtx(inv.ctx)
+	var out bytes.Buffer
+	var stderr io.Writer = hc.Stderr
+	if hc.Stderr == hc.Stdout {
+		stderr = &out
+	}
+	err := inv.call.runProgramTo(inv.ctx, args, &out, stderr, nil)
+	var status interp.ExitStatus
+	switch {
+	case err == nil:
+		return splitLines(out.String()), 0
+	case errors.As(err, &status):
+		return splitLines(out.String()), int(status)
+	}
+	return splitLines(out.String()), 1
+}
+
+// emitLines prints lines as plain output.
+func emitLines(inv *invocation, lines []string) {
+	for _, text := range lines {
+		inv.out.emit(record{text: text})
+	}
+}
 
 // listed is a program's line that names one path: the text before the path, the path, and the text after it.
 type listed struct{ before, path, after string }

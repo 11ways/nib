@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/11ways/nib/internal/engine"
-	"mvdan.cc/sh/v3/interp"
 )
 
 // errForeign means a command nib's own never handles in that form, such as a git subcommand whose output it does not reshape; the system
@@ -204,35 +203,19 @@ func (o gitOptions) takesNext(name string) bool {
 }
 
 func (p *gitPlan) run(inv *invocation) int {
-	hc := interp.HandlerCtx(inv.ctx)
-	var out bytes.Buffer
-	var stderr io.Writer = hc.Stderr
-	if hc.Stderr == hc.Stdout {
-		stderr = &out
-	}
 	args := p.args
 	if p.wide {
-		// git cuts a path to fit 80 columns, which would leave it out of its folder; its bars, at most 20 wide, still show each change's size against the others.
+		// git cuts a path to fit 80 columns, which would leave it out of its folder; its bars, at most 20 wide, still show each change's size
+		// against the others.
 		args = append(append(append([]string{}, args[:p.at+1]...), "--stat-width=1000", "--stat-graph-width=20"), args[p.at+1:]...)
 	}
-	err := inv.call.runProgramTo(inv.ctx, append([]string{"git"}, args...), &out, stderr, nil)
-	lines := splitLines(out.String())
-	switch {
-	case p.patch:
+	lines, status := captured(inv, append([]string{"git"}, args...))
+	if p.patch {
 		p.renderPatch(inv, lines)
-	default:
-		for _, text := range compactListing(lines, gitParser(p.subcommand)) {
-			inv.out.emit(record{text: text})
-		}
+	} else {
+		emitLines(inv, compactListing(lines, gitParser(p.subcommand)))
 	}
-	var status interp.ExitStatus
-	switch {
-	case err == nil:
-		return 0
-	case errors.As(err, &status):
-		return int(status)
-	}
-	return 1
+	return status
 }
 
 // splitLines splits a program's output into lines without their newline; a carriage return before it stays, for a diff to compare.
@@ -317,9 +300,7 @@ var gitExtended = []string{"old mode ", "new mode ", "deleted file mode ", "new 
 func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
 	var plain []string
 	flush := func() {
-		for _, text := range compactListing(plain, gitParser(p.subcommand)) {
-			inv.out.emit(record{text: text})
-		}
+		emitLines(inv, compactListing(plain, gitParser(p.subcommand)))
 		plain = nil
 	}
 	base, asked := "", false
