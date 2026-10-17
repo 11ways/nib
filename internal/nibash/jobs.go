@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -30,6 +31,8 @@ type job struct {
 	groups   map[int]bool
 	exit     int
 	reported bool
+	// started and ended are when the job began and, once done is closed, when it ended.
+	started, ended time.Time
 	// killed is the signal kill sent; a process the job starts after it gets it at once, and the job starts nothing more.
 	killed syscall.Signal
 }
@@ -152,8 +155,8 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// open adds a new job, ended through cancel, with a new log for its output; finish ends it.
-func (t *jobTable) open(logs *logDirectory, command string, cancel context.CancelFunc) (*job, *cappedWriter, error) {
+// open adds a new job that began at started, ended through cancel, with a new log for its output; finish ends it.
+func (t *jobTable) open(logs *logDirectory, command string, cancel context.CancelFunc, started time.Time) (*job, *cappedWriter, error) {
 	path, err := logs.file("job")
 	if err != nil {
 		return nil, nil, err
@@ -164,7 +167,7 @@ func (t *jobTable) open(logs *logDirectory, command string, cancel context.Cance
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	j := &job{id: t.next, command: command, log: path, cancel: cancel, done: make(chan struct{}), groups: map[int]bool{}}
+	j := &job{id: t.next, command: command, log: path, cancel: cancel, done: make(chan struct{}), groups: map[int]bool{}, started: started}
 	t.next++
 	t.jobs = append(t.jobs, j)
 	return j, &cappedWriter{file: logFile}, nil
@@ -186,6 +189,7 @@ func (j *job) finish(err error, out *cappedWriter) {
 		j.exit = 1
 	}
 	out.file.Close()
+	j.ended = time.Now()
 	close(j.done)
 }
 
@@ -196,7 +200,7 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
-	j, out, err := sess.jobs.open(sess.shell.logs, command, cancel)
+	j, out, err := sess.jobs.open(sess.shell.logs, command, cancel, time.Now())
 	if err != nil {
 		cancel()
 		devnull.Close()

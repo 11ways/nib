@@ -59,6 +59,36 @@ type Shell interface {
 	Run(ctx context.Context, key any, call ShellCall, tools *engine.Context) (engine.Result, error)
 	// Close kills the jobs under key and forgets it.
 	Close(key any)
+	// Status is what runs under the keys owns names an agent for, with the last tail lines of each one's output.
+	Status(owns func(key any) (agent string, ok bool), tail int) ShellStatus
+}
+
+// ShellStatus is what nibash runs for one client: the commands still in their call and the jobs, oldest first.
+type ShellStatus struct {
+	Commands []RunningCommand `json:"commands"`
+	Jobs     []ShellJob       `json:"jobs"`
+}
+
+// RunningCommand is a nibash call still running; times are Unix milliseconds.
+type RunningCommand struct {
+	Agent       string   `json:"agent"`
+	Command     string   `json:"command"`
+	Description string   `json:"description,omitempty"`
+	Started     int64    `json:"started"`
+	Tail        []string `json:"tail,omitempty"`
+}
+
+// ShellJob is a job, running or ended; Exit and Ended are set once it ended.
+type ShellJob struct {
+	ID      int      `json:"id"`
+	Agent   string   `json:"agent"`
+	Command string   `json:"command"`
+	Started int64    `json:"started"`
+	Ended   int64    `json:"ended,omitempty"`
+	Running bool     `json:"running"`
+	Exit    *int     `json:"exit,omitempty"`
+	Log     string   `json:"log"`
+	Tail    []string `json:"tail,omitempty"`
 }
 
 // ShellCall is one nibash call's arguments.
@@ -202,6 +232,7 @@ func New(options Options) *Server {
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
 		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
+		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
 	}
 	for _, p := range options.Providers {
 		for _, tool := range p.Tools {
@@ -618,7 +649,7 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 		for _, image := range result.Images {
 			content = append(content, &mcp.ImageContent{Data: image.Data, MIMEType: image.MimeType})
 		}
-		return &mcp.CallToolResult{Content: content}, nil
+		return &mcp.CallToolResult{Content: content, StructuredContent: result.Structured}, nil
 	}
 }
 
@@ -1027,6 +1058,69 @@ func (s *Server) write(ctx *engine.Context, args arguments, notes *[]string, _ *
 		return engine.Result{}, errors.New("tag is 4 hex digits, like 3C4D")
 	}
 	return s.engine.Write(ctx, path, content, tagValue)
+}
+
+// nibashStatus lists what nibash runs for the calling client, every agent of it included: in text, and as a ShellStatus for a client's own
+// display (Claude Code's nib mod polls it).
+func (s *Server) nibashStatus(_ *engine.Context, args arguments, _ *[]string, c *call) (engine.Result, error) {
+	tail, err := args.number("tail", 0)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	lines := 0
+	if tail != nil {
+		lines = *tail
+	}
+	status := s.options.Shell.Status(func(key any) (string, bool) {
+		k, ok := key.(shellKey)
+		if !ok || k.session != c.key {
+			return "", false
+		}
+		if k.agent == "" {
+			return "main", true
+		}
+		return k.agent, true
+	}, lines)
+	return engine.Result{Text: statusText(status, time.Now()), Structured: status}, nil
+}
+
+// statusText is a status as the model reads it: one row per command and job, its output lines after it behind "| ", which no anchor starts with.
+func statusText(status ShellStatus, now time.Time) string {
+	if len(status.Commands) == 0 && len(status.Jobs) == 0 {
+		return "Nothing running, and no job ended in the last 10 minutes."
+	}
+	var lines []string
+	tail := func(rows []string) {
+		for _, row := range rows {
+			lines = append(lines, "  | "+row)
+		}
+	}
+	for _, command := range status.Commands {
+		row := fmt.Sprintf("[%s] running %s: %s", command.Agent, elapsed(now.Sub(time.UnixMilli(command.Started))), command.Command)
+		if command.Description != "" {
+			row += " (" + command.Description + ")"
+		}
+		lines = append(lines, row)
+		tail(command.Tail)
+	}
+	for _, job := range status.Jobs {
+		state := "running " + elapsed(now.Sub(time.UnixMilli(job.Started)))
+		if !job.Running {
+			state = fmt.Sprintf("exit %d after %s", *job.Exit, elapsed(time.UnixMilli(job.Ended).Sub(time.UnixMilli(job.Started))))
+		}
+		lines = append(lines, fmt.Sprintf("job %%%d [%s] %s: %s; output: %s", job.ID, job.Agent, state, job.Command, job.Log))
+		tail(job.Tail)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// elapsed is a duration as m:ss, or h:mm:ss from an hour on.
+func elapsed(d time.Duration) string {
+	seconds := int(max(d, 0) / time.Second)
+	if seconds >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
+	}
+	return fmt.Sprintf("%d:%02d", seconds/60, seconds%60)
 }
 
 func (s *Server) nibash(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {

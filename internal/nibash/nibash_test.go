@@ -169,6 +169,43 @@ func TestRecurringBlockMarkersAreExplainedOnce(t *testing.T) {
 	}
 }
 
+func TestStatusListsCallsInFlightAndJobsWithTheirOutput(t *testing.T) {
+	f := newFixture(t, nil)
+	owns := func(key any) (string, bool) { return "main", key == "session" }
+	if status := f.shell.Status(owns, 5); len(status.Commands) != 0 || len(status.Jobs) != 0 {
+		t.Fatalf("idle: %+v", status)
+	}
+	f.call(server.ShellCall{Command: "echo one; echo two; sleep 30", Background: true})
+	done := make(chan string)
+	go func() {
+		done <- f.call(server.ShellCall{Command: "echo started; sleep 1", Description: "wait a second"})
+	}()
+	var status server.ShellStatus
+	for range 100 {
+		status = f.shell.Status(owns, 5)
+		if len(status.Commands) == 1 && len(status.Commands[0].Tail) == 1 && len(status.Jobs) == 1 && len(status.Jobs[0].Tail) == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	command, job := status.Commands[0], status.Jobs[0]
+	if command.Agent != "main" || command.Command != "echo started; sleep 1" || command.Description != "wait a second" || command.Tail[0] != "started" {
+		t.Fatalf("command: %+v", command)
+	}
+	if job.ID != 1 || !job.Running || job.Exit != nil || strings.Join(job.Tail, ",") != "one,two" || job.Log == "" {
+		t.Fatalf("job: %+v", job)
+	}
+	if other := f.shell.Status(func(any) (string, bool) { return "", false }, 0); len(other.Commands)+len(other.Jobs) != 0 {
+		t.Fatalf("another client's status: %+v", other)
+	}
+	<-done
+	f.run("kill %1; wait %1")
+	status = f.shell.Status(owns, 0)
+	if len(status.Commands) != 0 || len(status.Jobs) != 1 || status.Jobs[0].Running || status.Jobs[0].Exit == nil || status.Jobs[0].Ended == 0 || status.Jobs[0].Tail != nil {
+		t.Fatalf("after: %+v", status)
+	}
+}
+
 func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	// Into a real program, into a file, inside $(...), with an option nibash lacks, or by path: plain bytes, as bash gives.

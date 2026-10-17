@@ -67,10 +67,20 @@ func (s *Shell) Description() string {
 	return fmt.Sprintf(description, kind.Cut())
 }
 
-// session is one agent's jobs, which outlive the calls that start them; nothing else of a shell carries over from one call to the next.
+// session is one agent's jobs, which outlive the calls that start them, and the calls running now; nothing else of a shell carries over from
+// one call to the next.
 type session struct {
 	jobs  *jobTable
 	shell *Shell
+	mu    sync.Mutex
+	// active are the calls still running in their request, for Status; a call that goes on as a job leaves them.
+	active map[*call]running
+}
+
+// running is what Status tells of a call in flight.
+type running struct {
+	command, description string
+	started              time.Time
 }
 
 func (s *Shell) session(key any) *session {
@@ -79,9 +89,25 @@ func (s *Shell) session(key any) *session {
 	if found := s.sessions[key]; found != nil {
 		return found
 	}
-	sess := &session{jobs: newJobTable(), shell: s}
+	sess := &session{jobs: newJobTable(), shell: s, active: map[*call]running{}}
 	s.sessions[key] = sess
 	return sess
+}
+
+// track lists c as running until untrack.
+func (sess *session) track(c *call, request server.ShellCall) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.active[c] = running{request.Command, request.Description, time.Now()}
+}
+
+// untrack ends what track began, and says what it was.
+func (sess *session) untrack(c *call) (running, bool) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	was, ok := sess.active[c]
+	delete(sess.active, c)
+	return was, ok
 }
 
 // Close kills a session's jobs and forgets it.
@@ -222,6 +248,8 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
 	callTools := *tools
 	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}}
+	sess.track(c, request)
+	defer func() { sess.untrack(c) }()
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return engine.Result{}, err
@@ -277,7 +305,12 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 // detach turns a call still running at its timeout into a job: the call returns the output so far, and the job's log gets all of it, that
 // output included, while the run goes on.
 func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, timeout time.Duration, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string) (engine.Result, error) {
-	j, out, err := c.session.jobs.open(s.logs, request.Command, cancel)
+	// The job carries on the call's command, so it keeps the call's start.
+	started := time.Now()
+	if was, ok := c.session.untrack(c); ok {
+		started = was.started
+	}
+	j, out, err := c.session.jobs.open(s.logs, request.Command, cancel, started)
 	if err != nil {
 		// Without a log the run cannot go on unseen, so it ends as a call would on cancellation.
 		cancel()

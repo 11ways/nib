@@ -477,6 +477,19 @@ type fakeShell struct {
 
 func (f *fakeShell) Description() string { return "fake" }
 
+// Status lists one command per key a call ran under, so a test sees which keys a client owns.
+func (f *fakeShell) Status(owns func(key any) (string, bool), _ int) ShellStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	status := ShellStatus{Commands: []RunningCommand{}, Jobs: []ShellJob{}}
+	for _, key := range f.ran {
+		if agent, ok := owns(key); ok {
+			status.Commands = append(status.Commands, RunningCommand{Agent: agent, Command: "fake", Started: time.Now().UnixMilli()})
+		}
+	}
+	return status
+}
+
 func (f *fakeShell) Run(_ context.Context, key any, _ ShellCall, _ *engine.Context) (engine.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -516,6 +529,19 @@ func TestEachAgentHasJobsEndedWithTheConnection(t *testing.T) {
 	}
 	if !slices.Equal(agents, []string{"", "agent:a1", "", "agent:a2", "agent:a1"}) || shell.ran[0] != shell.ran[2] || shell.ran[1] == shell.ran[3] {
 		t.Fatalf("each agent must have its own shell, got %v", shell.ran)
+	}
+	// nibash_status lists every agent of this client, the main agent by name, in text and as structured content.
+	status := c.call(t, r.as("a1", &mcp.CallToolParams{Name: "nibash_status"}))
+	if got := text(status); !strings.HasPrefix(got, "[main] running 0:00: fake\n[agent:a1] running 0:00: fake\n") {
+		t.Fatalf("status text: %q", got)
+	}
+	if listed, _ := status.StructuredContent.(map[string]any)["commands"].([]any); len(listed) != 5 {
+		t.Fatalf("structured status: %#v", status.StructuredContent)
+	}
+	// Another connection, with the same shell behind it, sees none of them.
+	other := connect(t, Options{Directory: directory, Shell: shell, Agent: r.take}, []string{directory}, nil, false)
+	if got := text(other.call(t, &mcp.CallToolParams{Name: "nibash_status"})); got != "Nothing running, and no job ended in the last 10 minutes." {
+		t.Fatalf("another client's status: %q", got)
 	}
 	// However many subagents come and go, none has its jobs ended before the connection ends.
 	for i := range 20 {

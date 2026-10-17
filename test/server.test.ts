@@ -71,16 +71,16 @@ describe("MCP server", () => {
     expect(size).toBeLessThanOrEqual(8200)
   })
 
-  test("with nibash, six tools: the shell's description and the whole set stay within their budgets", async () => {
+  test("with nibash, seven tools: the shell's description and the whole set stay within their budgets", async () => {
     const { client } = await connect(await workspace(), { env: { NIB_SHELL: "1" } })
     const { tools } = await client.listTools()
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "nibash", "read", "write"])
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "nibash", "nibash_status", "read", "write"])
     const nibash = tools.find((tool) => tool.name === "nibash")!
     expect(nibash.description!.length).toBeLessThanOrEqual(2048)
     expect(nibash.description).toStartWith("Run a command in nibash, nib's shell")
     expect(client.getInstructions()).toContain("so do cat, head, tail, grep, rg, sed -n and wc in nibash")
     const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
-    // The shell adds about 1.4K characters to the five file tools; the cap leaves room to grow, but every character costs every session.
+    // The shell adds about 1.8K characters to the five file tools, its status tool included; the cap leaves room to grow, but every character costs every session.
     expect(size).toBeLessThanOrEqual(10000)
   })
 

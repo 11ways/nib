@@ -78,10 +78,11 @@ type Image struct {
 	MimeType string
 }
 
-// Result is a tool's output.
+// Result is a tool's output; Structured, when set, is a machine-readable twin of Text for the MCP result's structuredContent.
 type Result struct {
-	Text   string
-	Images []Image
+	Text       string
+	Images     []Image
+	Structured any
 }
 
 // NotFound is a path that names nothing; read, grep and find note it and still serve their other paths.
