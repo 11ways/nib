@@ -108,7 +108,7 @@ func TestAnOutputWithinTheBudgetGetsASummaryPastItsOwnLimit(t *testing.T) {
 	lines := func(n int) *sink {
 		var b strings.Builder
 		for i := 1; i <= n; i++ {
-			fmt.Fprintf(&b, "line %d %s\n", i, strings.Repeat("y", 60))
+			fmt.Fprintf(&b, "line %d %c%c %s\n", i, 'a'+i%26, 'a'+i/26%26, strings.Repeat("y", 60))
 		}
 		s := &sink{}
 		s.Write([]byte(b.String()))
@@ -120,19 +120,19 @@ func TestAnOutputWithinTheBudgetGetsASummaryPastItsOwnLimit(t *testing.T) {
 	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
 	// 200 lines of about 70 bytes are past summaryLines and summaryBytes and far within the cut's budget.
 	out := renderSink(t, lines(200), decision{decider: choose, summarizer: summary, exit: 1})
-	if !strings.Contains(out, "<summary>Line 90 fails.</summary>") || !strings.Contains(out, "line 90 y") || strings.Contains(out, "line 150 y") {
+	if !strings.Contains(out, "<summary>Line 90 fails.</summary>") || !strings.Contains(out, "line 90 ") || strings.Contains(out, "line 150 ") {
 		t.Fatalf("out:\n%s", out)
 	}
-	// Under both limits the output stays whole and nothing is asked.
+	// Under both limits, and varied enough that dedupe barely shrinks it, the output stays whole and nothing is asked.
 	summary.asked = nil
 	out = renderSink(t, lines(100), decision{decider: choose, summarizer: summary, exit: 1})
-	if len(summary.asked) != 0 || !strings.Contains(out, "line 100 y") || strings.Contains(out, "nibash:") {
+	if len(summary.asked) != 0 || !strings.Contains(out, "line 100 ") || strings.Contains(out, "nibash:") {
 		t.Fatalf("asked %d times:\n%s", len(summary.asked), out)
 	}
 	// A failed summary of output within the budget leaves it whole, with no note.
 	summary.summarize = func(decider.SummaryInput) decider.Summary { return decider.Summary{Failure: "m: down"} }
 	out = renderSink(t, lines(200), decision{decider: choose, summarizer: summary, exit: 1})
-	if len(choose.asked) != 0 || !strings.Contains(out, "line 150 y") || strings.Contains(out, "no summary") {
+	if len(choose.asked) != 0 || !strings.Contains(out, "line 150 ") || strings.Contains(out, "no summary") {
 		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
 	}
 }

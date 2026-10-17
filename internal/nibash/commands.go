@@ -72,6 +72,10 @@ func (inv *invocation) path(operand string) string {
 func (inv *invocation) open(operand string, quiet bool) *engine.Source {
 	source, err := inv.call.engine.OpenSource(inv.call.tools, inv.path(operand))
 	if err == nil {
+		// A log shows as program output, so its rows reach the deciders and a summary; read still shows it as anchored rows.
+		if source.View != nil && looksLikeLog(source.Canonical, source.View.Lines) {
+			source.View = nil
+		}
 		return source
 	}
 	if !quiet {

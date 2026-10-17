@@ -415,7 +415,10 @@ func spans(ranges [][2]int) string {
 
 // closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is.
 func closing(shown int, log saved, clauses []string) string {
-	text := fmt.Sprintf("[nibash: %s rows shown of %s log lines; %s; ", thousands(shown), thousands(log.lines), strings.Join(clauses, "; "))
+	text := fmt.Sprintf("[nibash: %s rows shown of %s log lines; ", thousands(shown), thousands(log.lines))
+	for _, clause := range clauses {
+		text += clause + "; "
+	}
 	if log.path == "" {
 		return text + "the whole output could not be saved]"
 	}

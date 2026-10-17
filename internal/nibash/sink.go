@@ -43,6 +43,11 @@ const (
 	// lost an end-to-end run's results to it, at 12 KB none but a list whose every line counted.
 	summaryLines = 150
 	summaryBytes = 12 * 1024
+	// Output that shrinks under dedupe more than summaryShrink times gets a summary sooner, the limits divided by how much more it shrinks,
+	// though never under summaryFloorLines lines and summaryFloorBytes; every recorded output under the limits shrinks 1.06 times or less.
+	summaryShrink     = 1.5
+	summaryFloorLines = 50
+	summaryFloorBytes = 3 * 1024
 	// collapseAfter is how long plain output gets before repeats in it collapse.
 	collapseAfter = 20
 )
@@ -230,7 +235,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 // fit brings rows within the budget and saves the log when it cuts them or a row was cut at rowLimit; footer explains cut rows.
 func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d decision) ([]row, []string) {
 	over := len(rows) > budgetLines || size(rows) > budgetBytes
-	summarize := d.summarizer != nil && (len(rows) > summaryLines || size(rows) > summaryBytes)
+	summarize := d.summarizer != nil && summaryDue(rows, raw)
 	if !over && !summarize && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
@@ -245,6 +250,25 @@ func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d deci
 		return rows, []string{"[cut rows: N is the row's line in the whole output, which could not be saved]"}
 	}
 	return rows, []string{fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)}
+}
+
+// summaryDue says whether output gets a summary: past summaryLines or summaryBytes, or past lower limits the more it shrinks under dedupe.
+func summaryDue(rows []row, raw string) bool {
+	lines, bytes := len(rows), size(rows)
+	if lines > summaryLines || bytes > summaryBytes {
+		return true
+	}
+	if lines <= summaryFloorLines && bytes <= summaryFloorBytes || slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) {
+		return false
+	}
+	log := plainLines([]byte(raw))
+	entries, _ := dedupe(log)
+	ratio := float64(len(log)) / float64(max(1, len(entries)))
+	if ratio <= summaryShrink {
+		return false
+	}
+	scale := summaryShrink / ratio
+	return float64(lines) > float64(summaryLines)*scale || float64(bytes) > float64(summaryBytes)*scale
 }
 
 // collect lays out what the sink holds as rows, each with the log lines it stands for, and the log's text; echoed is whether a recurring block
