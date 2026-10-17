@@ -74,7 +74,7 @@ func (s *Shell) Description() string {
 	}
 	cut := kind.Cut()
 	if s.summarizer != nil {
-		cut += ", or to a <summary> of it and the log lines that summary points at"
+		cut += fmt.Sprintf(", or past %d lines or %d KB to a <summary> of it and the log lines that summary points at", summaryLines, summaryBytes/1024)
 	}
 	return fmt.Sprintf(description, cut)
 }

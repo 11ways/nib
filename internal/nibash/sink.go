@@ -39,6 +39,10 @@ const (
 	summaryContext = 2
 	summaryRows    = 40
 	rowLimit       = engine.LineLimit
+	// With a summarizer, plain output past summaryLines lines or summaryBytes gets a summary even within the budget: at 8 KB the captures
+	// lost an end-to-end run's results to it, at 12 KB none but a list whose every line counted.
+	summaryLines = 150
+	summaryBytes = 12 * 1024
 	// collapseAfter is how long plain output gets before repeats in it collapse.
 	collapseAfter = 20
 )
@@ -225,11 +229,12 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 // fit brings rows within the budget and saves the log when it cuts them or a row was cut at rowLimit; footer explains cut rows.
 func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d decision) ([]row, []string) {
 	over := len(rows) > budgetLines || size(rows) > budgetBytes
-	if !over && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
+	summarize := d.summarizer != nil && (len(rows) > summaryLines || size(rows) > summaryBytes)
+	if !over && !summarize && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
 	log := logs.save(raw)
-	if over {
+	if over || summarize {
 		rows = shape(ctx, rows, raw, log, d)
 	}
 	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {

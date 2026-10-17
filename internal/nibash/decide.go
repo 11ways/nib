@@ -19,14 +19,14 @@ func purpose(description string) string {
 	return string(runes[:min(len(runes), purposeChars)])
 }
 
-// shape cuts over-budget rows: the configured decider chooses the middle of plain output, and the fixed cut serves the rest, file rows
-// included, since what nib's own commands show is file content the model asked for and counts as seen for edits. With a summarizer, a
-// checked summary and the lines it points at take the place of the decider's cut; raw is the log's text. An output that fits excerptLines
-// goes to the summarizer whole, with no decider asked unless the summary fails; a longer one goes as the excerpt of the decider's picks.
+// shape cuts over-budget rows, or with a summarizer condenses plain output past summaryLines or summaryBytes: the configured decider
+// chooses the middle of plain output, and the fixed cut serves the rest, file rows included, since what nib's own commands show is file
+// content the model asked for and counts as seen for edits. With a summarizer, a checked summary and the lines it points at take the place of
+// the decider's cut; raw is the log's text. An output that fits excerptLines goes to the summarizer whole, with no decider asked unless the
+// summary fails; a longer one goes as the excerpt of the decider's picks. Without a summary, output within the budget stays whole.
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
-	if len(rows) <= headRows+tailRows || d.decider == nil || slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) {
-		return fixedCut(rows, log, "")
-	}
+	over := len(rows) > budgetLines || size(rows) > budgetBytes
+	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })
 	decide := func() decider.Choice {
 		middle := rows[decidedHead : len(rows)-decidedTail]
 		texts := make([]string, len(middle))
@@ -35,37 +35,52 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		}
 		return d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
 	}
+	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
+	cut := func(choice *decider.Choice, notes ...string) []row {
+		if !over {
+			return rows
+		}
+		if len(rows) <= headRows+tailRows || d.decider == nil || !plain {
+			return fixedCut(rows, log, "")
+		}
+		if choice == nil {
+			c := decide()
+			choice = &c
+		}
+		return assemble(rows, *choice, log, d, notes...)
+	}
 	// A summary is not asked for a run that succeeded with no purpose to serve, nor where the decider judged that every line counts.
-	if d.summarizer == nil || d.purpose == "" && d.exit == 0 && !d.timedOut {
-		return assemble(rows, decide(), log, d)
+	if d.summarizer == nil || d.decider == nil || !plain || d.purpose == "" && d.exit == 0 && !d.timedOut {
+		return cut(nil)
 	}
 	lines := plainLines([]byte(raw))
-	ask := func(shown []int) bool {
+	ask := func(shown []int) (decider.Summary, bool) {
 		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines, Excerpt: shown}
 		s := d.summarizer.Summarize(ctx, in)
-		if s.Failure == "" {
-			rows = summarized(rows, s, log)
-		}
-		return s.Failure == ""
+		return s, s.Failure == ""
 	}
 	if len(lines) <= excerptLines {
 		all := make([]int, len(lines))
 		for i := range all {
 			all[i] = i + 1
 		}
-		if ask(all) {
-			return rows
+		if s, ok := ask(all); ok {
+			return summarized(rows, s, log)
 		}
-		return assemble(rows, decide(), log, d, "no summary")
+		return cut(nil, "no summary")
 	}
-	choice := decide()
+	// Collapsed repeats can leave a long log too few rows for a decider; its excerpt is then the start and end alone.
+	var choice decider.Choice
+	if len(rows) > headRows+tailRows {
+		choice = decide()
+	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
-		return assemble(rows, choice, log, d)
+		return cut(&choice)
 	}
-	if ask(excerpt(rows, choice, len(lines))) {
-		return rows
+	if s, ok := ask(excerpt(rows, choice, len(lines))); ok {
+		return summarized(rows, s, log)
 	}
-	return assemble(rows, choice, log, d, "no summary")
+	return cut(&choice, "no summary")
 }
 
 // excerpt is the log lines a summarizer reads: the start and end a decider keeps, and the passages it picked, best first and widened by

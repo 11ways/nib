@@ -103,6 +103,39 @@ func TestAnOutputThatFitsTheExcerptGoesWholeWithNoDecider(t *testing.T) {
 	}
 }
 
+func TestAnOutputWithinTheBudgetGetsASummaryPastItsOwnLimit(t *testing.T) {
+	lines := func(n int) *sink {
+		var b strings.Builder
+		for i := 1; i <= n; i++ {
+			fmt.Fprintf(&b, "line %d %s\n", i, strings.Repeat("y", 60))
+		}
+		s := &sink{}
+		s.Write([]byte(b.String()))
+		return s
+	}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Line 90 fails.", Ranges: [][2]int{{90, 90}}}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	// 200 lines of about 70 bytes are past summaryLines and summaryBytes and far within the cut's budget.
+	out := renderSink(t, lines(200), decision{decider: choose, summarizer: summary, exit: 1})
+	if !strings.Contains(out, "<summary>Line 90 fails.</summary>") || !strings.Contains(out, "line 90 y") || strings.Contains(out, "line 150 y") {
+		t.Fatalf("out:\n%s", out)
+	}
+	// Under both limits the output stays whole and nothing is asked.
+	summary.asked = nil
+	out = renderSink(t, lines(100), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(summary.asked) != 0 || !strings.Contains(out, "line 100 y") || strings.Contains(out, "nibash:") {
+		t.Fatalf("asked %d times:\n%s", len(summary.asked), out)
+	}
+	// A failed summary of output within the budget leaves it whole, with no note.
+	summary.summarize = func(decider.SummaryInput) decider.Summary { return decider.Summary{Failure: "m: down"} }
+	out = renderSink(t, lines(200), decision{decider: choose, summarizer: summary, exit: 1})
+	if len(choose.asked) != 0 || !strings.Contains(out, "line 150 y") || strings.Contains(out, "no summary") {
+		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
+	}
+}
+
 func TestWithoutASummaryTheDecidersCutStandsAndSaysWhy(t *testing.T) {
 	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
 		return decider.Summary{Failure: "m: OpenRouter 500"}

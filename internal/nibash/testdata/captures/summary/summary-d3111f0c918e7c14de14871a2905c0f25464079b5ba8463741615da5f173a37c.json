@@ -1,1 +1,1 @@
-"{\"summary\": \"The package list shows go installed at version 2:1.27.1-1 (line 122) and ripgrep at 15.2.0-1 (line 547). The output is the full pacman -Q listing of installed packages.\", \"ranges\": [[122, 122], [547, 547]]}"
+"{\"summary\": \"The package list shows go installed at version 2:1.27.1-1 (line 122) and ripgrep at 15.2.0-1 (line 547). The output is the full pacman -Q listing of installed packages with versions.\", \"ranges\": [[122, 122], [547, 547]]}"

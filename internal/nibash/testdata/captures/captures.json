@@ -20,7 +20,91 @@
     "needs": [
       "An argument for 'seed' was not provided",
       "export function fileTag\\(text: string, seed: number\\)"
-    ]
+    ],
+    "loses": {
+      "summary": [
+        24,
+        25,
+        33,
+        34,
+        42,
+        43,
+        51,
+        52,
+        60,
+        61,
+        69,
+        70,
+        78,
+        79,
+        87,
+        88,
+        96,
+        97,
+        105,
+        106,
+        114,
+        115,
+        123,
+        124,
+        132,
+        133,
+        141,
+        142,
+        150,
+        151,
+        159,
+        160,
+        168,
+        169,
+        195,
+        196,
+        204,
+        205,
+        213,
+        214,
+        222,
+        223,
+        231,
+        232,
+        240,
+        241,
+        249,
+        250,
+        258,
+        259,
+        267,
+        268,
+        276,
+        277,
+        285,
+        286,
+        294,
+        295,
+        303,
+        304,
+        312,
+        313,
+        321,
+        322,
+        330,
+        331,
+        339,
+        340,
+        348,
+        349,
+        357,
+        358,
+        366,
+        367,
+        375,
+        376,
+        384,
+        385,
+        393,
+        394
+      ]
+    }
   },
   {
     "name": "failing-test",
@@ -140,7 +224,12 @@
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
-    ]
+    ],
+    "loses": {
+      "summary": [
+        19
+      ]
+    }
   },
   {
     "name": "pytest-two-fail",
@@ -320,6 +409,76 @@
     "needs": [
       "^\\s*docker\\.service ",
       "^\\s*sshd\\.service "
+    ]
+  },
+  {
+    "name": "session-build",
+    "file": "session-build.out.gz",
+    "about": "an earlier nib session: the build fails, and bun test still runs and lists 201 failures; under the cut budget",
+    "command": "gofmt -l internal; go build ./... && go test ./internal/engine 2>&1 | tail -3; bun test 2>&1 | grep -E \"^\\(fail\\)|pass$|fail$\"",
+    "exit": 0,
+    "purpose": "Build and run tests",
+    "needs": [
+      "^internal/engine/edit\\.go:888:7: no new variables"
+    ]
+  },
+  {
+    "name": "session-e2e",
+    "file": "session-e2e.out.gz",
+    "about": "an earlier nib session: nib hosting zemble end to end, 31 validation errors of handshake noise first; under the cut budget",
+    "command": "go build -o /tmp/nib-e2e/nib ./cmd/nib && cd /tmp/nib-e2e && timeout 300 bun e2e.ts /tmp/nib-e2e/nib .../zemble ~/projects/nib '{\"name\":\"zemble_search\",...}' ...",
+    "exit": 0,
+    "purpose": "End-to-end run of nib hosting zemble",
+    "needs": [
+      "^TOOLS: ",
+      "^===== zemble_\\w+ .* isError="
+    ]
+  },
+  {
+    "name": "session-go-test-break",
+    "file": "session-go-test-break.out.gz",
+    "about": "an earlier nib session: go test ./... with six failing tests in two packages",
+    "command": "gofmt -l . ; go build ./... && go test ./... 2>&1 | tail -40",
+    "exit": 0,
+    "purpose": "Build and run Go tests to see breakage",
+    "needs": [
+      "^--- FAIL: "
+    ]
+  },
+  {
+    "name": "session-bun-grep-fails",
+    "file": "session-bun-grep-fails.out.gz",
+    "about": "an earlier nib session: three failing bun tests with their expected and received values",
+    "command": "bun test test/engine.test.ts -t \"anchored match and context rows|the default gives none|definitions that did not ask\" 2>&1 | grep -B3 -A14 \"error:\" | head -90",
+    "exit": 0,
+    "purpose": "Show the three grep failures",
+    "needs": [
+      "^\\(fail\\) ",
+      "^error: "
+    ]
+  },
+  {
+    "name": "session-zemble-help",
+    "file": "session-zemble-help.out.gz",
+    "about": "an earlier nib session: a repository's layout and two --help texts to read; every line is the point",
+    "command": "cd ~/projects/external/zemble && ls && ls src/zemble && zemble --help 2>&1 | head -40; zemble search --help 2>&1 | head -40",
+    "exit": 0,
+    "purpose": "Survey zemble's layout and CLI options",
+    "count": true,
+    "needs": [
+      "\\S"
+    ]
+  },
+  {
+    "name": "session-hook-usages",
+    "file": "session-hook-usages.out.gz",
+    "about": "an earlier nib session: a recursive grep through the system program, every hit to read",
+    "command": "/usr/bin/grep -rn 'addHook\\|isNibHook\\|PreToolUse\\|hook\\.Matchers' --include=*.go --include=*.ts . | /usr/bin/grep -v '^./bench/results' | cut -c1-220",
+    "exit": 0,
+    "purpose": "Find hook registration usages and tests",
+    "count": true,
+    "needs": [
+      "\\S"
     ]
   }
 ]
