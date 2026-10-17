@@ -49,9 +49,14 @@ func nonNil(lines []int) []int {
 	return lines
 }
 
-// unseenError mirrors oh-my-pi's unseen-line guard: reveal what the model would have touched and let a straight retry pass.
+// unseenError mirrors oh-my-pi's unseen-line guard: reveal what the model would have touched and let a straight retry pass. An agent gets the
+// explanations once; later refusals keep only what differs.
 func unseenError(store *snapshots.Store, session string, t *target, current snapshots.View, unseen []int, known map[int]bool) *Refusal {
-	header := fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full (partial read, truncated line, or rows elided from an edit response).", ranges(unseen), t.display, t.display, current.Tag)
+	first := store.Teach(session, "unseen")
+	header := fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full.", ranges(unseen), t.display, t.display, current.Tag)
+	if first {
+		header = fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full (partial read, truncated line, or rows elided from an edit response).", ranges(unseen), t.display, t.display, current.Tag)
+	}
 	if store.Forgotten(session, t.canonical) {
 		header = fmt.Sprintf("This edit anchors to lines %s of %s that this agent was not shown since nib dropped its earlier views of the file: nib keeps the views of a limited number of files across all agents, and dropped this one's to make room, so lines read before then no longer count.", ranges(unseen), t.display)
 	}
@@ -66,20 +71,21 @@ func unseenError(store *snapshots.Store, session string, t *target, current snap
 		}
 	}
 	if long {
-		first := unseen[:min(len(unseen), revealLines)]
-		f := contextRows(current.Lines, first, 0, revealColumns)
-		return &Refusal{message: fmt.Sprintf("%s Preview of the first %d unseen line(s):\n%s\nRead the remaining lines in full before re-issuing the edit; change a cut or ansi line in place with SUB N: OLD.", header, len(first), strings.Join(f.rows, "\n"))}
+		shown := unseen[:min(len(unseen), revealLines)]
+		f := contextRows(current.Lines, shown, 0, revealColumns)
+		return &Refusal{message: fmt.Sprintf("%s Preview of the first %d unseen line(s):\n%s\nRead the remaining lines in full before re-issuing the edit; change a cut or ansi line in place with SUB N: OLD.", header, len(shown), strings.Join(f.rows, "\n"))}
 	}
 	f := contextRows(current.Lines, unseen, revealContext, revealColumns)
 	store.Record(session, t.canonical, current, nonNil(f.shown), nil)
 	written := ""
-	for _, line := range unseen {
-		if known[line] {
-			written = " Lines you wrote, or saw before an edit moved them, can skip this step: a ~TEXT row with the start of the line, right under the PUT or CUT line, confirms it."
-			break
-		}
+	if slices.ContainsFunc(unseen, func(line int) bool { return known[line] }) && store.Teach(session, "unseen-known") {
+		written = " Lines you wrote, or saw before an edit moved them, can skip this step: a ~TEXT row with the start of the line, right under the PUT or CUT line, confirms it."
 	}
-	return &Refusal{message: fmt.Sprintf("%s Actual file content (* marks those lines):\n%s\nIf these are the lines you meant, the same patch now succeeds; otherwise fix your line numbers.%s", header, strings.Join(f.rows, "\n"), written), Retry: true}
+	meant := "Meant these? Resend unchanged; otherwise fix the numbers."
+	if first {
+		meant = "If these are the lines you meant, the same patch now succeeds; otherwise fix your line numbers."
+	}
+	return &Refusal{message: fmt.Sprintf("%s Actual file content (* marks those lines):\n%s\n%s%s", header, strings.Join(f.rows, "\n"), meant, written), Retry: true}
 }
 
 func mismatchError(store *snapshots.Store, session string, t *target, current snapshots.View, tagValue string, recognized bool, anchors []int, appendOnly bool) error {
@@ -1963,7 +1969,12 @@ func (e *Engine) refusal(session, input string, failures []indexedFailure, p *re
 		}
 	}
 	if retry {
-		parts = append(parts, "To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY "+e.remember(session, input, p))
+		token := e.remember(session, input, p)
+		if e.Store.Teach(session, "reapply") {
+			parts = append(parts, "To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY "+token)
+		} else {
+			parts = append(parts, "REAPPLY "+token)
+		}
 	}
 	return errors.New(strings.Join(parts, "\n\n"))
 }

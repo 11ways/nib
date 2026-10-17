@@ -1179,6 +1179,21 @@ describe("refusals and reapply tokens", () => {
     expect((await readFile(f.filePath, "utf8")).split("\n").slice(1, 3).concat((await readFile(f.filePath, "utf8")).split("\n")[14]!)).toEqual(["x", "LINE 3", "z"])
   })
 
+  test("an agent is told what an unseen-line refusal means once; later ones keep only the rows and the token", async () => {
+    const f = await fixture(numbered(20))
+    const tag = /#([0-9A-F]{4})\]/.exec((await f.read(":1-2")).text)![1]
+    const first = await refusal(f.patch(`[file.txt#${tag}]\nPUT 10:\n+x`))
+    expect(first).toContain("never displayed in full (partial read, truncated line, or rows elided from an edit response).")
+    expect(first).toContain("If these are the lines you meant, the same patch now succeeds; otherwise fix your line numbers.")
+    expect(first).toContain("To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY ")
+    const later = await refusal(f.patch(`[file.txt#${tag}]\nPUT 15:\n+y`))
+    expect(later).toContain(`This edit anchors to lines 15 of file.txt that [file.txt#${tag}] never displayed in full. Actual file content (* marks those lines):`)
+    expect(later).toContain("*15:line 15\n 16:line 16\n 17:line 17\nMeant these? Resend unchanged; otherwise fix the numbers.\n\nREAPPLY ")
+    expect(later).not.toContain("To apply this patch")
+    await f.patch(`REAPPLY ${tokenOf(later)}`)
+    expect((await readFile(f.filePath, "utf8")).split("\n")[14]).toBe("y")
+  })
+
   test("every section's unseen lines come in one refusal, and its token applies the whole patch like an unchanged resend", async () => {
     const { f, input } = await setup()
     const message = await refusal(f.patch(input))
