@@ -47,6 +47,8 @@ func TestListingsGroupOnlyWhereThatIsShorter(t *testing.T) {
 		{[]string{"~core/workflow/Repo.java", "~core/workflow/Table.java", "~core/web/App.java"}, "~core/", "workflow/\n  Repo.java\n  Table.java\nweb/App.java"},
 		// Indented rows may continue into subfolders.
 		{[]string{"README.md", "src/main/java/a/A.java", "src/main/java/b/B.java"}, "", "README.md\nsrc/main/java/\n  a/A.java\n  b/B.java"},
+		// A subfolder sorting between a folder's files stays inside that folder's one row, never splitting it in two.
+		{[]string{"x.go", "dedup/cli.py", "dedup/detect.py", "dedup/ignore.py", "dedup/languages/base.py", "dedup/languages/generic.py", "dedup/languages/java.py", "dedup/mcp.py", "dedup/model.py", "dedup/units.py"}, "", "x.go\ndedup/\n  cli.py\n  detect.py\n  ignore.py\n  languages/base.py\n  languages/generic.py\n  languages/java.py\n  mcp.py\n  model.py\n  units.py"},
 	} {
 		var rows []listedRow
 		for _, path := range c.paths {

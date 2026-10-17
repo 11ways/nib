@@ -13,8 +13,8 @@ type listedRow struct{ before, path, after string }
 
 // grouped lays out a listing's rows without repeating folders: the folder every row lies in is returned as under, for the head to name once,
 // and runs of rows in one folder become a "folder/" row followed by the rest of each row's path, indented two spaces, so an indented row's
-// path is under, its folder row and the row joined. Of all such layouts it takes the shortest, keeping a row whole where grouping saves
-// nothing.
+// path is under, its folder row and the row joined. A folder row takes every row of its folder, subfolders included, so no folder is named
+// twice and its count is whole. Of all such layouts it takes the shortest, keeping a row whole where grouping saves nothing.
 func grouped(rows []listedRow) (under string, lines []string) {
 	paths := make([]string, len(rows))
 	for i, row := range rows {
@@ -45,15 +45,19 @@ func grouped(rows []listedRow) (under string, lines []string) {
 		end[i] = i + 1
 		for cut := strings.LastIndex(paths[i], "/"); cut > 0; cut = strings.LastIndex(paths[i][:cut], "/") {
 			candidate := paths[i][:cut+1]
+			if i > 0 && strings.HasPrefix(paths[i-1], candidate) {
+				continue
+			}
 			rest := 0
-			for j := i; j < n && strings.HasPrefix(paths[j], candidate); j++ {
+			j := i
+			for ; j < n && strings.HasPrefix(paths[j], candidate); j++ {
 				rest += 2 + len(paths[j]) - len(candidate) + 1
-				if j == i {
-					continue
-				}
-				if cost := len(groupHead(candidate, j+1-i)) + 1 + rest + best[j+1]; cost < best[i] {
-					best[i], folder[i], end[i] = cost, candidate, j+1
-				}
+			}
+			if j-i < 2 {
+				continue
+			}
+			if cost := len(groupHead(candidate, j-i)) + 1 + rest + best[j]; cost < best[i] {
+				best[i], folder[i], end[i] = cost, candidate, j
 			}
 		}
 	}
