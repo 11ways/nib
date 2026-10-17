@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -43,8 +44,9 @@ func (d *Defined) Automatic(file, base string) {
 	d.automatic, d.file, d.base = true, file, base
 }
 
-// Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect; call it once at the
-// end of each call. The first note is told in full, as is the first after fullAgain more calls that showed paths, the rest briefly.
+// Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect, then the notes
+// again on names its paths ran through that it got before its context was dropped; call it once at the end of each call. The first note is
+// told in full, as is the first after fullAgain more calls that showed paths, or after a drop, the rest briefly.
 func (d *Defined) Announced(agent string) []string {
 	if d == nil {
 		return nil
@@ -59,18 +61,110 @@ func (d *Defined) Announced(agent string) []string {
 		names.calls++
 		names.observed = false
 	}
+	inFull := func() bool {
+		if names.full == 0 || names.calls-names.full >= fullAgain {
+			names.full = names.calls
+			return true
+		}
+		return false
+	}
 	var notes []string
 	for _, m := range names.made {
 		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano()})
-		if names.full == 0 || names.calls-names.full >= fullAgain {
-			names.full = names.calls
+		if inFull() {
 			notes = append(notes, note(m.Name, m.prefix, m.count))
 		} else {
 			notes = append(notes, brief(m.Name, m.prefix, m.count))
 		}
 	}
-	names.made = nil
+	for _, m := range names.retell {
+		if inFull() {
+			notes = append(notes, fmt.Sprintf("[~%s = %s, a name you got before your context was compacted or cleared; ~%s/ works in every tool and in nibash, for you and the subagents you start]", m.Name, m.prefix, m.Name))
+		} else {
+			notes = append(notes, fmt.Sprintf("[~%s = %s]", m.Name, m.prefix))
+		}
+	}
+	names.made, names.retell = nil, nil
 	return notes
+}
+
+// Forget marks every name agent got before moment as no longer told, as its harness compacted or cleared its context then: a path printed
+// under one tells of it again, and the next note is told in full. Call it once per moment, as Store.Forget reports.
+func (d *Defined) Forget(agent string, moment time.Time) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		return
+	}
+	names.full = 0
+	// The latest definition of a name is the one the agent works with; one redefined since the moment is still told.
+	latest := map[string]int64{}
+	for _, entry := range names.list {
+		latest[entry.Name] = entry.at
+	}
+	at := moment.UnixNano()
+	for name, defined := range latest {
+		if defined < at {
+			if names.untold == nil {
+				names.untold = map[string]bool{}
+			}
+			names.untold[name] = true
+		}
+	}
+}
+
+// Told marks the names of lines, as Table.Lines gives them, as told to agent again: a greeting listed them.
+func (d *Defined) Told(agent string, lines []string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		return
+	}
+	for _, line := range lines {
+		name, _, _ := strings.Cut(strings.TrimPrefix(line, "~"), " = ")
+		delete(names.untold, name)
+	}
+}
+
+// mention notes that a response printed shown, a path under a name of table, so a name agent got before its context was dropped is told again.
+func (d *Defined) mention(agent string, table *Table, shown string) {
+	if d == nil {
+		return
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(shown, "~"), "/")
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil || !names.untold[name] {
+		return
+	}
+	home, ok := table.Home(name)
+	if !ok {
+		return
+	}
+	delete(names.untold, name)
+	names.observed = true
+	rest := &Table{Base: table.Base, Entries: slices.DeleteFunc(slices.Clone(table.Entries), func(e Entry) bool { return e.Name == name })}
+	names.retell = append(names.retell, made{Entry{name, home}, printed(rest, home), 0})
+}
+
+// printed is directory as a path shows it with table: under a name, relative to the table's base inside it, else absolute.
+func printed(table *Table, directory string) string {
+	if s, ok := table.Display(directory); ok {
+		return s
+	}
+	if relative, err := filepath.Rel(table.Base, directory); err == nil && relative != "." && !strings.HasPrefix(relative, "..") {
+		return relative
+	}
+	return directory
 }
 
 // observe counts the directories from directory up, below the deepest named one holding it, and names the one that saves the most among
@@ -80,15 +174,7 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 	if d == nil || !d.automatic || strings.ContainsFunc(directory, unicode.IsControl) {
 		return
 	}
-	shown := func(directory string) string {
-		if s, ok := table.Display(directory); ok {
-			return s
-		}
-		if relative, err := filepath.Rel(table.Base, directory); err == nil && relative != "." && !strings.HasPrefix(relative, "..") {
-			return relative
-		}
-		return directory
-	}
+	shown := func(directory string) string { return printed(table, directory) }
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	names := d.agents[agent]

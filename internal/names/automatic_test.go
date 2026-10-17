@@ -6,7 +6,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNamesAnAgentGotBeforeADropAreToldAgainOnceEach(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	widgets, gadgets, later := deep(t, root, "widgets"), deep(t, root, "gadgets"), deep(t, root, "later")
+	defined := NewDefined()
+	view := (&Table{Base: root}).For(defined, "main")
+	for name, directory := range map[string]string{"w": widgets, "g": gadgets} {
+		if err := view.Define(name, directory); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dropped := time.Now().Add(time.Millisecond)
+	defined.Now = func() time.Time { return dropped.Add(time.Second) }
+	if err := view.Define("l", later); err != nil {
+		t.Fatal(err)
+	}
+	defined.Forget("main", dropped)
+	view.Display(filepath.Join(widgets, "A.java"))
+	view.Display(filepath.Join(widgets, "B.java"))
+	view.Display(filepath.Join(later, "C.java"))
+	notes := defined.Announced("main")
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[~w = zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared;") {
+		t.Fatalf("a name defined before the drop is told again once, in full; one defined since is not: %v", notes)
+	}
+	view.Display(filepath.Join(gadgets, "D.java"))
+	if notes := defined.Announced("main"); len(notes) != 1 || notes[0] != "[~g = zenit/src/server/java/be/elevenways/gadgets]" {
+		t.Fatalf("the next is brief: %v", notes)
+	}
+	view.Display(filepath.Join(widgets, "E.java"))
+	if notes := defined.Announced("main"); len(notes) != 0 {
+		t.Fatalf("told again only once: %v", notes)
+	}
+}
 
 // deep makes root/zenit/src/server/java/be/elevenways/<leaf> and returns it.
 func deep(t *testing.T, root, leaf string) string {

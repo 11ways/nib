@@ -30,7 +30,8 @@ type Defined struct {
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
 // directory that automatic naming weighs, auto the names it made, and made those not yet told, which take effect once told. calls counts the
-// calls that showed the agent paths, full the call of the last note told in full, and observed that the current call showed one.
+// calls that showed the agent paths, full the call of the last note told in full, and observed that the current call showed one. untold are
+// the names the agent got before its context was last dropped, and retell those of them a path in the current call ran through.
 type defined struct {
 	list     []definition
 	own      int
@@ -40,6 +41,8 @@ type defined struct {
 	calls    int
 	full     int
 	observed bool
+	untold   map[string]bool
+	retell   []made
 }
 
 // made is a name nib made and has not told of yet: the directory as it printed, and the shown paths that ran through it.
@@ -181,10 +184,15 @@ func (v *View) Expand(input string) (string, bool) { return v.table().Expand(inp
 
 // Display is canonical under the deepest named directory holding it; ok is false when none does. With automatic naming on, the path counts
 // toward naming a directory it runs through; a name made then takes effect once Announced tells of it, so one response prints every path the
-// same way.
+// same way. A name the agent got before its context was dropped is told again once a path printed under it.
 func (v *View) Display(canonical string) (string, bool) {
-	v.defined.observe(v.agent, v.table(), filepath.Dir(canonical))
-	return v.table().Display(canonical)
+	table := v.table()
+	v.defined.observe(v.agent, table, filepath.Dir(canonical))
+	shown, ok := table.Display(canonical)
+	if ok {
+		v.defined.mention(v.agent, table, shown)
+	}
+	return shown, ok
 }
 
 // Observe counts path, an absolute path the agent used, toward naming a directory it runs through, as a path shown to it counts: from the

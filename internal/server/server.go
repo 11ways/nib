@@ -355,11 +355,14 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		known, dropped := s.dropped(request, c.agent)
 		s.seeding.Lock()
 		s.start(c.key, c.agent, from, originDepth)
-		// After the start, so a fork drops what its parent had been shown before a compaction it inherited too.
-		if !dropped.IsZero() {
-			s.engine.Store.Forget(s.engineSession(c.agent), dropped)
+		// After the start, so a fork drops what its parent had been shown before a compaction it inherited too. A subagent is greeted again,
+		// as its first call's greeting went with the rest.
+		forgot := !dropped.IsZero() && s.engine.Store.Forget(s.engineSession(c.agent), dropped)
+		if forgot {
+			s.defined.Forget(s.engineSession(c.agent), dropped)
 		}
-		if c.agent != "" && !s.greeted[c.agent] && (strings.HasPrefix(c.agent, claudeAgent) || s.children[c.agent]) {
+		greets := c.agent != "" && (strings.HasPrefix(c.agent, claudeAgent) || s.children[c.agent])
+		if greets && (!s.greeted[c.agent] || forgot) {
 			s.greeted[c.agent], c.first = true, true
 		}
 		s.seeding.Unlock()
@@ -382,7 +385,9 @@ func (s *Server) greeting(c *call) string {
 		table.Base = base
 	}
 	shell := s.options.Shell != nil
-	text += named(table.Lines(instructionLimit-len(text)-len(named([]string{""}, shell))), shell)
+	lines := table.Lines(instructionLimit - len(text) - len(named([]string{""}, shell)))
+	s.defined.Told(s.engineSession(c.agent), lines)
+	text += named(lines, shell)
 	return strings.TrimPrefix(text, "\n")
 }
 
