@@ -1,1 +1,0 @@
-"{\"summary\": \"bring_current is defined at lines 603-615 and every line of it is attributed to commit 93a3e044 (Jelle De Loecker, 2026-10-14), so that commit last changed it. The same commit also touched its caller _cmd_refresh (lines 1172-1177) and the _STILL_CHANGING constant it checks (lines 91-92).\", \"ranges\": [[603, 615], [91, 92], [1171, 1178]]}"

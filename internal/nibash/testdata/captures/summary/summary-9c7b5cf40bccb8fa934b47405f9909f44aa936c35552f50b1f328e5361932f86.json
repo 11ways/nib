@@ -1,0 +1,1 @@
+"{\"summary\": \"One test failed: tests/test_chunker.py::test_chunk_boundaries_keep_decorators, where the assertion at tests/test_chunker.py:172 expected the chunk to start at line 0 (the decorator line) but it started at line 1. All other 195 tests passed.\", \"ranges\": [[205, 210], [369, 371], [19, 19]]}"

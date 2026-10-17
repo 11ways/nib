@@ -1,1 +1,0 @@
-"{\"summary\": \"Commit 626178e55ec9eba858a1da601417b1fc2148992e (lines 235-246) is the one about printing search scores as integers 1-100 relative to the best result; it touched src/zemble/utils.py, tests/test_cli.py and tests/test_mcp.py.\", \"ranges\": [[235, 246]]}"

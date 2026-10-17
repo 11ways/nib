@@ -81,7 +81,7 @@ func TestKeywordsHitProblemsNotNamesOrZeroCounts(t *testing.T) {
 			t.Errorf("%q should not hit", row)
 		}
 	}
-	picks := keywordPicks([]string{"a", "error one", "b", "error two", "error three"})
+	picks := keywordPicks([]string{"a", "error one", "b", "error two", "error three"}, nil)
 	if len(picks) != 3 || picks[0].Start != 4 || picks[1].Start != 1 || picks[2].Start != 3 || picks[0].Score != KeywordScore {
 		t.Fatalf("picks %+v", picks)
 	}

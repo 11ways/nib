@@ -58,6 +58,8 @@ type window struct {
 	rows Range
 	text string
 	size int
+	// names are the legend entries the window's rows use.
+	names []string
 }
 
 // batch is one request's windows, and whether it carries the whole question.
@@ -74,7 +76,7 @@ type outcome struct {
 }
 
 func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
-	fallback := Choice{Picks: keywordPicks(in.Rows), Who: "keywords"}
+	fallback := Choice{Picks: keywordPicks(in.Rows, in.Legend), Who: "keywords"}
 	// Without a purpose, a successful run gives the model nothing to judge by, so its cost buys nothing measured.
 	if in.Purpose == "" && in.Exit == 0 && !in.TimedOut {
 		return fallback
@@ -188,8 +190,11 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 			}
 			rows = append(rows, row)
 		}
-		w := window{id: "w" + strconv.Itoa(len(windows)), rows: Range{start, end}, text: strings.Join(rows, "\n")}
+		w := window{id: "w" + strconv.Itoa(len(windows)), rows: Range{start, end}, text: strings.Join(rows, "\n"), names: in.Legend.Names(rows...)}
 		w.size = jsonSize(w.text) + jsonSize(question(in, w.id)) + 2*len(w.id) + 16
+		for _, name := range w.names {
+			w.size += jsonSize(in.Legend[name]) + len(name) + 4
+		}
 		windows = append(windows, w)
 	}
 	base := jsonSize(request{Model: model, State: in.state()})
@@ -291,6 +296,8 @@ type state struct {
 	ExitStatus int     `json:"exit_status"`
 	TimedOut   bool    `json:"timed_out,omitempty"`
 	Output     ordered `json:"output"`
+	// Legend defines the names the request's output uses, in the legend's order.
+	Legend ordered `json:"legend,omitempty"`
 }
 
 type noul struct {
@@ -334,6 +341,14 @@ func (o ordered) MarshalJSON() ([]byte, error) {
 
 // question asks whether a window matters: for the purpose when there is one, else for the failure or the timeout.
 func question(in Input, id string) noul {
+	q := baseQuestion(in, id)
+	if len(in.Legend) > 0 {
+		q.Instructions += " Names like @L1 or @B1 stand for the lines `legend` defines, and xN for N copies in a row."
+	}
+	return q
+}
+
+func baseQuestion(in Input, id string) noul {
 	switch {
 	case in.Purpose != "" && in.Expect != "":
 		return noul{"noul", fmt.Sprintf("Does `output.%s` contain a line the developer needs for `purpose`, above all one that shows `expectation` did not hold?", id), criteria{
@@ -369,9 +384,14 @@ func (in Input) state() state {
 
 func (o *openRouter) body(in Input, model string, b batch) request {
 	r := request{Model: model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: in.state()}
+	var texts []string
 	for _, w := range b.windows {
 		r.State.Output = append(r.State.Output, field{w.id, w.text})
 		r.Questions = append(r.Questions, field{w.id, question(in, w.id)})
+		texts = append(texts, w.text)
+	}
+	for _, name := range in.Legend.Names(texts...) {
+		r.State.Legend = append(r.State.Legend, field{name, in.Legend[name]})
 	}
 	if b.whole {
 		r.Questions = append(r.Questions, field{"whole", wholeQuestion})

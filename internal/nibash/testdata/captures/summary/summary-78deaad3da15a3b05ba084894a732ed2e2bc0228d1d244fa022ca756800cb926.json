@@ -1,1 +1,0 @@
-"{\"summary\": \"The run used --select ALL, so it reports 2286 errors across many rule families, not just undefined names. The only F821 undefined-name finding shown is src/zemble/dedup/report.py:30:9 for `undefined_helper_name`. Lines 1-2 are warnings that D203/D211 and D212/D213 are incompatible and were ignored.\", \"ranges\": [[705, 705], [1, 2], [2289, 2290]]}"

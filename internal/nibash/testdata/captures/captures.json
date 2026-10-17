@@ -25,12 +25,6 @@
     ],
     "loses": {
       "summary": [
-        24,
-        25,
-        33,
-        34,
-        42,
-        43,
         51,
         52,
         60,
@@ -59,6 +53,10 @@
         160,
         168,
         169,
+        177,
+        178,
+        186,
+        187,
         195,
         196,
         204,
@@ -146,7 +144,13 @@
     "needs": [
       "config: reloaded config/routes.json",
       "routes: /v1/payments -> upstream \"payments-v2\""
-    ]
+    ],
+    "loses": {
+      "summary": [
+        1701,
+        1702
+      ]
+    }
   },
   {
     "name": "long-run",
@@ -236,12 +240,7 @@
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
-    ],
-    "loses": {
-      "summary": [
-        19
-      ]
-    }
+    ]
   },
   {
     "name": "pytest-two-fail",
@@ -318,12 +317,7 @@
     "needs": [
       "Skip rebuilds that move nothing and share reused vector blocks",
       "^commit e6a3304945597de51dc7020fc47bec49e3973ea1"
-    ],
-    "loses": {
-      "openrouter": [
-        429
-      ]
-    }
+    ]
   },
   {
     "name": "git-log-zenit",
@@ -513,5 +507,44 @@
     "needs": [
       "\\S"
     ]
+  },
+  {
+    "name": "gradle-browser",
+    "file": "gradle-browser.out.gz",
+    "about": "zenit-dev test run of a project's browser tests: 25,098 lines, 251 Gradle Test Executor reports, stack traces repeated hundreds of times, COULD_NOT_RUN; the user name in paths is replaced",
+    "command": "zenit-dev test --project hohenheim --class RollbackActionsAgreeTest,DnsZoneImportReadOnlyTest,...",
+    "exit": 1,
+    "purpose": "Run the browser tests",
+    "expect": "all pass; if not, which test and why",
+    "needs": [
+      "ClassNotFoundException: be\\.elevenways\\.hohenheim\\.test\\.live\\.LiveNamespaces",
+      "NoSuchFileException: .*browserTestSolo\\.ndjson",
+      "^\\* What went wrong:"
+    ],
+    "loses": {
+      "summary": [
+        13437,
+        13486,
+        13541,
+        13590,
+        13646,
+        13699,
+        13801,
+        13854,
+        20966,
+        20978,
+        21008,
+        21020,
+        24228
+      ],
+      "openrouter": [
+        13437,
+        13486,
+        13541,
+        13590,
+        13646,
+        13699
+      ]
+    }
   }
 ]

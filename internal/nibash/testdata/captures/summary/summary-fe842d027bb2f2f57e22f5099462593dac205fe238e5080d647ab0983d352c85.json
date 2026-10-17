@@ -1,0 +1,1 @@
+"{\"summary\": \"The commit that adds the skip is e6a3304945597de51dc7020fc47bec49e3973ea1 (\\\"⚡ Skip rebuilds that move nothing and share reused vector blocks\\\"), whose diff imports change_set_moves_anything and adds an early return of *current* with zero counts when changed_paths is not None and the change set moves nothing.\",\"ranges\": [[429, 475], [443, 454]]}"

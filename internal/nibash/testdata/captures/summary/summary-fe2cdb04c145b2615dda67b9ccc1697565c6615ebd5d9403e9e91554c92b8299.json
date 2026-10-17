@@ -1,1 +1,0 @@
-"{\"summary\": \"docker.service is loaded, active (running), and sshd.service is loaded, active (running); docker.socket is also active. Multiple docker container scopes and netns mounts are active, and containerd.service is running.\", \"ranges\": [[85, 85], [106, 106], [198, 198], [80, 80], [61, 70]]}"

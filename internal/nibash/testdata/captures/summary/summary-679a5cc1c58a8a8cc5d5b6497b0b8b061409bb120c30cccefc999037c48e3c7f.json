@@ -1,0 +1,1 @@
+"{\"summary\": \"The build failed: package github.com/11ways/nib/internal/decider has two compile errors in internal/decider/openrouter.go at line 138 (declared and not used: unused; cannot use 3 as string in variable declaration). All other shown packages compiled and were cached successfully.\", \"ranges\": [[5131, 5136], [5100, 5110]]}"

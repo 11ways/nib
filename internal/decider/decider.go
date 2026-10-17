@@ -3,7 +3,12 @@
 package decider
 
 import (
+	"cmp"
 	"context"
+	"maps"
+	"regexp"
+	"slices"
+	"strconv"
 	"time"
 )
 
@@ -25,8 +30,53 @@ type Input struct {
 	Expect   string
 	Exit     int
 	TimedOut bool
-	// Rows are the candidate rows as the model would see them: colorless, collapsed, capped.
+	// Rows are the candidate rows as the model would see them: colorless, collapsed, capped; a row may name a Legend entry instead of its
+	// text.
 	Rows []string
+	// Legend defines the names rows use for lines and blocks that repeat.
+	Legend Legend
+}
+
+// Legend defines names (@L1 for a line, @B1 for a block) that a deduplicated output uses for what repeats in it.
+type Legend map[string]string
+
+// legendName finds the names a row uses.
+var legendName = regexp.MustCompile(`@[LB]\d+`)
+
+// Names are the names text uses that the legend defines, in the order the legend numbers them.
+func (l Legend) Names(texts ...string) []string {
+	seen := map[string]bool{}
+	for _, text := range texts {
+		for _, name := range legendName.FindAllString(text, -1) {
+			if _, ok := l[name]; ok {
+				seen[name] = true
+			}
+		}
+	}
+	names := slices.Collect(maps.Keys(seen))
+	slices.SortFunc(names, func(a, b string) int {
+		if a[1] != b[1] {
+			return cmp.Compare(b[1], a[1])
+		}
+		x, _ := strconv.Atoi(a[2:])
+		y, _ := strconv.Atoi(b[2:])
+		return cmp.Compare(x, y)
+	})
+	return names
+}
+
+// Entry is one line of a deduplicated output: a log line as it is, or log lines First to Last standing for a legend name.
+type Entry struct {
+	First, Last int
+	Text        string
+}
+
+// Label is the log lines the entry stands for, as a model reads them in front of it.
+func (e Entry) Label() string {
+	if e.Last > e.First {
+		return strconv.Itoa(e.First) + "-" + strconv.Itoa(e.Last)
+	}
+	return strconv.Itoa(e.First)
 }
 
 // Range is a half-open range of Input.Rows.

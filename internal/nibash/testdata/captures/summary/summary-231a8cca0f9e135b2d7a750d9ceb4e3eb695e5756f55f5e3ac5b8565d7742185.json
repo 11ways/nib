@@ -1,0 +1,1 @@
+"{\"summary\":\"The run selected all rules, so the output is dominated by non-F821 findings (docstrings, copyright, trailing commas, TRY003/EM101/EM102, PLC0415, etc.) and ends with \\\"Found 2286 errors.\\\" The only undefined-name finding shown is F821 at src/zemble/dedup/report.py:30:9 for `undefined_helper_name`.\",\"ranges\":[[705,705],[3,5],[2289,2290]]}"

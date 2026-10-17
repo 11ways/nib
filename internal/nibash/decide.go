@@ -3,6 +3,7 @@ package nibash
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -22,18 +23,39 @@ func purpose(description string) string {
 // shape cuts over-budget rows, or with a summarizer condenses plain output past summaryLines or summaryBytes: the configured decider
 // chooses the middle of plain output, and the fixed cut serves the rest, file rows included, since what nib's own commands show is file
 // content the model asked for and counts as seen for edits. With a summarizer, a checked summary and the lines it points at take the place of
-// the decider's cut; raw is the log's text. An output that fits excerptLines goes to the summarizer whole, with no decider asked unless the
-// summary fails; a longer one goes as the excerpt of the decider's picks. Without a summary, output within the budget stays whole.
+// the decider's cut; raw is the log's text. An output whose deduplicated entries fit excerptLines goes to the summarizer whole, with no
+// decider asked unless the summary fails; a longer one goes as the excerpt of the decider's picks. Without a summary, output within the
+// budget stays whole. A decision model and a summarizer read the output deduplicated (dedupe); the agent still gets its real rows.
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
 	over := len(rows) > budgetLines || size(rows) > budgetBytes
 	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })
+	model := d.decider != nil && d.decider.Kind() == decider.OpenRouter
+	var lines []string
+	var entries []decider.Entry
+	var legend decider.Legend
+	if plain && (model || d.summarizer != nil) {
+		lines = plainLines([]byte(raw))
+		entries, legend = dedupe(lines)
+	}
 	decide := func() decider.Choice {
 		middle := rows[decidedHead : len(rows)-decidedTail]
-		texts := make([]string, len(middle))
-		for i, r := range middle {
-			texts[i] = r.text
+		in := decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut}
+		first, last := logLines(middle)
+		if !model || first == 0 {
+			for _, r := range middle {
+				in.Rows = append(in.Rows, r.text)
+			}
+			return d.decider.Decide(ctx, in)
 		}
-		return d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
+		var mid []decider.Entry
+		for _, e := range entries {
+			if e.Last >= first && e.First <= last {
+				mid = append(mid, e)
+				in.Rows = append(in.Rows, e.Text)
+			}
+		}
+		in.Legend = legend
+		return onRows(d.decider.Decide(ctx, in), mid, middle)
 	}
 	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
 	cut := func(choice *decider.Choice, notes ...string) []row {
@@ -53,18 +75,20 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	if d.summarizer == nil || d.decider == nil || !plain || d.purpose == "" && d.exit == 0 && !d.timedOut {
 		return cut(nil)
 	}
-	lines := plainLines([]byte(raw))
-	ask := func(shown []int) (decider.Summary, bool) {
-		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines, Excerpt: shown}
+	ask := func(chosen []decider.Entry) (decider.Summary, bool) {
+		var shown []int
+		for _, e := range chosen {
+			for n := e.First; n <= e.Last; n++ {
+				shown = append(shown, n)
+			}
+		}
+		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
+			Excerpt: shown, Entries: chosen, Legend: legend}
 		s := d.summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}
-	if len(lines) <= excerptLines {
-		all := make([]int, len(lines))
-		for i := range all {
-			all[i] = i + 1
-		}
-		if s, ok := ask(all); ok {
+	if len(entries) <= excerptLines {
+		if s, ok := ask(entries); ok {
 			return summarized(rows, s, log)
 		}
 		return cut(nil, "no summary")
@@ -77,22 +101,65 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
 		return cut(&choice)
 	}
-	if s, ok := ask(excerpt(rows, choice, len(lines))); ok {
+	if s, ok := ask(excerpt(rows, choice, entries)); ok {
 		return summarized(rows, s, log)
 	}
 	return cut(&choice, "no summary")
 }
 
-// excerpt is the log lines a summarizer reads: the start and end a decider keeps, and the passages it picked, best first and widened by
-// excerptContext lines, while they fit excerptLines.
-func excerpt(rows []row, choice decider.Choice, lines int) []int {
+// onRows turns a choice made over the deduplicated entries of the middle rows into one over the rows: each range covers the rows its entries'
+// log lines fall in.
+func onRows(choice decider.Choice, entries []decider.Entry, middle []row) decider.Choice {
+	convert := func(r decider.Range) decider.Range {
+		if r.End <= r.Start || r.End > len(entries) {
+			return decider.Range{}
+		}
+		lo, hi := entries[r.Start].First, entries[r.End-1].Last
+		start, end := -1, -1
+		for i, row := range middle {
+			if row.first == 0 || row.last < lo || row.first > hi {
+				continue
+			}
+			if start < 0 {
+				start = i
+			}
+			end = i + 1
+		}
+		if start < 0 {
+			return decider.Range{}
+		}
+		return decider.Range{Start: start, End: end}
+	}
+	for i := range choice.Picks {
+		choice.Picks[i].Range = convert(choice.Picks[i].Range)
+	}
+	for i := range choice.Unjudged {
+		choice.Unjudged[i].Range = convert(choice.Unjudged[i].Range)
+	}
+	return choice
+}
+
+// excerpt is the entries a summarizer reads: those of the start and end a decider keeps, and of the passages it picked, best first and
+// widened by excerptContext lines, while they fit excerptLines entries.
+func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decider.Entry {
+	lines := 0
+	if len(entries) > 0 {
+		lines = entries[len(entries)-1].Last
+	}
+	entryOf := make([]int, lines+1)
+	for i, e := range entries {
+		for n := e.First; n <= e.Last; n++ {
+			entryOf[n] = i
+		}
+	}
 	keep := map[int]bool{}
-	for n := 1; n <= min(excerptHead, lines); n++ {
-		keep[n] = true
+	span := func(first, last int) {
+		for n := max(1, first); n <= min(lines, last); n++ {
+			keep[entryOf[n]] = true
+		}
 	}
-	for n := max(1, lines-excerptTail+1); n <= lines; n++ {
-		keep[n] = true
-	}
+	span(1, excerptHead)
+	span(lines-excerptTail+1, lines)
 	picks := slices.Clone(choice.Picks)
 	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
 	for _, p := range picks {
@@ -103,24 +170,23 @@ func excerpt(rows []row, choice decider.Choice, lines int) []int {
 		if first == 0 {
 			continue
 		}
-		var more []int
+		more := map[int]bool{}
 		for n := max(1, first-excerptContext); n <= min(lines, last+excerptContext); n++ {
-			if !keep[n] {
-				more = append(more, n)
+			if !keep[entryOf[n]] {
+				more[entryOf[n]] = true
 			}
 		}
 		if len(keep)+len(more) > excerptLines {
 			continue
 		}
-		for _, n := range more {
-			keep[n] = true
+		maps.Copy(keep, more)
+	}
+	var out []decider.Entry
+	for i, e := range entries {
+		if keep[i] {
+			out = append(out, e)
 		}
 	}
-	out := make([]int, 0, len(keep))
-	for n := range keep {
-		out = append(out, n)
-	}
-	slices.Sort(out)
 	return out
 }
 

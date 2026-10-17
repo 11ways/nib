@@ -94,6 +94,10 @@ type SummaryInput struct {
 	Log      []string
 	// Excerpt are the 1-based log lines of the excerpt, ascending: the kept start and end and the passages the decider picked.
 	Excerpt []int
+	// Entries, when set, are what the summarizer reads instead of the excerpt's lines: the same lines deduplicated, each repeated line or
+	// block named once in Legend.
+	Entries []Entry
+	Legend  Legend
 }
 
 // Summary is a summarizer's checked answer: its prose, the ranges that lie in the lines it read, and how many ranges did not.
@@ -164,7 +168,7 @@ func (s *summaries) Summarize(ctx context.Context, in SummaryInput) Summary {
 
 // with asks one entry, from the cache when it answered this before, and checks the answer against the log.
 func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (Summary, string) {
-	text := render(in.Log, in.Excerpt)
+	text := render(in)
 	prompt := summaryPrompt(in, len(in.Excerpt) < len(in.Log))
 	key := summaryKey(e, s.config.SummaryURL, prompt, text)
 	var reply string
@@ -194,17 +198,48 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 	return got, ""
 }
 
-func render(log []string, lines []int) string {
+func render(in SummaryInput) string {
 	var b strings.Builder
-	for i, n := range lines {
-		if i > 0 && n != lines[i-1]+1 {
-			b.WriteString("[lines left out]\n")
-		}
-		row := []rune(log[n-1])
+	cut := func(text string) string {
+		row := []rune(text)
 		if len(row) > summaryRowChars {
 			row = row[:summaryRowChars]
 		}
-		fmt.Fprintf(&b, "%d: %s\n", n, string(row))
+		return string(row)
+	}
+	if in.Entries == nil {
+		for i, n := range in.Excerpt {
+			if i > 0 && n != in.Excerpt[i-1]+1 {
+				b.WriteString("[lines left out]\n")
+			}
+			fmt.Fprintf(&b, "%d: %s\n", n, cut(in.Log[n-1]))
+		}
+		return b.String()
+	}
+	var texts []string
+	for _, e := range in.Entries {
+		texts = append(texts, e.Text)
+	}
+	if names := in.Legend.Names(texts...); len(names) > 0 {
+		b.WriteString("Legend:\n")
+		for _, name := range names {
+			lines := strings.Split(in.Legend[name], "\n")
+			if name[1] == 'L' {
+				fmt.Fprintf(&b, "%s = %s\n", name, cut(lines[0]))
+				continue
+			}
+			fmt.Fprintf(&b, "%s =\n", name)
+			for _, line := range lines {
+				fmt.Fprintf(&b, "  %s\n", cut(line))
+			}
+		}
+		b.WriteString("\nOutput:\n")
+	}
+	for i, e := range in.Entries {
+		if i > 0 && e.First != in.Entries[i-1].Last+1 {
+			b.WriteString("[lines left out]\n")
+		}
+		fmt.Fprintf(&b, "%s: %s\n", e.Label(), cut(e.Text))
 	}
 	return b.String()
 }
@@ -233,6 +268,10 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines."
 	if in.Expect != "" {
 		text += "\nLead with what contradicts the expectation; if the output meets it, one short sentence saying so is the whole summary."
+	}
+	if in.Entries != nil && len(in.Legend) > 0 {
+		text += "\nWhat repeats is defined once under Legend and named where it occurs: 1203-2372: @L1 x1170 is the line @L1, 1170 times in a " +
+			"row; 5001-5014: @B1 is the block @B1. Ranges are log line numbers as shown."
 	}
 	if excerpt {
 		text += "\nOnly an excerpt is shown: the start, the end, and the passages a relevance model judged most likely to matter, each with its " +

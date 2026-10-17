@@ -1,0 +1,1 @@
+"{\"summary\": \"The install fails: the registry returns 404 for diff-sequences-nonexistent-pkg-zz, and the run ends with 'error: diff-sequences-nonexistent-pkg-zz@^1.0.0 failed to resolve'. All other manifests resolved, downloaded and extracted.\", \"ranges\": [[2651, 2654], [178, 185], [1190, 1200], [6, 6]]}"

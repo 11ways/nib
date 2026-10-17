@@ -3,6 +3,8 @@ package decider
 import (
 	"context"
 	"regexp"
+	"slices"
+	"strings"
 )
 
 var (
@@ -26,15 +28,19 @@ type keywords struct{}
 func (keywords) Kind() Kind { return Keywords }
 
 func (keywords) Decide(_ context.Context, in Input) Choice {
-	return Choice{Picks: keywordPicks(in.Rows), Who: "keywords"}
+	return Choice{Picks: keywordPicks(in.Rows, in.Legend), Who: "keywords"}
 }
 
 // keywordPicks are the hits as one-row picks: the last first, since runners print the reason last, then the rest in output order, since
-// compilers print causes first.
-func keywordPicks(rows []string) []Pick {
+// compilers print causes first. A row that names legend entries hits when what they stand for does.
+func keywordPicks(rows []string, legend Legend) []Pick {
 	var hits []Pick
 	for i, row := range rows {
-		if Hit(row) {
+		hit := Hit(row)
+		for _, name := range legend.Names(row) {
+			hit = hit || slices.ContainsFunc(strings.Split(legend[name], "\n"), Hit)
+		}
+		if hit {
 			hits = append(hits, Pick{Range{i, i + 1}, KeywordScore})
 		}
 	}

@@ -265,16 +265,31 @@ func (e *Engine) EchoNote(ctx *Context) []string {
 	return nil
 }
 
-// Compress collapses repetition among plain rows; with masked, lines compare with their digits masked, similar reports whether anything
-// collapsed had other numbers than what is shown, and echoed whether a recurring block got [#N] markers.
-func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed bool) {
-	keys := make([]string, len(lines))
-	for i, l := range lines {
-		keys[i] = l.Text
-		if masked {
-			keys[i] = digits.ReplaceAllString(l.Text, "0")
-		}
-	}
+// RepeatKind says what a Repeat stands for.
+type RepeatKind int
+
+const (
+	// RepeatLine is a line shown as it is.
+	RepeatLine RepeatKind = iota
+	// RepeatRun is Period lines repeated back to back Copies times; with Exact false the copies differ in their digits.
+	RepeatRun
+	// RepeatEcho is Length lines that recur from an earlier place, Of, where they were shown.
+	RepeatEcho
+)
+
+// Repeat is one step of the repetition Repeats finds; indexes are into its lines.
+type Repeat struct {
+	Kind           RepeatKind
+	Index          int
+	Period, Copies int
+	Exact          bool
+	Of, Length     int
+}
+
+// Repeats finds the repetition among plain rows that Compress collapses: back-to-back runs and blocks that recur from earlier; with masked,
+// lines compare with their digits masked. It is the one home of what counts as repeated output.
+func Repeats(lines []PlainLine, masked bool) []Repeat {
+	keys := repeatKeys(lines, masked)
 	same := func(a, b, length int) bool {
 		for offset := 0; offset < length; offset++ {
 			if keys[a+offset] != keys[b+offset] {
@@ -283,41 +298,20 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 		}
 		return true
 	}
-	identical := func(a, b, length int) bool {
-		for offset := 0; offset < length; offset++ {
-			if lines[a+offset].Text != lines[b+offset].Text {
-				return false
-			}
-		}
-		return true
-	}
-	type item struct {
-		kind   int // 0 line, 1 note, 2 echo
-		index  int
-		text   string
-		at     int
-		of     int
-		length int
-	}
-	var items []item
+	var steps []Repeat
 	printed := make([]bool, len(lines))
 	starts := map[string][]int{}
 	print := func(index int) {
-		items = append(items, item{kind: 0, index: index})
 		printed[index] = true
 		starts[keys[index]] = append(starts[keys[index]], index)
 	}
-	type cadenceResult struct {
-		period, copies int
-		exact          bool
-	}
-	cadences := map[int]*cadenceResult{}
+	cadences := map[int]*Repeat{}
 	cadenceKnown := map[int]bool{}
-	cadence := func(index int) *cadenceResult {
+	cadence := func(index int) *Repeat {
 		if cadenceKnown[index] {
 			return cadences[index]
 		}
-		var best *cadenceResult
+		var best *Repeat
 		for period := 1; period <= cadenceLines && index+period*3 <= len(lines); period++ {
 			blank := true
 			for _, key := range keys[index : index+period] {
@@ -335,14 +329,14 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 			}
 			exact := true
 			for copy := 1; copy < copies && exact; copy++ {
-				exact = identical(index, index+copy*period, period)
+				exact = identicalLines(lines, index, index+copy*period, period)
 			}
 			rowCount := period*2 + 1
 			if exact {
 				rowCount = period + 1
 			}
-			if copies >= 3 && rowCount < copies*period && (best == nil || copies*period > best.copies*best.period) {
-				best = &cadenceResult{period, copies, exact}
+			if copies >= 3 && rowCount < copies*period && (best == nil || copies*period > best.Copies*best.Period) {
+				best = &Repeat{Kind: RepeatRun, Index: index, Period: period, Copies: copies, Exact: exact}
 			}
 		}
 		cadenceKnown[index] = true
@@ -351,38 +345,16 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 	}
 	for index := 0; index < len(lines); {
 		if best := cadence(index); best != nil {
-			for offset := 0; offset < best.period; offset++ {
+			for offset := 0; offset < best.Period; offset++ {
 				print(index + offset)
 			}
-			what := "the line above"
-			if best.period != 1 {
-				what = fmt.Sprintf("the %d lines above", best.period)
-			}
-			var note string
-			if best.exact {
-				s, times := "", "time"
-				if best.period == 1 {
-					s = "s"
-				}
-				if best.copies > 2 {
-					times = "times"
-				}
-				note = fmt.Sprintf("[%s repeat%s %d more %s]", what, s, best.copies-1, times)
-			} else {
-				one := "ones"
-				if best.period == 1 {
-					one = "one"
-				}
-				note = fmt.Sprintf("[%d more like %s; the last %s:]", best.copies-1, what, one)
-			}
-			items = append(items, item{kind: 1, text: note, at: lines[index+best.period].At})
-			if !best.exact {
-				similar = true
-				for offset := 0; offset < best.period; offset++ {
-					print(index + (best.copies-1)*best.period + offset)
+			if !best.Exact {
+				for offset := 0; offset < best.Period; offset++ {
+					print(index + (best.Copies-1)*best.Period + offset)
 				}
 			}
-			index += best.copies * best.period
+			steps = append(steps, *best)
+			index += best.Copies * best.Period
 			continue
 		}
 		// A recurring block ends where a back-to-back repeat begins on either side, so each repeat still collapses on its own.
@@ -402,24 +374,54 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 			}
 		}
 		if echoOf >= 0 {
-			items = append(items, item{kind: 2, of: echoOf, index: index, length: echoLength})
-			if !identical(echoOf, index, echoLength) {
-				similar = true
-			}
+			steps = append(steps, Repeat{Kind: RepeatEcho, Index: index, Of: echoOf, Length: echoLength})
 			index += echoLength
 			continue
 		}
 		print(index)
+		steps = append(steps, Repeat{Kind: RepeatLine, Index: index})
 		index++
 	}
+	return steps
+}
+
+// repeatKeys are the texts lines compare by: as they are, or with their digits masked.
+func repeatKeys(lines []PlainLine, masked bool) []string {
+	keys := make([]string, len(lines))
+	for i, l := range lines {
+		keys[i] = l.Text
+		if masked {
+			keys[i] = MaskDigits(l.Text)
+		}
+	}
+	return keys
+}
+
+// MaskDigits is a line's text with every run of digits masked, as Repeats compares masked lines.
+func MaskDigits(text string) string { return digits.ReplaceAllString(text, "0") }
+
+// Numbers are a line's runs of digits, in order: what MaskDigits masks.
+func Numbers(text string) []string { return digits.FindAllString(text, -1) }
+
+func identicalLines(lines []PlainLine, a, b, length int) bool {
+	for offset := 0; offset < length; offset++ {
+		if lines[a+offset].Text != lines[b+offset].Text {
+			return false
+		}
+	}
+	return true
+}
+
+// Compress collapses repetition among plain rows; with masked, lines compare with their digits masked, similar reports whether anything
+// collapsed had other numbers than what is shown, and echoed whether a recurring block got [#N] markers.
+func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed bool) {
+	steps := Repeats(lines, masked)
 	// Ids follow the order the originals appear in; an original shows the most lines any of its echoes covered.
 	type original struct{ id, length int }
 	var ofs []int
-	seenOf := map[int]bool{}
-	for _, it := range items {
-		if it.kind == 2 && !seenOf[it.of] {
-			seenOf[it.of] = true
-			ofs = append(ofs, it.of)
+	for _, s := range steps {
+		if s.Kind == RepeatEcho && !slices.Contains(ofs, s.Of) {
+			ofs = append(ofs, s.Of)
 		}
 	}
 	slices.Sort(ofs)
@@ -427,30 +429,65 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 	for _, of := range ofs {
 		originals[of] = &original{id: len(originals) + 1}
 	}
-	for _, it := range items {
-		if it.kind == 2 {
-			originals[it.of].length = max(originals[it.of].length, it.length)
+	for _, s := range steps {
+		if s.Kind == RepeatEcho {
+			originals[s.Of].length = max(originals[s.Of].length, s.Length)
 		}
 	}
-	for _, it := range items {
-		switch it.kind {
-		case 1:
-			rows = append(rows, PlainLine{At: it.at, Text: it.text})
-		case 0:
-			line := lines[it.index]
-			if o := originals[it.index]; o != nil {
-				rows = append(rows, PlainLine{At: line.At, Text: fmt.Sprintf("[#%d, %d lines] %s", o.id, o.length, line.Text)})
+	line := func(index int) {
+		l := lines[index]
+		if o := originals[index]; o != nil {
+			l.Text = fmt.Sprintf("[#%d, %d lines] %s", o.id, o.length, l.Text)
+		}
+		rows = append(rows, l)
+	}
+	for _, s := range steps {
+		switch s.Kind {
+		case RepeatLine:
+			line(s.Index)
+		case RepeatRun:
+			for offset := 0; offset < s.Period; offset++ {
+				line(s.Index + offset)
+			}
+			what := "the line above"
+			if s.Period != 1 {
+				what = fmt.Sprintf("the %d lines above", s.Period)
+			}
+			var note string
+			if s.Exact {
+				plural, times := "", "time"
+				if s.Period == 1 {
+					plural = "s"
+				}
+				if s.Copies > 2 {
+					times = "times"
+				}
+				note = fmt.Sprintf("[%s repeat%s %d more %s]", what, plural, s.Copies-1, times)
 			} else {
-				rows = append(rows, line)
+				one := "ones"
+				if s.Period == 1 {
+					one = "one"
+				}
+				note = fmt.Sprintf("[%d more like %s; the last %s:]", s.Copies-1, what, one)
 			}
-		case 2:
-			line := lines[it.index]
-			o := originals[it.of]
-			count := itoa(it.length)
-			if it.length < o.length {
-				count = fmt.Sprintf("its first %d", it.length)
+			rows = append(rows, PlainLine{At: lines[s.Index+s.Period].At, Text: note})
+			if !s.Exact {
+				similar = true
+				for offset := 0; offset < s.Period; offset++ {
+					line(s.Index + (s.Copies-1)*s.Period + offset)
+				}
 			}
-			rows = append(rows, PlainLine{At: line.At, Text: fmt.Sprintf("[#%d again, %s lines] %s", o.id, count, line.Text)})
+		case RepeatEcho:
+			l := lines[s.Index]
+			o := originals[s.Of]
+			count := itoa(s.Length)
+			if s.Length < o.length {
+				count = fmt.Sprintf("its first %d", s.Length)
+			}
+			if !identicalLines(lines, s.Of, s.Index, s.Length) {
+				similar = true
+			}
+			rows = append(rows, PlainLine{At: l.At, Text: fmt.Sprintf("[#%d again, %s lines] %s", o.id, count, l.Text)})
 		}
 	}
 	return rows, similar, len(originals) > 0
