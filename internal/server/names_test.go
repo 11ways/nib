@@ -18,13 +18,14 @@ func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 	learned := filepath.Join(t.TempDir(), "learned.json")
 	c := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: learned}, nil, nil, false)
 	var last string
-	for i := range 8 {
+	for i := range 6 {
 		last = text(c.call(t, readCall(filepath.Join(deep, fmt.Sprintf("W%d.java", i)))))
-		if i < 7 && strings.Contains(last, "nib named") {
+		if i < 5 && strings.Contains(last, "nib named") {
 			t.Fatalf("named after %d reads: %s", i+1, last)
 		}
 	}
-	if !strings.HasPrefix(last, "[~widgets/W7.java#") || !strings.HasSuffix(last, "\n\n[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 8 of the paths shown to you ran through; ~widgets/ works in every tool and in nibash, for you and the subagents you start]") {
+	// Six shown paths save more than the note that tells of the name costs.
+	if !strings.HasPrefix(last, "[~widgets/W5.java#") || !strings.HasSuffix(last, "\n\n[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through; ~widgets/ works in every tool and in nibash, for you and the subagents you start]") {
 		t.Fatalf("got:\n%s", last)
 	}
 	// The name works as input, and the note is told once.

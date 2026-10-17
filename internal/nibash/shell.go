@@ -211,6 +211,20 @@ func (c *call) wrote(path string, existed bool) {
 	}
 }
 
+// observePaths counts the absolute paths a command line spells toward the directories nib names for the agent: a path given to a real
+// program is never printed by nib, yet costs the agent the same characters each time it is typed.
+func observePaths(file *syntax.File, view namer) {
+	if view == nil {
+		return
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if lit, ok := node.(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "/") {
+			view.Observe(lit.Value)
+		}
+		return true
+	})
+}
+
 // Run runs one nibash call in a fresh interpreter; a command still running at the call's timeout goes on as a job.
 func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tools *engine.Context) (engine.Result, error) {
 	sess := s.session(key)
@@ -223,6 +237,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	if err != nil {
 		return engine.Result{Text: fmt.Sprintf("nibash: %v\n[exit 2]", err)}, nil
 	}
+	observePaths(file, view)
 	reports := sess.jobs.finished()
 	runner, err := sess.newRunner(tools.Directory, view)
 	if err != nil {

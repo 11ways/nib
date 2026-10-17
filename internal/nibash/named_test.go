@@ -112,6 +112,28 @@ func TestADefinitionIsTheDefinersAndLaterSubagentsOnly(t *testing.T) {
 	}
 }
 
+func TestAVeryLongPathACommandSpellsIsNamedAtOnce(t *testing.T) {
+	f := newFixture(t, nil)
+	skill := filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")
+	if err := os.MkdirAll(skill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skill, "api.d.ts"), []byte("export {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defined := names.NewDefined()
+	defined.Automatic("", f.directory)
+	f.names = (&names.Table{Base: f.directory}).For(defined, "s")
+	// A real program's argument, which nib never prints, counts all the same.
+	f.run("/usr/bin/wc -l " + filepath.Join(skill, "api.d.ts"))
+	if notes := defined.Announced("s"); len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~types = ") {
+		t.Fatalf("notes %v", notes)
+	}
+	if got := f.run("cat ~types/api.d.ts"); !strings.Contains(got, "1:export {}") {
+		t.Fatalf("got %s", got)
+	}
+}
+
 func TestNamesExpandInBackgroundJobsAndPipelines(t *testing.T) {
 	f := newFixture(t, map[string]string{"d/a.txt": "x\n"})
 	f.names = (&names.Table{Base: f.directory}).For(names.NewDefined(), "s")

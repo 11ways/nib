@@ -175,6 +175,9 @@ func (v *View) Display(canonical string) (string, bool) {
 	return v.table().Display(canonical)
 }
 
+// Observe counts path, an absolute path the agent used, toward naming a directory it runs through, as a path shown to it counts.
+func (v *View) Observe(path string) { v.defined.observe(v.agent, v.table(), filepath.Clean(path)) }
+
 // Home is the directory of name; ok is false when it names none.
 func (v *View) Home(name string) (string, bool) { return v.table().Home(name) }
 

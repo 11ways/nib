@@ -14,10 +14,13 @@ import (
 )
 
 const (
-	// autoUses is how many shown paths must run through a directory before nib names it.
-	autoUses = 8
+	// autoUses is the fewest shown paths that earn a directory a name, unless its prefix is autoAtOnce long; past it, a name is made once
+	// the characters it would have saved so far pay for the note announcing it.
+	autoUses = 3
 	// autoChars is the shortest prefix, as nib would print it, worth a name.
 	autoChars = 30
+	// autoAtOnce is a prefix too long to print even twice: such a directory is named the first time it is shown.
+	autoAtOnce = 100
 	// autoLimit bounds the names nib makes for one agent.
 	autoLimit = 8
 	// learnedLimit bounds the names kept for the next session of one server directory.
@@ -49,7 +52,7 @@ func (d *Defined) Announced(agent string) []string {
 }
 
 // observe counts the directories a path shown to the agent runs through, below the deepest named one holding it, and names the one that
-// saves the most once one has been shown autoUses times with a printed prefix of autoChars or more.
+// saves the most among those with a printed prefix of autoChars or more that autoAtOnce or the characters saved so far make worth a note.
 func (d *Defined) observe(agent string, table *Table, canonical string) {
 	if d == nil || !d.automatic {
 		return
@@ -87,8 +90,11 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 			continue
 		}
 		names.counts[directory]++
-		if count := names.counts[directory]; count >= autoUses && count*len(prefix) > saving {
-			best, saving = directory, count*len(prefix)
+		count := names.counts[directory]
+		saved := count * (len(prefix) - len(slug(filepath.Base(directory))) - 1)
+		worth := len(prefix) >= autoAtOnce || (count >= autoUses && saved >= len(note("x", prefix, count)))
+		if worth && saved > saving {
+			best, saving = directory, saved
 		}
 	}
 	if best == "" {
@@ -101,8 +107,17 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 	entry := Entry{name, best}
 	names.list = append(names.list, definition{entry, d.Now().UnixNano()})
 	names.auto++
-	names.pending = append(names.pending, fmt.Sprintf("[nib named ~%s = %s, which %d of the paths shown to you ran through; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, shown(best), names.counts[best], name))
+	names.pending = append(names.pending, note(name, shown(best), names.counts[best]))
 	d.learnLocked(entry)
+}
+
+// note announces a name nib made for the directory printed as prefix, which count shown paths ran through.
+func note(name, prefix string, count int) string {
+	why := fmt.Sprintf("which %d of the paths shown to you ran through", count)
+	if count == 1 {
+		why = "too long to print again"
+	}
+	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, prefix, why, name)
 }
 
 var unslugged = regexp.MustCompile(`[^a-z0-9]+`)

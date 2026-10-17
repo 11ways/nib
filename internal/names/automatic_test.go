@@ -25,7 +25,7 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	defined := NewDefined()
 	defined.Automatic(file, root)
 	view := (&Table{Base: root}).For(defined, "main")
-	for i := range autoUses - 1 {
+	for i := range 5 {
 		view.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
 	}
 	if notes := defined.Announced("main"); len(notes) != 0 {
@@ -36,7 +36,7 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 		t.Fatalf("the path that crossed the threshold prints under its new name, got %q", shown)
 	}
 	notes := defined.Announced("main")
-	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 8 of the paths shown to you ran through;") {
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~widgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through;") {
 		t.Fatalf("notes %v", notes)
 	}
 	if again := defined.Announced("main"); len(again) != 0 {
@@ -59,6 +59,23 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	}
 }
 
+func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	skill := filepath.Join(root, "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")
+	if err := os.MkdirAll(skill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defined := NewDefined()
+	defined.Automatic("", "/elsewhere")
+	view := (&Table{Base: "/elsewhere"}).For(defined, "main")
+	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~types/claude-code.d.ts" {
+		t.Fatalf("got %q", shown)
+	}
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, too long to print again; ~types/ works") {
+		t.Fatalf("notes %v", notes)
+	}
+}
+
 func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	defined := NewDefined()
@@ -77,7 +94,7 @@ func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	}
 	// A taken name takes its parent folder's in front.
 	widgets := deep(t, root, "widgets")
-	for i := range autoUses {
+	for i := range 8 {
 		view.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
 	}
 	if shown, _ := view.Display(filepath.Join(widgets, "X.java")); shown != "~elevenways-widgets/X.java" {
@@ -90,7 +107,7 @@ func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		for i := range autoUses {
+		for i := range 8 {
 			view.Display(filepath.Join(directory, fmt.Sprintf("f%d", i)))
 		}
 	}

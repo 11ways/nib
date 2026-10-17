@@ -22,6 +22,8 @@ type namer interface {
 	Expand(input string) (string, bool)
 	Entries() []names.Entry
 	Define(name, directory string) error
+	// Observe counts an absolute path the command used toward the directories nib names for the agent.
+	Observe(path string)
 }
 
 // homePrefix starts the "HOME name" lookups tilde expansion makes for ~name.
