@@ -279,7 +279,8 @@ nib owns the shell, so the 780-line shell-parsing hook goes away.
 
 ## 10. Distribution
 
-- `go install github.com/11ways/nib/cmd/nib@latest` (private module: `GOPRIVATE=github.com/11ways/*`, git over ssh). `nib --version` prints the module version and commit.
+- `go install github.com/11ways/nib/cmd/nib@latest` (private module: `GOPRIVATE=github.com/11ways/*`, git over ssh). From a checkout, `./install.sh` builds and installs into `~/.local/bin`, or the absolute directory set by the `GOBIN` environment variable. The POSIX shell script requires Go, works from any working directory, prints the installed version, points out a missing or shadowed `PATH` entry, and reminds the user to restart the client's nib MCP server.
+- `nib --version` and the MCP server report the release version (`v0.2.0`, defined in `cmd/nib/main.go`), the short commit when available and `+dirty` for a modified checkout. A matching Git tag must be pushed for Go to resolve a published release with `@v0.2.0`.
 - zenit-workspace's bootstrap no longer carries the `ensureNib` step drafted for the Bun version (it was never committed and has since been dropped), so nothing there changes; a step would now run `go install` and `nib setup`.
 - Documentation rewrites [m9]: AGENTS.md's Stack, Commands, Layout and rules (hook rule replaced, sandbox paragraph added), and the README's tool, setup, hook and benchmark sections.
 

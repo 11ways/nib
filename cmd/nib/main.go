@@ -22,20 +22,31 @@ const usage = `nib: hashline file tools and a shell for coding agents
   nib hook             Claude Code PreToolUse hook: refuses the built-in Read for files nib reads better, and tells nib's server which subagent calls it
   nib --version        print the version`
 
+// Keep the release name stable even when Go stamps an untagged checkout with a pseudo-version.
+const releaseVersion = "v0.2.0"
+
 func version() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "devel"
+	info, _ := debug.ReadBuildInfo()
+	return buildVersion(info)
+}
+
+func buildVersion(info *debug.BuildInfo) string {
+	v := releaseVersion
+	if info == nil {
+		return v
 	}
 	revision := ""
 	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" && len(setting.Value) >= 8 {
-			revision = setting.Value[:8]
+		switch setting.Key {
+		case "vcs.revision":
+			if len(setting.Value) >= 8 {
+				revision = setting.Value[:8]
+			}
+		case "vcs.modified":
+			if setting.Value == "true" {
+				v += "+dirty"
+			}
 		}
-	}
-	v := info.Main.Version
-	if v == "" || v == "(devel)" {
-		v = "devel"
 	}
 	if revision != "" {
 		return v + " " + revision

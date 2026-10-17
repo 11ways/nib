@@ -5,7 +5,7 @@ A stdio MCP server that gives coding agents hashline file tools and a shell: rea
 nib is one Go binary. It needs `rg` (ripgrep) on `PATH` for `grep`, `find` and nibash's recursive searches, and `bwrap` for programs in sandbox mode. The tests and the benchmark are TypeScript on Bun.
 
 ```sh
-go build ./cmd/nib      # or go install ./cmd/nib
+./install.sh           # build and install to ~/.local/bin; GOBIN overrides
 go test ./...           # Go unit tests
 bun install && bun test # the black-box suites, run against the binary over MCP
 bun typecheck           # go vet and tsgo --noEmit
@@ -268,7 +268,18 @@ nib setup              # in the project folder; --dry-run previews, --user regis
 
 Denying `Bash` has side effects: a skill's `!` command lines fail Claude Code's permission check, and subagents inherit the deny; nibash is their shell. With `--user` setup puts the hook and the deny rules in the Claude config folder's `settings.json` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), registers the server through `claude mcp add --scope user`, since Claude Code rewrites the file that holds it while it runs (a stale user-scope registration, or a stale local-scope one for any project folder, which would win over it there, is replaced at its own scope with `claude mcp remove` and `claude mcp add-json`, in that folder for a local one; a plain `nib setup` does the same for the folder's local-scope one), and tops up OpenCode's user `opencode.json` (in `$OPENCODE_CONFIG_DIR`, else `~/.config/opencode`) when there is one. The command it writes is `nib` when the `nib` on `PATH` is the copy running setup, else that binary's path. A file that is not plain JSON (with comments, say) is left untouched and named; a file setup changes keeps its key order, its numbers as written, its mode and, when it is a link, its link.
 
-To update, run the `go install` again.
+To update from the remote repository, run the `go install` again. To build and install the current checkout, use the included script:
+
+```sh
+./install.sh                       # install to ~/.local/bin
+GOBIN="$HOME/bin" ./install.sh      # or choose another absolute directory
+```
+
+The script requires Go, works from any working directory, and defaults to `~/.local/bin` unless `GOBIN` is set in the environment. It prints the installed version and tells you if another copy on `PATH` would take precedence. Restart the client's nib MCP server after updating so it launches the new binary.
+
+The equivalent command from the checkout root is `GOBIN="$HOME/.local/bin" go install ./cmd/nib`. Without an explicit `GOBIN`, plain `go install` uses `go env GOBIN`, or `$(go env GOPATH)/bin` when that is empty.
+
+The CLI and MCP server report the release version (`v0.2.0`, defined in `cmd/nib/main.go`), plus the short commit when available and `+dirty` for a modified checkout. Publishing a Go module release also requires a matching Git tag pushed to the remote; only then can `go install github.com/11ways/nib/cmd/nib@v0.2.0` select that release.
 
 Any other MCP client that launches stdio servers can run nib too: the command is `nib`, started in the project directory (or with `NIB_DIRECTORY` set to it). Relative paths resolve against that directory. The tools are `read`, `grep`, `find`, `edit`, `write` and `nibash`; the server also sends usage instructions in its MCP `instructions` field. `nib --version` prints the version.
 
