@@ -16,6 +16,7 @@ bun install
 bun test        # the black-box suites, against the binary over MCP; must pass before committing
 bun typecheck   # go vet and tsgo --noEmit; must be clean
 gofmt -l .      # must print nothing
+claude plugin validate mods/nibash && claude plugin test mods/nibash   # the Claude Code mod; must pass when it or nibash_status changes
 ```
 
 `bun bench/run.ts` runs real model sessions through Claude Code and OpenCode and costs money. Do not run it unless asked; `--plan`, `--validate`, `--reparse`, `--recheck` and `--report` are free and make no model calls. Its checks run in bwrap (bubblewrap), which must be installed. Its output in `bench/results/` and `bench/.cache/` is ignored by git; never commit it. A change to a task's prompt or to `bench/runners.ts` setup must keep stored results honest: prompts are part of a run's identity, a setup change needs `SETUP` in `bench/runners.ts` bumped, and a change to verification that can turn a verdict needs `VERIFY` in `bench/store.ts` bumped.
@@ -43,6 +44,7 @@ gofmt -l .      # must print nothing
 | `internal/setup/`, `internal/hook/`, `internal/hookstate/` | `nib setup` (server, approval, hook matchers, deny rules; order-preserving JSON); the hook for the built-in `Read` and for nib's own tools, which reads a subagent's parent from Claude Code's meta file and its spawn moment from the parent's transcript; the hook's private state, the per-call agent records it hands the server and the spawn moments it found |
 | `internal/opencode/` | read-only lookups in OpenCode 2's sqlite database, found by OpenCode's own environment: a session's parent, whether it is a fork, and its spawn moment |
 | `internal/providers/` | hosted providers (`--provider NAME=PROGRAM`): starting `PROGRAM nib-provider`, listing and calling its tools, starting it again after it ended, and reading its answers into prose and locations (`docs/design-providers.md`); `providertest` is a fake provider for tests |
+| `mods/nibash/` | the Claude Code mod that shows what nibash runs (a band above the prompt, a `/nibash` pane, a toast when a job ends) from `nibash_status`; its tests run under `claude plugin test` |
 | `test/` | `engine`, `patch` and `server` suites against the binary (`support/engine.ts` gives them the engine's interface over MCP), and the `bench` tests |
 | `bench/` | benchmark: tasks and checks, fixture (nib at a pinned commit plus generated files), Claude Code and OpenCode runners, cached run store, HTML report |
 
