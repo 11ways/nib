@@ -1598,12 +1598,12 @@ describe("grep options", () => {
     const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => row(from + index))
     const roomy = (await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], after: 1 })).text
     expect(roomy).toContain(`\n${rows(55, 57).join("\n")}\n`)
-    expect(roomy).not.toContain("context lines only")
+    expect(roomy).not.toContain("match rows shown")
     // An import, the definition, a use in a value and a use in a body; 3 lines before and 12 after each would be 57 context lines.
     expect((await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], before: 3, after: 12 })).text).toBe([
       "4 matches in 1 files",
       [`[size.ts#${fileTag(source)}]`, row(1), "...", ...rows(18, 33), "...", row(56), "...", row(80)].join("\n"),
-      "[context lines only around the definition at size.ts:21: around all 4 matches they would be 57 lines, over grep's budget of 40; for another match, read a range like size.ts:1-13]",
+      "[all 4 match rows shown, context lines only around the definition at size.ts:21: around all 4 they would be 57 lines, over grep's budget of 40; for another match's, read a range like size.ts:1-13]",
     ].join("\n\n"))
     await f.patch(`[size.ts#${fileTag(source)}]\nPUT 56:\n+const half = formatSize(1024)`)
     expect(await readFile(path.join(f.directory, "size.ts"), "utf8")).toBe(source.replace("formatSize(512)", "formatSize(1024)"))
@@ -1614,10 +1614,10 @@ describe("grep options", () => {
     const f = await fixture(Array.from({ length: 100 }, (_, index) => (index + 1) % 5 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const asked = (await f.engine.grep(f.ctx, { pattern: "hit", before: 0, after: 5 })).text
     expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n...\n*60:hit 60\n")
-    expect(asked).toEndWith("\n\n[context lines only around the first 10 of 20 matches: around all 20 matches they would be 76 lines, over grep's budget of 40; for another match, read a range like file.txt:55-60]")
+    expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines only around the first 10: around all 20 they would be 76 lines, over grep's budget of 40; for another match's, read a range like file.txt:55-60]")
     const plain = (await f.engine.grep(f.ctx, { pattern: "hit" })).text
     expect(plain).not.toContain("miss")
-    expect(plain).toEndWith("\n\n[no context lines: around all 20 matches they would be 77 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:4-8]")
+    expect(plain).toEndWith("\n\n[all 20 match rows shown, without context lines: around all 20 they would be 77 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:4-8]")
     // hit 5 to hit 25: few enough for the default context.
     expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n 7:miss 7\n 8:miss 8\n 9:miss 9\n*10:hit 10\n")
   })
@@ -1635,17 +1635,17 @@ describe("grep options", () => {
     for (const [name, lines] of Object.entries(files)) await writeFile(path.join(f.directory, name), lines.join("\n") + "\n")
     // 1 line before and 20 after: 21 context lines per match, so any two are over the budget.
     const grep = (pattern: string, paths: string[]) => f.engine.grep(f.ctx, { pattern, paths, before: 1, after: 20 })
-    const given = async (pattern: string, paths: string[]) => /\[context lines only around (.+?): around all/.exec((await grep(pattern, paths)).text)?.[1]
+    const given = async (pattern: string, paths: string[]) => /context lines only around (.+?): around all/.exec((await grep(pattern, paths)).text)?.[1]
     expect(await given("format", ["sizes.ts"])).toBe("the definition at sizes.ts:2")
     expect(await given("Handle", ["server.go"])).toBe("the definition at server.go:3")
     // A name in a Go receiver or in parameters is not what its line declares.
-    expect(await given("Server", ["server.go"])).toBe("the first 1 of 2 matches")
+    expect(await given("Server", ["server.go"])).toBe("the first 1")
     expect(await given("formatSize", ["notes.md"])).toBe("the definition at notes.md:3")
     // The definition wins over matches in a file earlier on the page.
     const python = (await grep("format_size", ["a.py", "b.py"])).text
     expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n...\n*28:value = format_size(2)\n\n[b.py#")
     expect(python).toContain("\n*1:def format_size(bytes):\n 2:    return bytes\n 3:# pad\n")
-    expect(python).toContain("[context lines only around the definition at b.py:1:")
+    expect(python).toContain("context lines only around the definition at b.py:1:")
   })
 
   test("definitions keep all their context past the budget, also when the pattern matches their declaring word", async () => {
@@ -1665,7 +1665,7 @@ describe("grep options", () => {
     const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"] })).text
     // One line before and three after: the first comes to 4 lines and each next one to 3 more, so 13 fit in 40.
     expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n 52:}\n 53:/** Doc 13. */\n*54:function f13() {\n...\n*58:function f14() {\n")
-    expect(text).toEndWith("\n\n[context lines only around the first 13 of 30 definitions: around all 30 matches they would be 90 lines, over grep's budget of 40; for another match, read a range like fns.ts:53-57]")
+    expect(text).toEndWith("\n\n[all 30 match rows shown, context lines only around the first 13 of 30 definitions: around all 30 they would be 90 lines, over grep's budget of 40; for another match's, read a range like fns.ts:53-57]")
   })
 
   test("one file shows its first 100 matches, like a harness's own grep", async () => {

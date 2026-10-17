@@ -557,16 +557,16 @@ func frameMatches(files []*grepFile, before, after int, asked bool) string {
 	if bare == nil {
 		return ""
 	}
-	over := fmt.Sprintf("around all %d matches they would be %d lines, over grep's budget of %d", len(all), wanted, GrepContextLines)
+	over := fmt.Sprintf("around all %d they would be %d lines, over grep's budget of %d", len(all), wanted, GrepContextLines)
 	rangeText := fmt.Sprintf("%s:%d-%d", bare.file.target.display, max(1, bare.line-before), bare.line+after)
 	if len(givenOrder) == 0 {
-		return fmt.Sprintf("[no context lines: %s; ask with before or after for some around the first matches, or read a range like %s]", over, rangeText)
+		return fmt.Sprintf("[all %d match rows shown, without context lines: %s; ask with before or after for some around the first matches, or read a range like %s]", len(all), over, rangeText)
 	}
 	first := givenOrder[0]
 	var which string
 	switch {
 	case len(definitions) == 0:
-		which = fmt.Sprintf("the first %d of %d matches", len(givenOrder), len(all))
+		which = fmt.Sprintf("the first %d", len(givenOrder))
 	case len(givenOrder) == 1:
 		which = fmt.Sprintf("the definition at %s:%d", first.file.target.display, first.line)
 	case len(givenOrder) < len(definitions):
@@ -574,7 +574,7 @@ func frameMatches(files []*grepFile, before, after int, asked bool) string {
 	default:
 		which = fmt.Sprintf("the %d definitions", len(givenOrder))
 	}
-	return fmt.Sprintf("[context lines only around %s: %s; for another match, read a range like %s]", which, over, rangeText)
+	return fmt.Sprintf("[all %d match rows shown, context lines only around %s: %s; for another match's, read a range like %s]", len(all), which, over, rangeText)
 }
 
 // replaceLine swaps a line's submatches for ripgrep's replacements; ripgrep reports UTF-8 byte offsets.
