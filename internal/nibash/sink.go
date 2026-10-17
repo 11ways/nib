@@ -180,11 +180,17 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		if r.anchor {
 			seen[r.source] = append(seen[r.source], r.line)
 		}
+		seen[r.source] = append(seen[r.source], r.covers...)
 	}
 	for source, lines := range seen {
-		e.Seen(ctx, source.Canonical, *source.View, lines, nil)
+		if source != nil {
+			e.Seen(ctx, source.Canonical, *source.View, lines, nil)
+		}
 	}
 	texts = append(texts, footer...)
+	if slices.ContainsFunc(rows, func(r row) bool { return r.covers != nil }) {
+		texts = append(texts, e.HeldNote(ctx)...)
+	}
 	if echoed {
 		texts = append(texts, e.EchoNote(ctx)...)
 	}
@@ -317,9 +323,12 @@ type row struct {
 	source      *engine.Source
 	line        int
 	anchor      bool
+	match       bool
 	plain       bool
 	capped      bool
 	first, last int
+	// covers are the lines a held marker stands for; a match row of grep is what the command is for, so it always prints.
+	covers []int
 }
 
 // plainFollows separates a file's rows from plain output shaped like them, which is not an anchor.
@@ -361,7 +370,7 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		content, latest := lineOf(e, ctx, source, it.line)
 		if latest {
 			text, anchor := engine.Row(it.line, content, rowLimit)
-			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, first: it.first, last: it.first})
+			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, match: it.marker == "*", first: it.first, last: it.first})
 			continue
 		}
 		shown := engine.Visible(content)
@@ -369,6 +378,27 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 			shown = string([]rune(shown)[:rowLimit]) + "..."
 		}
 		rows = append(rows, row{text: fmt.Sprintf("%s%d|%s", it.marker, it.line, shown), header: headerAt, first: it.first, last: it.first})
+	}
+	return heldRows(e, ctx, rows)
+}
+
+// heldRows puts each run of anchored rows the agent already holds as one held marker that stands for their log lines.
+func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
+	done := map[*engine.Source]bool{}
+	for _, r := range rows {
+		source := r.source
+		if source == nil || source.View == nil || done[source] {
+			continue
+		}
+		done[source] = true
+		rows = engine.HeldGroups(rows, e.HeldLines(ctx, source.Canonical, *source.View), func(r row) int {
+			if r.source != source || !r.anchor || r.match {
+				return 0
+			}
+			return r.line
+		}, func(run []row, h engine.HeldRun) row {
+			return row{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}
+		})
 	}
 	return rows
 }

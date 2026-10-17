@@ -226,3 +226,88 @@ func (s Spawns) Of(agent string) (spawned time.Time, filed bool) {
 	}
 	return moment(text, ""), true
 }
+
+// contextMoments bounds the moments a Contexts file keeps: a fork needs only the latest before its spawn.
+const contextMoments = 32
+
+// Contexts are the moments Claude Code dropped what an agent had been shown, one file per agent, oldest first: SessionKey's for a
+// session's main agent, whose file SessionStart makes, AgentKey's for a subagent. A session with a file is one whose hooks tell nib when
+// that happens; a moment is written as the hook runs, after the compaction or clear it reports.
+type Contexts struct{ folder }
+
+// OpenContexts are the context moments under state, a folder from Directory.
+func OpenContexts(state string) Contexts { return Contexts{folder{filepath.Join(state, "contexts")}} }
+
+// SessionKey is the Contexts file of a session's main agent.
+func SessionKey(session string) string { return "session-" + session }
+
+// AgentKey is the Contexts file of a subagent.
+func AgentKey(agent string) string { return "agent-" + agent }
+
+// Drop notes that what the agent of key had been shown was dropped at moment.
+func (c Contexts) Drop(key string, moment, now time.Time) error {
+	moments, _ := c.Of(key)
+	moments = append(moments, moment)
+	if len(moments) > contextMoments {
+		moments = moments[len(moments)-contextMoments:]
+	}
+	lines := make([]string, len(moments))
+	for i, m := range moments {
+		lines[i] = strconv.FormatInt(m.UnixNano(), 10)
+	}
+	return c.put(key, strings.Join(lines, "\n"), now)
+}
+
+// Of are the moments filed for key, oldest first; filed is false when there is no file, so nib cannot tell when that agent's context drops.
+func (c Contexts) Of(key string) (moments []time.Time, filed bool) {
+	text, ok := c.get(key, contextMoments*21, false)
+	if !ok {
+		return nil, false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if m := moment(line, ""); !m.IsZero() {
+			moments = append(moments, m)
+		}
+	}
+	return moments, true
+}
+
+// Latest is the latest of moments before limit, any when limit is zero; zero when there is none.
+func Latest(moments []time.Time, limit time.Time) time.Time {
+	var latest time.Time
+	for _, m := range moments {
+		if (limit.IsZero() || m.Before(limit)) && m.After(latest) {
+			latest = m
+		}
+	}
+	return latest
+}
+
+// Drops are what the hook knew of a tool call's agent, one file per tool_use id: the latest moment its context was dropped, or "none". A
+// call with no file is from an agent whose drops nib cannot tell, as the session's hooks do not report them.
+type Drops struct{ folder }
+
+// OpenDrops are the per-call drop records under state, a folder from Directory.
+func OpenDrops(state string) Drops { return Drops{folder{filepath.Join(state, "drops")}} }
+
+// Note files the latest moment the context of the agent making toolUse was dropped, zero for never.
+func (d Drops) Note(toolUse string, dropped, now time.Time) error {
+	text := "none"
+	if !dropped.IsZero() {
+		text = strconv.FormatInt(dropped.UnixNano(), 10)
+	}
+	return d.put(toolUse, text, now)
+}
+
+// Take is the drop record filed for toolUse, removing it: known is false when there is none, dropped zero when the context never was.
+func (d Drops) Take(toolUse string) (dropped time.Time, known bool) {
+	text, ok := d.get(toolUse, 32, true)
+	if !ok {
+		return time.Time{}, false
+	}
+	if text == "none" {
+		return time.Time{}, true
+	}
+	dropped = moment(text, "")
+	return dropped, !dropped.IsZero()
+}

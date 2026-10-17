@@ -99,6 +99,8 @@ type Store struct {
 	forgotten map[string]bool
 	evicted   *list.List
 	taught    map[string]bool
+	// cleared is the latest moment each session's context was dropped, in Unix nanoseconds, so a drop told again is applied once.
+	cleared map[string]int64
 	// Now is the wall clock lines are stamped with when they become seen or known; it must be comparable with other processes' clocks, as a
 	// fork's moment comes from its harness. Set it before first use.
 	Now func() time.Time
@@ -109,7 +111,7 @@ func NewStore() *Store { return NewStoreWith(Limits{maxPaths, maxVersions, maxUn
 
 // NewStoreWith makes a store with the given limits.
 func NewStoreWith(limits Limits) *Store {
-	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, Now: time.Now}
+	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, cleared: map[string]int64{}, Now: time.Now}
 }
 
 func id(session, path string) string { return session + "\x00" + path }
@@ -201,6 +203,93 @@ func (s *Store) Teach(session, lesson string) bool {
 	return true
 }
 
+// Taught reports whether session was taught lesson, without teaching it.
+func (s *Store) Taught(session, lesson string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.taught[id(session, lesson)]
+}
+
+// Forget drops every line session saw or knew before moment, and every lesson it was taught, as its harness compacted or cleared the agent's
+// context then; a version left with no line seen still restricts edits, so nothing seen before the moment anchors one without being shown
+// again. It reports whether moment is later than the last one given for session; an earlier or equal one changes nothing.
+func (s *Store) Forget(session string, moment time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at := moment.UnixNano()
+	if at <= s.cleared[session] {
+		return false
+	}
+	s.cleared[session] = at
+	prefix := session + "\x00"
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		h := element.Value.(*history)
+		if !strings.HasPrefix(h.id, prefix) {
+			continue
+		}
+		// New versions rather than changed ones, so a call already holding the old ones reads them unchanged.
+		for i, v := range h.versions {
+			kept := &Version{View: v.View, at: v.at}
+			kept.Seen, kept.seenAt = after(v.Seen, v.seenAt, at)
+			kept.Known, kept.knownAt = after(v.Known, v.knownAt, at)
+			if kept.Seen == nil {
+				kept.Seen, kept.seenAt = map[int]bool{}, map[int]int64{}
+			}
+			h.versions[i] = kept
+		}
+	}
+	for key := range s.taught {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.taught, key)
+		}
+	}
+	return true
+}
+
+// Held maps each line of current that session saw in full in a version it still holds, and that has not changed since, to its number in
+// that version, the newest such version first; a version whose diff to current times out adds none. The seen lines are copied under the
+// store's lock and diffed outside it, so it is safe beside concurrent records.
+func (s *Store) Held(session, path string, current View) map[int]int {
+	type seenVersion struct {
+		key   string
+		lines []string
+		seen  []int
+	}
+	var versions []seenVersion
+	s.mu.Lock()
+	if element, ok := s.histories[id(session, path)]; ok {
+		for _, v := range element.Value.(*history).versions {
+			if len(v.Seen) > 0 {
+				versions = append(versions, seenVersion{v.Key, v.Lines, sortedKeys(v.Seen)})
+			}
+		}
+	}
+	s.mu.Unlock()
+	held := map[int]int{}
+	for _, v := range versions {
+		if v.key == current.Key {
+			for _, line := range v.seen {
+				if _, ok := held[line]; !ok && line >= 1 && line <= len(current.Lines) {
+					held[line] = line
+				}
+			}
+			continue
+		}
+		mapping, ok := LineMap(v.lines, current.Lines)
+		if !ok {
+			continue
+		}
+		for _, old := range v.seen {
+			if now, ok := mapping[old]; ok {
+				if _, taken := held[now]; !taken {
+					held[now] = old
+				}
+			}
+		}
+	}
+	return held
+}
+
 // stamp adds lines to set, noting now for each line new to it.
 func stamp(set map[int]bool, at map[int]int64, lines []int, now int64) (map[int]bool, map[int]int64) {
 	if set == nil {
@@ -222,6 +311,20 @@ func before(set map[int]bool, at map[int]int64, moment int64) (map[int]bool, map
 	kept, keptAt := map[int]bool{}, map[int]int64{}
 	for line := range set {
 		if at[line] < moment {
+			kept[line], keptAt[line] = true, at[line]
+		}
+	}
+	return kept, keptAt
+}
+
+// after is the part of set, with its moments, that joined it at or after moment.
+func after(set map[int]bool, at map[int]int64, moment int64) (map[int]bool, map[int]int64) {
+	if set == nil {
+		return nil, nil
+	}
+	kept, keptAt := map[int]bool{}, map[int]int64{}
+	for line := range set {
+		if at[line] >= moment {
 			kept[line], keptAt[line] = true, at[line]
 		}
 	}

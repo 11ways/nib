@@ -538,6 +538,8 @@ type blockRow struct {
 	text string
 	line int
 	at   int
+	// covers are the lines a held marker stands for.
+	covers []int
 	marks
 }
 
@@ -675,12 +677,19 @@ type ReadArgs struct {
 	Plain         bool
 	Collapse      *bool
 	Info          bool
+	// Full prints rows the agent already holds rather than their held markers.
+	Full bool
 }
 
 // Read reads files, lists directories and attaches images.
 func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 	if args.Info && (args.Plain || args.Collapse != nil || args.MaxLineLength != nil) {
 		return Result{}, errors.New("info: true gives facts instead of content, so it takes no plain, collapse or maxLineLength")
+	}
+	if args.Full && ctx.Markers {
+		whole := *ctx
+		whole.Markers = false
+		ctx = &whole
 	}
 	var caps []string
 	maxLineLength := valueOr(capped("maxLineLength", args.MaxLineLength, TextLimit, &caps), LineLimit)
@@ -1319,15 +1328,22 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 			if r.line > 0 {
 				seen = append(seen, r.line)
 			}
+			seen = append(seen, r.covers...)
 		}
 		e.Store.Record(ctx.Session, t.canonical, anchored, seen, nil)
 	}
 	cuts := func(rows []blockRow) []string {
 		m := make([]marks, len(rows))
+		markers := false
 		for i, r := range rows {
 			m[i] = r.marks
+			markers = markers || r.covers != nil
 		}
-		return rowNotes(t.display, m)
+		notes := rowNotes(t.display, m)
+		if markers {
+			notes = append(notes, e.HeldNote(ctx)...)
+		}
+		return notes
 	}
 	// A row bigger than a whole call's budget never fits, so continuing from it would repeat the same cut.
 	stop := func(line int, text string) string {
@@ -1365,6 +1381,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 						rows[i] = blockRow{text: r.text}
 					}
 				}
+				rows = e.heldRows(ctx, t.canonical, anchored, rows)
 				return &block{
 					head: fmt.Sprintf("%s %s; outline only. Read the ranges you need, like %s:120-180, or %s:1- for everything.", head, sizeText, t.display, t.display),
 					rows: rows,
@@ -1383,6 +1400,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 			for i := range rows {
 				rows[i] = rowFor(i + 1)
 			}
+			rows = e.heldRows(ctx, t.canonical, anchored, rows)
 			return &block{
 				head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, t.display, count+1),
 				rows: rows,
@@ -1412,6 +1430,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		last = r.end
 	}
+	rows = e.heldRows(ctx, t.canonical, anchored, rows)
 	return &block{head: head, rows: rows, finish: func(shown int) []string {
 		record(rows[:shown])
 		notes := cuts(rows[:shown])
@@ -1438,4 +1457,11 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		return append(append(ending, footer), notes...)
 	}}, nil
+}
+
+// heldRows puts each run of rows the agent already holds as its marker, which covers the run's lines.
+func (e *Engine) heldRows(ctx *Context, canonical string, view snapshots.View, rows []blockRow) []blockRow {
+	return HeldGroups(rows, e.HeldLines(ctx, canonical, view), func(r blockRow) int { return r.line }, func(run []blockRow, r HeldRun) blockRow {
+		return blockRow{text: r.Marker(), at: run[0].at, covers: r.Lines()}
+	})
 }

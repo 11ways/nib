@@ -351,52 +351,73 @@ func matches(matcher, tool string) bool {
 	return err == nil && pattern.MatchString(tool)
 }
 
-// addHook registers nib's PreToolUse hook for each of hook.Matchers that no nib hook covers yet, whichever matcher an older setup gave it.
+// addHook registers nib's hook for each of hook.Matchers that no nib hook of its event covers yet, whichever matcher an older setup gave it.
 func addHook(json object, command []string) ([]change, error) {
 	hooks, err := objectAt(json, "hooks")
 	if err != nil {
 		return nil, err
 	}
-	entries, err := listAt(hooks, "PreToolUse", "hooks.PreToolUse")
-	if err != nil {
-		return nil, err
-	}
-	var nibMatchers []string
-	for _, entry := range entries {
-		e, ok := entry.(object)
-		if !ok {
-			continue
+	var added, events []string
+	for _, m := range hook.Matchers {
+		if !slices.Contains(events, m.Event) {
+			events = append(events, m.Event)
 		}
-		value, _ := e.get("hooks")
-		list, _ := value.([]any)
-		for _, h := range list {
-			if h, ok := h.(object); ok {
-				value, _ := h.get("command")
-				if c, ok := value.(string); ok && isNibHook(c) {
-					matcher, _ := e.get("matcher")
-					text, _ := matcher.(string)
-					nibMatchers = append(nibMatchers, text)
+	}
+	for _, event := range events {
+		entries, err := listAt(hooks, event, "hooks."+event)
+		if err != nil {
+			return nil, err
+		}
+		var nibMatchers []string
+		for _, entry := range entries {
+			e, ok := entry.(object)
+			if !ok {
+				continue
+			}
+			value, _ := e.get("hooks")
+			list, _ := value.([]any)
+			for _, h := range list {
+				if h, ok := h.(object); ok {
+					value, _ := h.get("command")
+					if c, ok := value.(string); ok && isNibHook(c) {
+						matcher, _ := e.get("matcher")
+						text, _ := matcher.(string)
+						nibMatchers = append(nibMatchers, text)
+					}
 				}
 			}
 		}
-	}
-	var missing []string
-	for _, m := range hook.Matchers {
-		if slices.ContainsFunc(nibMatchers, func(matcher string) bool { return matches(matcher, m.Tool) }) {
+		var wanted, missing []string
+		for _, m := range hook.Matchers {
+			if m.Event != event {
+				continue
+			}
+			wanted = append(wanted, m.Matcher)
+			if slices.ContainsFunc(nibMatchers, func(matcher string) bool { return matches(matcher, m.Selects) }) {
+				continue
+			}
+			missing = append(missing, m.Matcher)
+			entries = append(entries, obj("matcher", m.Matcher, "hooks", []any{obj("type", "command", "command", shellLine(command)+" hook", "timeout", jsonNumber(10))}))
+		}
+		if len(missing) == 0 {
 			continue
 		}
-		missing = append(missing, m.Matcher)
-		entries = append(entries, obj("matcher", m.Matcher, "hooks", []any{obj("type", "command", "command", shellLine(command)+" hook", "timeout", jsonNumber(10))}))
+		hooks.set(event, entries)
+		what := event
+		if len(missing) < len(wanted) {
+			what += " for " + strings.Join(missing, ", ")
+		}
+		added = append(added, what)
 	}
-	if len(missing) == 0 {
+	switch len(added) {
+	case 0:
 		return nil, nil
+	case 1:
+		json.set("hooks", hooks)
+		return adds("nib's " + added[0] + " hook"), nil
 	}
-	hooks.set("PreToolUse", entries)
 	json.set("hooks", hooks)
-	if len(missing) < len(hook.Matchers) {
-		return adds("nib's PreToolUse hook for " + strings.Join(missing, ", ")), nil
-	}
-	return adds("nib's PreToolUse hook"), nil
+	return adds("nib's " + strings.Join(added[:len(added)-1], ", ") + " and " + added[len(added)-1] + " hooks"), nil
 }
 
 // approve approves the project's nib server so Claude Code does not ask; one the user disabled stays disabled.

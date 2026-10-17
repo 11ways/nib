@@ -47,6 +47,12 @@ type Options struct {
 	// Origin is where an OpenCode session comes from, a fork or a subagent's child session, asked once per session, on the first call nib
 	// sees from it; nil, or ok false, starts every session on its own.
 	Origin func(session string) (origin opencode.Origin, ok bool)
+	// Dropped is what nib's hook filed for a Claude Code call: the latest moment the calling agent's context was compacted or cleared, zero
+	// for never; known is false when the hook could not tell. Nil, or not known, never shows held markers.
+	Dropped func(toolUse string) (dropped time.Time, known bool)
+	// Compacted is the latest moment OpenCode compacted a session, zero for never; ok is false when it cannot be told. Nil never shows held
+	// markers to OpenCode sessions.
+	Compacted func(session string) (compacted time.Time, ok bool)
 	// Providers are the programs whose tools nib offers as its own, as NAME_TOOL.
 	Providers []*providers.Provider
 	// NamesFile, when set, turns on naming the directories an agent's paths keep running through, and keeps the names agents get there
@@ -121,6 +127,7 @@ type paused struct {
 	answers  mcp.InputResponseMap
 	agent    string
 	worktree string
+	markers  bool
 }
 
 // pausedLimit bounds the paused calls a session remembers; a client that never sends one again leaves it to be dropped.
@@ -156,6 +163,8 @@ type Server struct {
 	started map[string]bool
 	// children are the agents started from a known parent; greeted are the subagents told their directory and names on their first call.
 	children, greeted map[string]bool
+	// last is each agent's latest call, its tool and arguments, by engine session: the same call sent again at once prints held rows whole.
+	last map[string]string
 	// defined are the named directories agents defined with nibash's hash -d.
 	defined *names.Defined
 }
@@ -211,7 +220,7 @@ func New(options Options) *Server {
 	if e == nil {
 		e = engine.New()
 	}
-	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, defined: names.NewDefined()}
+	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, last: map[string]string{}, defined: names.NewDefined()}
 	if options.NamesFile != "" && options.Names != nil {
 		s.defined.Automatic(options.NamesFile, options.Names.Base)
 	}
@@ -307,12 +316,14 @@ func (s *Server) shell(c *call) shellKey {
 }
 
 // call is one tool call's exchange with its client: the agent making it, the worktree it works in ("" for the server's directory), whether
-// this is its first call as a subagent, and the answers it carries, from this round and the earlier rounds of the same call.
+// this is its first call as a subagent, whether rows it already holds may print as held markers, and the answers it carries, from this round
+// and the earlier rounds of the same call.
 type call struct {
 	key      *mcp.ServerSession
 	agent    string
 	worktree string
 	first    bool
+	markers  bool
 	answers  mcp.InputResponseMap
 }
 
@@ -332,7 +343,7 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		state.mu.Lock()
 		if earlier, ok := state.paused[token]; ok {
 			maps.Copy(c.answers, earlier.answers)
-			c.agent, c.worktree, resumed = earlier.agent, earlier.worktree, true
+			c.agent, c.worktree, c.markers, resumed = earlier.agent, earlier.worktree, earlier.markers, true
 			delete(state.paused, token)
 			state.order = slices.DeleteFunc(state.order, func(t string) bool { return t == token })
 		}
@@ -341,12 +352,18 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 	if !resumed {
 		var from *origin
 		c.agent, from, c.worktree = s.identify(request)
+		known, dropped := s.dropped(request, c.agent)
 		s.seeding.Lock()
 		s.start(c.key, c.agent, from, originDepth)
+		// After the start, so a fork drops what its parent had been shown before a compaction it inherited too.
+		if !dropped.IsZero() {
+			s.engine.Store.Forget(s.engineSession(c.agent), dropped)
+		}
 		if c.agent != "" && !s.greeted[c.agent] && (strings.HasPrefix(c.agent, claudeAgent) || s.children[c.agent]) {
 			s.greeted[c.agent], c.first = true, true
 		}
 		s.seeding.Unlock()
+		c.markers = known && !s.repeated(c.agent, request)
 	}
 	maps.Copy(c.answers, request.Params.InputResponses)
 	return c
@@ -402,6 +419,35 @@ func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *ori
 	return claudeAgent + found.ID, from, found.Worktree
 }
 
+// dropped is the latest moment the context of the agent making a first round was compacted or cleared, zero for never; known is false when
+// nib cannot tell, from its hook for a Claude Code agent or from OpenCode's database for an OpenCode session.
+func (s *Server) dropped(request *mcp.CallToolRequest, agent string) (known bool, dropped time.Time) {
+	if session, ok := strings.CutPrefix(agent, openCodeSession); ok {
+		if s.options.Compacted == nil {
+			return false, time.Time{}
+		}
+		compacted, ok := s.options.Compacted(session)
+		return ok, compacted
+	}
+	toolUse, _ := request.Params.Meta["claudecode/toolUseId"].(string)
+	if s.options.Dropped == nil || toolUse == "" {
+		return false, time.Time{}
+	}
+	dropped, known = s.options.Dropped(toolUse)
+	return known, dropped
+}
+
+// repeated is true when request is the same call, tool and arguments, as the agent's latest, and notes it as the latest.
+func (s *Server) repeated(agent string, request *mcp.CallToolRequest) bool {
+	call := request.Params.Name + "\x00" + string(request.Params.Arguments)
+	session := s.engineSession(agent)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	same := s.last[session] == call
+	s.last[session] = call
+	return same
+}
+
 // start gives a subagent, on the first call nib sees from it, what it inherits from its parent: every subagent the named directories its
 // parent saw before the subagent's moment, and a fork, which starts with its parent's conversation up to then, a copy of the lines its parent
 // had seen before it. An OpenCode session's origin is asked of OpenCode only here, and a parent session that never called nib is started
@@ -451,7 +497,7 @@ func (s *Server) pause(c *call, q question) *mcp.CallToolResult {
 	state := s.state(c.key)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.paused[token] = paused{c.answers, c.agent, c.worktree}
+	state.paused[token] = paused{c.answers, c.agent, c.worktree, c.markers}
 	state.order = append(state.order, token)
 	for len(state.order) > pausedLimit {
 		delete(state.paused, state.order[0])
@@ -594,6 +640,7 @@ func (s *Server) context(ctx context.Context, c *call, roots []string) *engine.C
 		Directory: s.directory(c),
 		Session:   s.engineSession(c.agent),
 		Sandbox:   s.options.Sandbox,
+		Markers:   c.markers,
 	}
 	if roots != nil {
 		e.Roots = func(context.Context) ([]string, error) { return roots, nil }
@@ -919,7 +966,11 @@ func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, _ *c
 	if err != nil {
 		return engine.Result{}, err
 	}
-	readArgs := engine.ReadArgs{Paths: paths, MaxLineLength: maxLineLength, Plain: plain, Info: info}
+	full, _, err := args.flag("full", notes)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	readArgs := engine.ReadArgs{Paths: paths, MaxLineLength: maxLineLength, Plain: plain, Info: info, Full: full}
 	if hasCollapse {
 		readArgs.Collapse = &collapse
 	}

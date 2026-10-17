@@ -1157,6 +1157,8 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 		seen   bool
 		mark   *marks
 		change *change
+		// covers are the lines a held marker stands for, context lines only: a match row is what the search is for, so it always prints.
+		covers []int
 	}
 	var groups []group
 	previous := 0
@@ -1231,6 +1233,21 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 		groups = append(groups, g)
 		previous = line
 	}
+	if f.anchored != nil {
+		groups = HeldGroups(groups, e.HeldLines(ctx, t.canonical, *f.anchored), func(g group) int {
+			if hits[g.line] || g.change != nil || !g.seen || g.mark != nil {
+				return 0
+			}
+			return g.line
+		}, func(run []group, r HeldRun) group {
+			first := run[0]
+			marker := group{line: first.line, rows: []string{r.Marker()}, covers: r.Lines()}
+			if len(first.rows) > 1 {
+				marker.rows = append([]string{first.rows[0]}, marker.rows...)
+			}
+			return marker
+		})
+	}
 	notes := func(kept []group, stop int) []string {
 		var out []string
 		if stop > 0 {
@@ -1259,7 +1276,12 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 				m = append(m, *g.mark)
 			}
 		}
-		return append(out, rowNotes(t.display, m)...)
+		out = append(out, rowNotes(t.display, m)...)
+		// Only a peek: notes are also worked out to size the block, so the lesson counts as taught once the block is final.
+		if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil }) && !e.Store.Taught(ctx.Session, heldLessonKey) {
+			out = append(out, heldLesson)
+		}
+		return out
 	}
 	size := func(rows []string) int {
 		n := 1
@@ -1295,12 +1317,16 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 	}
 	block := strings.Join(append(append([]string{head}, allRows(kept)...), notes(kept, stop)...), "\n")
 	*left -= len(block) + 2
+	if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil }) {
+		e.Store.Teach(ctx.Session, heldLessonKey)
+	}
 	if f.anchored != nil {
 		seen := []int{}
 		for _, g := range kept {
 			if g.seen {
 				seen = append(seen, g.line)
 			}
+			seen = append(seen, g.covers...)
 		}
 		e.Store.Record(ctx.Session, t.canonical, *f.anchored, seen, nil)
 	}

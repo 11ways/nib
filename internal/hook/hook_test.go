@@ -307,3 +307,76 @@ func TestAForksSpawnMomentIsReadFromItsParentsTranscript(t *testing.T) {
 		t.Fatalf("a moment that cannot be told must be filed as unknown, got %v %v", at, filed)
 	}
 }
+
+func TestContextDropsAreNotedAndFiledWithEveryNibCall(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	run := func(fields map[string]any) {
+		t.Helper()
+		data, _ := json.Marshal(fields)
+		if got := Run(data, state); got != "" {
+			t.Fatalf("%v must pass untouched, got %q", fields, got)
+		}
+	}
+	call := func(toolUse, agent string) {
+		run(map[string]any{"session_id": "6d0b", "hook_event_name": "PreToolUse", "tool_name": "mcp__nib__read", "tool_input": map[string]any{}, "tool_use_id": toolUse, "agent_id": agent})
+	}
+	drops := hookstate.OpenDrops(state)
+	// Before a session start was noted, nib cannot tell when the session's contexts drop: no drop record at all.
+	call("toolu_before", "")
+	if _, known := drops.Take("toolu_before"); known {
+		t.Fatal("a session whose start the hook never saw has no drop record")
+	}
+	before := time.Now()
+	run(map[string]any{"session_id": "6d0b", "hook_event_name": "SessionStart", "source": "startup"})
+	call("toolu_main", "")
+	started, known := drops.Take("toolu_main")
+	if !known || started.Before(before) {
+		t.Fatalf("the main agent's call carries its session start: %v %v", started, known)
+	}
+	call("toolu_sub", "a1d576263ade979e4")
+	if dropped, known := drops.Take("toolu_sub"); !known || !dropped.IsZero() {
+		t.Fatalf("a subagent never compacted has no drop: %v %v", dropped, known)
+	}
+	run(map[string]any{"session_id": "6d0b", "hook_event_name": "PostCompact", "trigger": "auto", "agent_id": "a1d576263ade979e4"})
+	call("toolu_sub", "a1d576263ade979e4")
+	if dropped, known := drops.Take("toolu_sub"); !known || !dropped.After(started) {
+		t.Fatalf("the subagent's compaction is filed with its call: %v %v", dropped, known)
+	}
+	call("toolu_main", "")
+	if dropped, _ := drops.Take("toolu_main"); !dropped.Equal(started) {
+		t.Fatalf("a subagent's compaction is not the main agent's: %v", dropped)
+	}
+	if _, known := drops.Take("toolu_main"); known {
+		t.Fatal("a drop record is taken once")
+	}
+}
+
+func TestAForkInheritsItsParentsDropsBeforeItsSpawn(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	contexts := hookstate.OpenContexts(state)
+	now := time.Now()
+	moment := func(seconds int64) time.Time { return time.Unix(seconds, 0) }
+	for _, m := range []int64{100, 300} {
+		if err := contexts.Drop(hookstate.SessionKey("6d0b"), moment(m), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := contexts.Drop(hookstate.AgentKey("a83334bbe36e1e7ac"), moment(250), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		agent hookstate.Agent
+		want  time.Time
+	}{
+		// The main agent's compaction at 300 came after the spawn at 200, so the fork still has what it was shown before it.
+		{hookstate.Agent{ID: "a3f5b656e725f8dc1", Spawned: true, Forked: true, At: moment(200)}, moment(100)},
+		{hookstate.Agent{ID: "a3f5b656e725f8dc1", Spawned: true, Forked: true}, moment(300)},
+		{hookstate.Agent{ID: "a30cd37a40afff1e9", Spawned: true, Forked: true, Parent: "a83334bbe36e1e7ac", At: moment(260)}, moment(250)},
+		// A subagent that is not a fork starts with none of its parent's conversation.
+		{hookstate.Agent{ID: "a5cdeb96678c0dc2c", Spawned: true, At: moment(400)}, time.Time{}},
+	} {
+		if got, known := droppedAt("6d0b", c.agent, state); !known || !got.Equal(c.want) {
+			t.Errorf("%+v: got %v %v, want %v", c.agent, got, known, c.want)
+		}
+	}
+}

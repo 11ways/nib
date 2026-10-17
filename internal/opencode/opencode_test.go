@@ -104,6 +104,49 @@ func TestOfReadsTheParentAndTheMoment(t *testing.T) {
 	}
 }
 
+func TestCompactedIsTheLatestCompactionOfASessionOpenCode2Holds(t *testing.T) {
+	folder := t.TempDir()
+	path := filepath.Join(folder, "opencode.db")
+	database(t, path)
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range [][]any{
+		{"msg_c1", "compaction", 21, 5500, 5500, `{"type":"compaction","reason":"auto","summary":"s","recent":""}`},
+		{"msg_c2", "compaction", 22, 6000, 6000, `{"type":"compaction","reason":"manual","summary":"s","recent":""}`},
+	} {
+		if _, err := db.Exec(sqlRow("ses_parent", row)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	// OpenCode's first database, without OpenCode 2's tables, says nothing; the next one holds the sessions.
+	v1 := filepath.Join(folder, "v1.db")
+	if old, err := sql.Open("sqlite", "file:"+v1); err != nil {
+		t.Fatal(err)
+	} else if _, err := old.Exec(`create table session (id text primary key)`); err != nil {
+		t.Fatal(err)
+	} else {
+		old.Close()
+	}
+	databases := []string{v1, path}
+	if got, ok := Compacted(databases, "ses_parent"); !ok || !got.Equal(time.UnixMilli(6001)) {
+		t.Fatalf("parent: %v %v", got, ok)
+	}
+	if got, ok := Compacted(databases, "ses_child"); !ok || !got.IsZero() {
+		t.Fatalf("a session never compacted: %v %v", got, ok)
+	}
+	for _, missing := range [][]string{{v1}, databases} {
+		if got, ok := Compacted(missing, "ses_unknown"); ok {
+			t.Fatalf("%v: a session no database holds: %v", missing, got)
+		}
+	}
+	if got, ok := Compacted([]string{v1}, "ses_parent"); ok {
+		t.Fatalf("a database without OpenCode 2's tables cannot tell: %v", got)
+	}
+}
+
 func TestDatabasesAreWhereOpenCodeKeepsThem(t *testing.T) {
 	data := t.TempDir()
 	folder := filepath.Join(data, "opencode")

@@ -28,6 +28,8 @@ type fixture struct {
 	sandbox   bool
 	// names, when set, are the named directories each call's tools carry.
 	names *names.View
+	// markers lets rows the session already holds print as held markers.
+	markers bool
 }
 
 func newFixture(t *testing.T, files map[string]string) *fixture {
@@ -48,7 +50,7 @@ func newFixture(t *testing.T, files map[string]string) *fixture {
 	e := engine.New()
 	f := &fixture{t: t, directory: directory, engine: e}
 	f.tools = func() *engine.Context {
-		tools := &engine.Context{Ctx: context.Background(), Directory: directory, Session: "s", Sandbox: f.sandbox}
+		tools := &engine.Context{Ctx: context.Background(), Directory: directory, Session: "s", Sandbox: f.sandbox, Markers: f.markers}
 		if f.names != nil {
 			tools.Names = f.names
 		}
@@ -428,4 +430,42 @@ func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 
 func parse(command string) (*syntax.File, error) {
 	return syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+}
+
+func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers + "six\nseven\n"})
+	f.markers = true
+	first := f.run("cat a.txt")
+	tag := tagOf(t, first)
+	if !strings.Contains(first, "3:three\n4:four needle") {
+		t.Fatalf("the first view prints the rows: %s", first)
+	}
+	again := f.run("sed -n 1,7p a.txt")
+	expect(t, again, fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]\n%s", tag, heldLessonText(t, again)))
+	if later := f.run("head -n 7 a.txt"); later != fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]", tag) {
+		t.Fatalf("the lesson comes once: %s", later)
+	}
+	// A grep match row is what the command is for, so it prints however well the session knows it.
+	if out := f.run("grep -n -A3 two a.txt"); !strings.Contains(out, "*2:two needle\n[lines 3-5 unchanged since you saw them]") {
+		t.Fatalf("grep: %s", out)
+	}
+	// The lines a marker stands for stay seen, so an edit anchors on them with no read.
+	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 6:\n+SIX", tag)); err != nil {
+		t.Fatalf("edit inside a marker: %v", err)
+	}
+	f.markers = false
+	if out := f.run("sed -n 1,3p a.txt"); !strings.Contains(out, "1:one\n2:two needle\n3:three") {
+		t.Fatalf("without markers the rows print: %s", out)
+	}
+}
+
+// heldLessonText is the lesson line a first held marker ends with.
+func heldLessonText(t *testing.T, out string) string {
+	t.Helper()
+	lines := strings.Split(out, "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "[a [lines A-B unchanged since you saw them] row stands for") {
+		t.Fatalf("no lesson in %s", out)
+	}
+	return last
 }

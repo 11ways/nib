@@ -1,8 +1,10 @@
-// Package hook is nib's Claude Code PreToolUse hook. With nibash owning the shell and setup denying the other built-in file tools, only the
-// built-in Read is left, which stays for PDFs and notebooks: the hook refuses it for any other file, naming the exact nib read to send instead.
-// For nib's own tools it only reports: a subagent's call is filed under its tool_use id, with the agent that spawned it, when, whether it is
-// a fork and the worktree it was spawned in, so the server keeps that agent's state apart, works in its worktree, and starts it with what it
-// inherits: a fork its parent's seen lines, every subagent the named directories its parent had defined when it was spawned.
+// Package hook is nib's Claude Code hook. With nibash owning the shell and setup denying the other built-in file tools, only the built-in
+// Read is left, which stays for PDFs and notebooks: its PreToolUse hook refuses it for any other file, naming the exact nib read to send
+// instead. For nib's own tools it only reports: a subagent's call is filed under its tool_use id, with the agent that spawned it, when,
+// whether it is a fork and the worktree it was spawned in, so the server keeps that agent's state apart, works in its worktree, and starts it
+// with what it inherits: a fork its parent's seen lines, every subagent the named directories its parent had defined when it was spawned.
+// SessionStart and PostCompact note when an agent's context was dropped, and every nib call is filed with the latest such moment, so the
+// server stops counting lines the agent was shown before it.
 package hook
 
 import (
@@ -23,11 +25,19 @@ import (
 	"github.com/11ways/nib/internal/hookstate"
 )
 
-// Matcher is a hook registration: the matcher setup writes, and a tool name it must match for the hook to be registered for its job.
-type Matcher struct{ Matcher, Tool string }
+// Matcher is a hook registration: the event, the matcher setup writes, and what it must select for the hook to be registered for its job (a
+// tool name, or for the other events a trigger or source).
+type Matcher struct{ Event, Matcher, Selects string }
 
-// Matchers are the hook's registrations: the built-in Read it guards, and nib's own tools, whose subagent calls it files for the server.
-var Matchers = []Matcher{{"Read", "Read"}, {"mcp__nib__.*", "mcp__nib__read"}}
+// Matchers are the hook's registrations: the built-in Read it guards, nib's own tools, whose calls it files for the server, and the events
+// that drop an agent's context: every session start (a new conversation, /clear, a resume, or a compaction) and every compaction, whose
+// matchers select by trigger.
+var Matchers = []Matcher{
+	{"PreToolUse", "Read", "Read"},
+	{"PreToolUse", "mcp__nib__.*", "mcp__nib__read"},
+	{"SessionStart", "", "clear"},
+	{"PostCompact", "", "auto"},
+}
 
 // taggedLimit is the engine's text limit: past it nib reads a file only plain.
 const taggedLimit = 2 * 1024 * 1024
@@ -37,6 +47,7 @@ type Input struct {
 	SessionID      string         `json:"session_id"`
 	TranscriptPath string         `json:"transcript_path"`
 	Cwd            string         `json:"cwd"`
+	HookEventName  string         `json:"hook_event_name"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
 	ToolUseID      string         `json:"tool_use_id"`
@@ -319,7 +330,8 @@ func firstTime(session, call, directory string) bool {
 
 // Run reads one hook call and returns Claude Code's deny decision when nib should take the call, or "" to let it run. An MCP tool's call is
 // never refused; a subagent's is filed under its tool_use id, with its parent, spawn moment and whether it is a fork when those are known,
-// and a failure to file it only leaves that call to the main agent's state.
+// and a failure to file it only leaves that call to the main agent's state. A session start or compaction is noted for the agent it drops
+// the context of.
 func Run(stdin []byte, state string) string {
 	var input Input
 	if json.Unmarshal(stdin, &input) != nil {
@@ -328,14 +340,26 @@ func Run(stdin []byte, state string) string {
 	if state == "" {
 		state = hookstate.Directory()
 	}
+	now := time.Now()
+	switch input.HookEventName {
+	case "SessionStart", "PostCompact":
+		if key, ok := contextKey(input.SessionID, input.AgentID); ok {
+			_ = hookstate.OpenContexts(state).Drop(key, now, now)
+		}
+		return ""
+	}
 	if strings.HasPrefix(input.ToolName, "mcp__") {
+		var found origin
+		agent := hookstate.Agent{ID: input.AgentID}
 		if input.AgentID != "" {
-			now := time.Now()
-			agent := hookstate.Agent{ID: input.AgentID}
-			if found, ok := originOf(input); ok {
+			var ok bool
+			if found, ok = originOf(input); ok {
 				agent.Spawned, agent.Forked, agent.Parent, agent.At, agent.Worktree = true, found.fork, found.parent, spawnedAt(input, found, state, now), found.worktree
 			}
 			_ = hookstate.OpenAgents(state).Record(input.ToolUseID, agent, now)
+		}
+		if dropped, known := droppedAt(input.SessionID, agent, state); known {
+			_ = hookstate.OpenDrops(state).Note(input.ToolUseID, dropped, now)
 		}
 		return ""
 	}
@@ -349,4 +373,51 @@ func Run(stdin []byte, state string) string {
 		"permissionDecisionReason": reason,
 	}})
 	return string(encoded)
+}
+
+// contextKey is the Contexts file of the agent a hook call comes from: its subagent's, else its session's main agent's.
+func contextKey(session, agent string) (string, bool) {
+	key := hookstate.SessionKey(session)
+	if agent != "" {
+		key = hookstate.AgentKey(agent)
+	}
+	return key, session != "" && hookstate.IsID(session) && (agent == "" || hookstate.IsID(agent)) && hookstate.IsID(key)
+}
+
+// droppedAt is the latest moment what agent had been shown was dropped, zero for never; known is false when the session's hooks do not report
+// it. A fork starts with its parent's conversation as it was at the spawn, so the parent's latest drop before then counts too; without a
+// spawn moment, its latest at all, which can only drop more.
+func droppedAt(session string, agent hookstate.Agent, state string) (dropped time.Time, known bool) {
+	contexts := hookstate.OpenContexts(state)
+	main, ok := contextKey(session, "")
+	if !ok {
+		return time.Time{}, false
+	}
+	moments, filed := contexts.Of(main)
+	if !filed {
+		return time.Time{}, false
+	}
+	if agent.ID == "" {
+		return hookstate.Latest(moments, time.Time{}), true
+	}
+	own, ok := contextKey(session, agent.ID)
+	if !ok {
+		return time.Time{}, false
+	}
+	mine, _ := contexts.Of(own)
+	dropped = hookstate.Latest(mine, time.Time{})
+	if agent.Forked {
+		parent := moments
+		if agent.Parent != "" {
+			key, ok := contextKey(session, agent.Parent)
+			if !ok {
+				return time.Time{}, false
+			}
+			parent, _ = contexts.Of(key)
+		}
+		if inherited := hookstate.Latest(parent, agent.At); inherited.After(dropped) {
+			dropped = inherited
+		}
+	}
+	return dropped, true
 }

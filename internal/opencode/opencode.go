@@ -1,7 +1,6 @@
-// Package opencode reads the one thing nib needs from OpenCode 2's own database: which session a session was forked or spawned from, and
-// when. OpenCode
-// tells an MCP server only the session making a call, and starts its servers with its own environment, so nib finds the database where
-// OpenCode does and opens it read-only.
+// Package opencode reads the two things nib needs from OpenCode 2's own database: which session a session was forked or spawned from, and
+// when, and when it was last compacted. OpenCode tells an MCP server only the session making a call, and starts its servers with its own
+// environment, so nib finds the database where OpenCode does and opens it read-only.
 package opencode
 
 import (
@@ -113,4 +112,42 @@ func lookup(path, session string) (origin Origin, found bool, err error) {
 		fork.At = time.UnixMilli(latest.Int64 + 1)
 	}
 	return fork, true, nil
+}
+
+// Compacted is when OpenCode last compacted session, by the first of databases that holds it, zero for never; ok is false when none of them
+// holds it or can be read, so nib cannot tell. A fork holds copies of its parent's messages, compactions included, so a compaction before its
+// boundary counts for it too.
+func Compacted(databases []string, session string) (at time.Time, ok bool) {
+	for _, path := range databases {
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if at, found, err := compaction(path, session); err == nil && found {
+			return at, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// compaction reads session's latest compaction from one database; found is false when it does not hold the session. OpenCode appends a
+// compaction message when the compaction ends, stamped then, in whole milliseconds; nib makes no call for the session while it runs.
+func compaction(path, session string) (at time.Time, found bool, err error) {
+	location := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
+	db, err := sql.Open("sqlite", location.String())
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	defer db.Close()
+	var held sql.NullInt64
+	var latest sql.NullInt64
+	err = db.QueryRow(`select (select 1 from session_v2 where id = ?1),
+		(select max(time_created) from session_message where session_id = ?1 and type = 'compaction')`, session).Scan(&held, &latest)
+	if err != nil || !held.Valid {
+		return time.Time{}, false, err
+	}
+	if latest.Valid && latest.Int64 > 0 {
+		// One millisecond past it drops the lines shown in that millisecond too, which can only drop more.
+		at = time.UnixMilli(latest.Int64 + 1)
+	}
+	return at, true, nil
 }

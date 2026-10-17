@@ -62,6 +62,9 @@ type Context struct {
 	Authorize func(ctx context.Context, canonical, action string) error
 	Sandbox   bool
 	Names     Names
+	// Markers lets rows the agent already holds print as one [lines A-B ...] marker: nib learns when the agent's harness drops what it was
+	// shown, and the call is not an immediate repeat, which asks for them again.
+	Markers bool
 }
 
 // Names maps named directories to paths and back; the zero value of an implementation knows no names.

@@ -97,6 +97,33 @@ describe("MCP server", () => {
     expect((await call("nibash", { command: "if then" })).text).toStartWith("nibash: ")
   })
 
+  test("with nib's hook, rows an agent holds print as one marker until its context is compacted", async () => {
+    const directory = await workspace()
+    const runtime = await workspace()
+    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
+    const env = { XDG_RUNTIME_DIR: runtime }
+    const hook = async (input: Record<string, unknown>) => {
+      const run = Bun.spawn([await binary(), "hook"], { stdin: new Blob([JSON.stringify({ session_id: "6d0b5e1c", ...input })]), stdout: "pipe", env: { ...process.env, ...env } })
+      expect(await new Response(run.stdout).text()).toBe("")
+      expect(await run.exited).toBe(0)
+    }
+    const { client } = await connect(directory, { env })
+    let uses = 0
+    const read = async (selector: string) => {
+      const id = `toolu_${++uses}`
+      await hook({ hook_event_name: "PreToolUse", tool_name: "mcp__nib__read", tool_input: {}, tool_use_id: id })
+      const result = await client.callTool({ name: "read", arguments: { paths: [`a.txt:${selector}`] }, _meta: { "claudecode/toolUseId": id } }) as { content: { text: string }[] }
+      return result.content[0]!.text
+    }
+    await hook({ hook_event_name: "SessionStart", source: "startup" })
+    await read("1-5")
+    expect(await read("1-6")).toContain("\n[lines 1-5 unchanged since you saw them]\n6:line 6\n")
+    await hook({ hook_event_name: "PostCompact", trigger: "manual", compact_summary: "the summary" })
+    const after = await read("1-7")
+    expect(after).toContain("\n1:line 1\n")
+    expect(after).not.toContain("[lines")
+  })
+
   test("named directories from nib.json are announced, resolve in every tool and print in short form", async () => {
     const directory = await workspace()
     const deep = path.join(directory, "modules/server/src/main/java/be/example/server/orm")

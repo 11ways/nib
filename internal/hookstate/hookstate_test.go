@@ -176,3 +176,49 @@ func TestFoldersOthersCanEnterAndLinksAreNotTrusted(t *testing.T) {
 		t.Fatalf("a record that is a link must not be followed, got %+v", got)
 	}
 }
+
+func TestContextsKeepTheNewestMomentsAndDropsAreTakenOnce(t *testing.T) {
+	state := private(t)
+	contexts := OpenContexts(state)
+	if _, filed := contexts.Of(SessionKey("6d0b")); filed {
+		t.Fatal("no file before the first drop")
+	}
+	now := time.Now()
+	for i := range contextMoments + 3 {
+		if err := contexts.Drop(SessionKey("6d0b"), time.Unix(int64(100+i), 0), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	moments, filed := contexts.Of(SessionKey("6d0b"))
+	if !filed || len(moments) != contextMoments || !moments[0].Equal(time.Unix(103, 0)) {
+		t.Fatalf("got %d moments from %v, filed %v", len(moments), moments[0], filed)
+	}
+	if got := Latest(moments, time.Unix(110, 0)); !got.Equal(time.Unix(109, 0)) {
+		t.Fatalf("latest before 110: %v", got)
+	}
+	if got := Latest(moments, time.Time{}); !got.Equal(time.Unix(int64(100+contextMoments+2), 0)) {
+		t.Fatalf("latest: %v", got)
+	}
+	if got := Latest(moments, time.Unix(50, 0)); !got.IsZero() {
+		t.Fatalf("none before 50: %v", got)
+	}
+	drops := OpenDrops(state)
+	if err := drops.Note("toolu_a", time.Unix(0, 1234), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := drops.Note("toolu_b", time.Time{}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, known := drops.Take("toolu_a"); !known || !got.Equal(time.Unix(0, 1234)) {
+		t.Fatalf("a: %v %v", got, known)
+	}
+	if got, known := drops.Take("toolu_b"); !known || !got.IsZero() {
+		t.Fatalf("b: %v %v", got, known)
+	}
+	if _, known := drops.Take("toolu_a"); known {
+		t.Fatal("a drop record is taken once")
+	}
+	if err := drops.Note("../x", time.Time{}, now); err == nil {
+		t.Fatal("only Claude Code ids name records")
+	}
+}

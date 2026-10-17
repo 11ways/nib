@@ -188,3 +188,65 @@ func TestCopyAsOfTakesOnlyWhatWasSeenBefore(t *testing.T) {
 		t.Fatalf("the zero moment must copy everything, got %+v", got)
 	}
 }
+
+func lines(text ...string) View {
+	key := ""
+	for i, line := range text {
+		if i > 0 {
+			key += "\n"
+		}
+		key += line
+	}
+	return NewView(key, text)
+}
+
+func TestHeldFollowsSeenLinesAcrossVersionsUnchanged(t *testing.T) {
+	store := NewStore()
+	old := lines("a", "b", "c", "d")
+	store.Record("s", "/f", old, []int{1, 2, 3}, nil)
+	if got := store.Held("s", "/f", old); !reflect.DeepEqual(got, map[int]int{1: 1, 2: 2, 3: 3}) {
+		t.Fatalf("same version: %v", got)
+	}
+	// A line put above moves the rest down; the changed line c was never held there, and d was never seen.
+	current := lines("new", "a", "b", "C", "d")
+	store.Record("s", "/f", current, []int{1}, nil)
+	if got := store.Held("s", "/f", current); !reflect.DeepEqual(got, map[int]int{1: 1, 2: 1, 3: 2}) {
+		t.Fatalf("after the edit: %v", got)
+	}
+	if got := store.Held("other", "/f", current); len(got) != 0 {
+		t.Fatalf("another agent holds %v", got)
+	}
+}
+
+func TestForgetDropsWhatWasSeenBeforeItsMomentOnce(t *testing.T) {
+	clock := time.Unix(100, 0)
+	store := NewStore()
+	store.Now = func() time.Time { return clock }
+	file := lines("a", "b", "c")
+	store.Record("s", "/f", file, []int{1, 2}, []int{3})
+	store.Teach("s", "held")
+	clock = time.Unix(200, 0)
+	store.Record("s", "/f", file, []int{3}, nil)
+	store.Record("t", "/f", file, []int{1}, nil)
+	if !store.Forget("s", time.Unix(150, 0)) {
+		t.Fatal("a first drop applies")
+	}
+	version := store.Versions("s", "/f")[0]
+	if !reflect.DeepEqual(seen(version), []int{3}) || len(version.Known) != 0 {
+		t.Fatalf("seen %v known %v", seen(version), version.Known)
+	}
+	if !store.Teach("s", "held") {
+		t.Fatal("lessons are taught again after a drop")
+	}
+	if got := seen(store.Versions("t", "/f")[0]); !reflect.DeepEqual(got, []int{1}) {
+		t.Fatalf("another agent lost %v", got)
+	}
+	if store.Forget("s", time.Unix(150, 0)) || store.Forget("s", time.Unix(120, 0)) {
+		t.Fatal("a drop told again, or an older one, changes nothing")
+	}
+	// Nothing seen is a restriction, not a version that lets edits anchor anywhere.
+	store.Forget("s", time.Unix(300, 0))
+	if version := store.Versions("s", "/f")[0]; version.Seen == nil || len(version.Seen) != 0 {
+		t.Fatalf("seen after a later drop: %v", version.Seen)
+	}
+}
