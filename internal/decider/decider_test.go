@@ -216,20 +216,20 @@ func TestTheRequestCapLeavesWindowsUnjudgedKeywordsFirst(t *testing.T) {
 	}}
 	o := openRouterFor(f.serve(t), 5*time.Second, "")
 	wide := strings.Repeat("x", 300)
-	rows := make([]string, 6000)
+	rows := make([]string, 20000)
 	for i := range rows {
 		rows[i] = fmt.Sprintf("%d %s", i, wide)
 	}
-	rows[2000] = "error: the cause"
+	rows[9000] = "error: the cause"
 	choice := o.Decide(context.Background(), Input{Command: "c", Exit: 1, Rows: rows})
 	if f.count() != maxRequests || len(choice.Unjudged) == 0 {
 		t.Fatalf("%d requests, unjudged %+v", f.count(), choice.Unjudged)
 	}
 	for _, u := range choice.Unjudged {
-		if u.Start <= 2000 && 2000 < u.End {
+		if u.Start <= 9000 && 9000 < u.End {
 			t.Fatalf("the keyword window was not judged: %+v", choice.Unjudged)
 		}
-		if u.Reason != "over the 8-request limit" {
+		if u.Reason != fmt.Sprintf("over the %d-request limit", maxRequests) {
 			t.Fatalf("reason %q", u.Reason)
 		}
 	}
@@ -237,7 +237,7 @@ func TestTheRequestCapLeavesWindowsUnjudgedKeywordsFirst(t *testing.T) {
 	for _, p := range choice.Picks {
 		judged[p.Start] = true
 	}
-	if !judged[0] || !judged[5975] {
+	if !judged[0] || !judged[len(rows)-windowRows] {
 		t.Fatalf("the windows nearest the start and end must be judged")
 	}
 }

@@ -25,6 +25,12 @@
     ],
     "loses": {
       "summary": [
+        24,
+        25,
+        33,
+        34,
+        42,
+        43,
         51,
         52,
         60,
@@ -98,11 +104,7 @@
         366,
         367,
         375,
-        376,
-        384,
-        385,
-        393,
-        394
+        376
       ]
     }
   },
@@ -144,13 +146,7 @@
     "needs": [
       "config: reloaded config/routes.json",
       "routes: /v1/payments -> upstream \"payments-v2\""
-    ],
-    "loses": {
-      "summary": [
-        1701,
-        1702
-      ]
-    }
+    ]
   },
   {
     "name": "long-run",
@@ -304,7 +300,14 @@
       "search: print scores as integers",
       "^ src/zemble/utils\\.py \\| 23 ",
       "^ tests/test_mcp\\.py\\s+\\| 23 "
-    ]
+    ],
+    "loses": {
+      "summary": [
+        239,
+        243,
+        245
+      ]
+    }
   },
   {
     "name": "git-log-p",
@@ -534,16 +537,13 @@
         20966,
         20978,
         21008,
-        21020,
-        24228
+        21020
       ],
       "openrouter": [
         13437,
         13486,
         13541,
-        13590,
-        13646,
-        13699
+        13590
       ]
     }
   }

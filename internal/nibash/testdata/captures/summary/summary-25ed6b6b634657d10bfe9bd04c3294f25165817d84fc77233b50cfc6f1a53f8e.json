@@ -1,1 +1,0 @@
-"{\"summary\": \"docker.service is loaded/active/running (line 85) with docker.socket active/running (line 198), and sshd.service is loaded/active/running (line 106) with sshd-unix-local.socket active/listening (line 205). containerd.service is also active/running (line 80).\", \"ranges\": [[85, 85], [106, 106], [198, 198], [205, 205], [80, 80]]}"

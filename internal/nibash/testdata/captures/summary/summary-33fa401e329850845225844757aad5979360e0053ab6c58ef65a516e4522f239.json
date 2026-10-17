@@ -1,1 +1,0 @@
-"{\"summary\": \"The build does not succeed: it fails with \\\"build failed: 1 of 6 targets failed\\\" (line 3013). The only error shown is at line 1206, where the worker target fails with \\\"unsupported format \\\\\\\"cjs\\\\\\\" in config/build.json (supported: esm, iife)\\\"; the other five targets report done.\", \"ranges\": [[1205, 1207], [3012, 3013]]}"

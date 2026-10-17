@@ -22,7 +22,9 @@ const (
 	rowChars = 400
 	// requestBytes keeps a request under the 32,000 bytes past which Jev answers in its slower, less accurate long-context mode.
 	requestBytes = 30000
-	maxRequests  = 8
+	// maxRequests bounds one decision: 128 requests of about 30 KB is some 1.1M input tokens, a few cents at a decision model's price, and
+	// judges some 1,200 windows of a deduplicated log (gradle-browser's 608 took 65 requests and 2 s), 16 in flight at a time.
+	maxRequests = 128
 	// questionsVersion changes with the wording of the questions, so cached answers to other wording are not reused.
 	questionsVersion = 1
 	retryWait        = 200 * time.Millisecond

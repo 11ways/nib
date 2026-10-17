@@ -27,9 +27,10 @@ const (
 	decidedHead = 30
 	decidedTail = 100
 	pickContext = 3
-	// A summarizer reads the first excerptHead and last excerptTail log lines and the decider's picks scored excerptScore or more, each
-	// widened by excerptContext lines, up to excerptLines lines in all; picks go in best first, so it is the cap, not the score, that leaves
-	// out a passage the decider ranked low.
+	// A pick goes in best first unless fewer than pickNovelty of the kinds of row it holds are new (novelFirst); then it waits for the rest.
+	pickNovelty = 0.25
+	// A summarizer reads the first excerptHead and last excerptTail deduplicated entries and the decider's picks scored excerptScore or
+	// more, each widened by excerptContext lines, up to excerptLines entries in all.
 	excerptHead    = 30
 	excerptTail    = 100
 	excerptScore   = 0.3

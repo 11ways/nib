@@ -16,75 +16,46 @@ const nameMinChars = 24
 const varies = "[numbers vary] "
 
 // dedupe is a log as a model reads it: each line that occurs more than once, and each block engine.Repeats finds recurring, defined once in
-// the legend, and every occurrence left in place under its log line numbers, back-to-back runs as one entry; lines compare with their
-// digits masked, so the first text stands for variants that differ only in numbers.
+// the legend, and every occurrence left in place under its log line numbers, back-to-back runs as one entry. Runs compare by
+// engine.MaskedKeys, so a run of lines that differ only in timestamps, ids or durations is one entry under the first line's text; a
+// line or block elsewhere is named only where it is the same text, so a copy with other numbers is spelled out and no number is lost.
 func dedupe(lines []string) ([]decider.Entry, decider.Legend) {
 	plain := make([]engine.PlainLine, len(lines))
-	keys := make([]string, len(lines))
+	keys := engine.MaskedKeys(lines)
 	count := map[string]int{}
-	first := map[string]string{}
-	differs := map[string]bool{}
 	for i, line := range lines {
 		plain[i] = engine.PlainLine{At: i + 1, Text: line}
-		keys[i] = engine.MaskDigits(line)
-		count[keys[i]]++
-		if text, ok := first[keys[i]]; !ok {
-			first[keys[i]] = line
-		} else if text != line {
-			differs[keys[i]] = true
-		}
+		count[line]++
 	}
-	steps := engine.Repeats(plain, true)
+	steps := engine.RepeatsBy(plain, keys)
 	legend := decider.Legend{}
-	lineNames := map[string]string{}
-	blockNames := map[string]string{}
-	lineName := func(index int) string {
-		key := keys[index]
-		if name, ok := lineNames[key]; ok {
-			return name
+	names := map[string]string{}
+	numbered := map[string]int{}
+	// name is the legend name of a line (@L) or block (@B) of text, or with vary of every run whose copies differ only in numbers masked
+	// alike, under the first copy's text.
+	name := func(prefix, text string, vary bool, key string) string {
+		if !vary {
+			key = text
+		} else {
+			key = "\x00" + key
 		}
-		name := "@L" + strconv.Itoa(len(lineNames)+1)
-		lineNames[key] = name
-		text := first[key]
-		if differs[key] {
+		if n, ok := names[key]; ok {
+			return n
+		}
+		numbered[prefix]++
+		n := prefix + strconv.Itoa(numbered[prefix])
+		names[key] = n
+		if vary {
 			text = varies + text
 		}
-		legend[name] = text
-		return name
+		legend[n] = text
+		return n
 	}
-	blockTexts := map[string]string{}
-	// blockName names the block of length lines from start; a copy that differs in its digits keeps the digits of the lines that differ.
-	blockName := func(start, length int) string {
-		key := strings.Join(keys[start:start+length], "\n")
-		text := strings.Join(lines[start:start+length], "\n")
-		if name, ok := blockNames[key]; ok {
-			if blockTexts[key] == text {
-				return name
-			}
-			if !strings.HasPrefix(legend[name], varies) {
-				legend[name] = varies + legend[name]
-			}
-			var numbers []string
-			for offset, line := range strings.Split(blockTexts[key], "\n") {
-				if lines[start+offset] != line {
-					numbers = append(numbers, engine.Numbers(lines[start+offset])...)
-				}
-			}
-			return name + " " + strings.Join(numbers, " ")
-		}
-		name := "@B" + strconv.Itoa(len(blockNames)+1)
-		blockNames[key] = name
-		blockTexts[key] = text
-		legend[name] = text
-		return name
-	}
+	joined := func(start, length int) string { return strings.Join(lines[start:start+length], "\n") }
 	// An original a block recurs from is named too where its lines were shown one by one.
-	named := func(s engine.Repeat) bool {
-		return slices.Equal(lines[s.Of:s.Of+s.Length], lines[s.Index:s.Index+s.Length]) || copyLong(lines, s.Index, s.Length)
-	}
 	originals := map[int]int{}
 	for _, s := range steps {
-		if s.Kind == engine.RepeatEcho && named(s) {
+		if s.Kind == engine.RepeatEcho && slices.Equal(lines[s.Of:s.Of+s.Length], lines[s.Index:s.Index+s.Length]) {
 			originals[s.Of] = max(originals[s.Of], s.Length)
 		}
 	}
@@ -94,19 +65,14 @@ func dedupe(lines []string) ([]decider.Entry, decider.Legend) {
 			lineAt[s.Index] = i
 		}
 	}
-	// A line is named only where that saves enough: a variant that differs in its digits keeps them after the name, so no number is lost.
+	// A line is named only where that saves enough: a short line costs about what its name does.
 	single := func(index int) decider.Entry {
 		text := lines[index]
-		if count[keys[index]] > 1 && len([]rune(text)) >= nameMinChars {
-			name := lineName(index)
-			text = name
-			if lines[index] != first[keys[index]] {
-				text = name + " " + strings.Join(engine.Numbers(lines[index]), " ")
-			}
+		if count[text] > 1 && len([]rune(text)) >= nameMinChars {
+			text = name("@L", text, false, "")
 		}
 		return decider.Entry{First: index + 1, Last: index + 1, Text: text}
 	}
-	long := func(start, length int) bool { return copyLong(lines, start, length) }
 	var entries []decider.Entry
 	spell := func(start, length int) {
 		for offset := range length {
@@ -118,30 +84,30 @@ func dedupe(lines []string) ([]decider.Entry, decider.Legend) {
 		switch s.Kind {
 		case engine.RepeatLine:
 			if length, ok := originals[s.Index]; ok && shownOneByOne(steps, lineAt, s.Index, length) {
-				entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + length, Text: blockName(s.Index, length)})
+				text := joined(s.Index, length)
+				entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + length, Text: name("@B", text, false, "")})
 				i += length - 1
 				continue
 			}
 			entries = append(entries, single(s.Index))
 		case engine.RepeatRun:
-			if !s.Exact && !long(s.Index, s.Period) {
+			if !s.Exact && !copyLong(lines, s.Index, s.Period) {
 				spell(s.Index, s.Period*s.Copies)
 				continue
 			}
-			name := lineName(s.Index)
+			prefix := "@L"
 			if s.Period > 1 {
-				name = blockName(s.Index, s.Period)
-				if !s.Exact && !strings.HasPrefix(legend[name], varies) {
-					legend[name] = varies + legend[name]
-				}
+				prefix = "@B"
 			}
-			entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + s.Period*s.Copies, Text: name + " x" + strconv.Itoa(s.Copies)})
+			n := name(prefix, joined(s.Index, s.Period), !s.Exact, strings.Join(keys[s.Index:s.Index+s.Period], "\n"))
+			entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + s.Period*s.Copies, Text: n + " x" + strconv.Itoa(s.Copies)})
 		case engine.RepeatEcho:
-			if !named(s) {
+			if !slices.Equal(lines[s.Of:s.Of+s.Length], lines[s.Index:s.Index+s.Length]) {
 				spell(s.Index, s.Length)
 				continue
 			}
-			entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + s.Length, Text: blockName(s.Index, s.Length)})
+			text := joined(s.Index, s.Length)
+			entries = append(entries, decider.Entry{First: s.Index + 1, Last: s.Index + s.Length, Text: name("@B", text, false, "")})
 		}
 	}
 	return entries, legend

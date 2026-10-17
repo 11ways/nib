@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/engine"
 )
 
 // purposeChars caps the description a decider reads as the call's purpose.
@@ -139,8 +140,8 @@ func onRows(choice decider.Choice, entries []decider.Entry, middle []row) decide
 	return choice
 }
 
-// excerpt is the entries a summarizer reads: those of the start and end a decider keeps, and of the passages it picked, best first and
-// widened by excerptContext lines, while they fit excerptLines entries.
+// excerpt is the entries a summarizer reads: the first excerptHead and last excerptTail entries, and those of the passages a decider
+// picked, widened by excerptContext lines, in novelFirst order while they fit excerptLines entries.
 func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decider.Entry {
 	lines := 0
 	if len(entries) > 0 {
@@ -153,33 +154,53 @@ func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decid
 		}
 	}
 	keep := map[int]bool{}
-	span := func(first, last int) {
-		for n := max(1, first); n <= min(lines, last); n++ {
-			keep[entryOf[n]] = true
+	seen := map[string]bool{}
+	for i := range entries {
+		if i < excerptHead || i >= len(entries)-excerptTail {
+			keep[i] = true
+			seen[likeness(entries[i].Text)] = true
 		}
 	}
-	span(1, excerptHead)
-	span(lines-excerptTail+1, lines)
-	picks := slices.Clone(choice.Picks)
-	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
-	for _, p := range picks {
-		if p.Score < excerptScore || p.End <= p.Start {
-			continue
-		}
+	// widened is the entries a pick stands for with excerptContext lines around it; none for a pick outside the log.
+	widened := func(p decider.Pick) []int {
 		first, last := logLines(rows[decidedHead+p.Start : decidedHead+p.End])
 		if first == 0 {
-			continue
+			return nil
 		}
-		more := map[int]bool{}
+		var out []int
 		for n := max(1, first-excerptContext); n <= min(lines, last+excerptContext); n++ {
-			if !keep[entryOf[n]] {
-				more[entryOf[n]] = true
+			if i := entryOf[n]; len(out) == 0 || out[len(out)-1] != i {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	var picks []decider.Pick
+	for _, p := range choice.Picks {
+		if p.Score >= excerptScore && p.End > p.Start {
+			picks = append(picks, p)
+		}
+	}
+	picks = novelFirst(picks, seen, func(p decider.Pick) []string {
+		var texts []string
+		for _, i := range widened(p) {
+			texts = append(texts, entries[i].Text)
+		}
+		return texts
+	})
+	for _, p := range picks {
+		var more []int
+		for _, i := range widened(p) {
+			if !keep[i] {
+				more = append(more, i)
 			}
 		}
 		if len(keep)+len(more) > excerptLines {
 			continue
 		}
-		maps.Copy(keep, more)
+		for _, i := range more {
+			keep[i] = true
+		}
 	}
 	var out []decider.Entry
 	for i, e := range entries {
@@ -189,6 +210,38 @@ func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decid
 	}
 	return out
 }
+
+// novelFirst orders picks best first, except that one whose texts are mostly like those of seen and of the picks before it waits until every
+// pick that adds something new has gone, so a failure repeated for hundreds of test classes cannot crowd out the one cause it repeats.
+func novelFirst(picks []decider.Pick, seen map[string]bool, texts func(decider.Pick) []string) []decider.Pick {
+	picks = slices.Clone(picks)
+	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
+	seen = maps.Clone(seen)
+	var novel, waiting []decider.Pick
+	for _, p := range picks {
+		likes, news := map[string]bool{}, map[string]bool{}
+		for _, text := range texts(p) {
+			like := likeness(text)
+			likes[like] = true
+			if !seen[like] {
+				news[like] = true
+			}
+		}
+		if float64(len(news)) < pickNovelty*float64(len(likes)) {
+			waiting = append(waiting, p)
+			continue
+		}
+		maps.Copy(seen, news)
+		novel = append(novel, p)
+	}
+	return append(novel, waiting...)
+}
+
+// qualified matches dotted names (packages, classes, files), which a log repeats with only the name changed.
+var qualified = regexp.MustCompile(`[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+`)
+
+// likeness is what a row is like with its numbers and dotted names masked: the same failure reported for another test class is alike.
+func likeness(text string) string { return qualified.ReplaceAllString(engine.MaskDigits(text), "X") }
 
 func cmpScore(a, b float64) int {
 	switch {
@@ -301,7 +354,17 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 			picks = append(picks, p)
 		}
 	}
-	slices.SortStableFunc(picks, func(a, b decider.Pick) int { return cmpScore(b.Score, a.Score) })
+	seen := map[string]bool{}
+	for _, r := range append(slices.Clone(rows[:decidedHead]), rows[end:]...) {
+		seen[likeness(r.text)] = true
+	}
+	picks = novelFirst(picks, seen, func(p decider.Pick) []string {
+		var texts []string
+		for _, r := range rows[decidedHead+p.Start : min(end, decidedHead+p.End)] {
+			texts = append(texts, r.text)
+		}
+		return texts
+	})
 	chose := false
 	var missed [][2]int
 	for _, p := range picks {

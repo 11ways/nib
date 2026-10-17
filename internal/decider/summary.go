@@ -31,7 +31,7 @@ const (
 	maxRanges     = 5
 	maxRangeLines = 60
 	// summaryVersion changes with the prompt, so cached answers to another prompt are not reused.
-	summaryVersion = 2
+	summaryVersion = 3
 )
 
 // The values an entry's reasoning option takes; "off" is the default, "default" sends none and leaves it to the model.
@@ -265,7 +265,8 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
 		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
 		"lines or entries; the agent gets exact counts from the shell.\n" +
-		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines."
+		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines; every error or cause " +
+		"the summary names needs a range holding its line, since the agent sees only those lines."
 	if in.Expect != "" {
 		text += "\nLead with what contradicts the expectation; if the output meets it, one short sentence saying so is the whole summary."
 	}

@@ -289,7 +289,11 @@ type Repeat struct {
 // Repeats finds the repetition among plain rows that Compress collapses: back-to-back runs and blocks that recur from earlier; with masked,
 // lines compare with their digits masked. It is the one home of what counts as repeated output.
 func Repeats(lines []PlainLine, masked bool) []Repeat {
-	keys := repeatKeys(lines, masked)
+	return RepeatsBy(lines, repeatKeys(lines, masked))
+}
+
+// RepeatsBy is Repeats with lines compared by keys, one per line; a copy counts as exact only where the texts themselves match.
+func RepeatsBy(lines []PlainLine, keys []string) []Repeat {
 	same := func(a, b, length int) bool {
 		for offset := 0; offset < length; offset++ {
 			if keys[a+offset] != keys[b+offset] {
@@ -402,6 +406,57 @@ func MaskDigits(text string) string { return digits.ReplaceAllString(text, "0") 
 
 // Numbers are a line's runs of digits, in order: what MaskDigits masks.
 func Numbers(text string) []string { return digits.FindAllString(text, -1) }
+
+// tellingValues is how many values a number in one place of otherwise equal lines may take and still tell them apart, as a status code
+// does; it also needs tellingShare lines per value on average, so ids, durations and timestamps stay masked.
+const (
+	tellingValues = 8
+	tellingShare  = 4
+)
+
+// MaskedKeys are the texts lines compare by with their digits masked, except a number in a place where otherwise equal lines take few
+// values, each often: POST /x 201 and POST /x 503 stay apart while their timestamps, ids and durations are masked.
+func MaskedKeys(texts []string) []string {
+	keys := make([]string, len(texts))
+	groups := map[string][]int{}
+	for i, text := range texts {
+		keys[i] = MaskDigits(text)
+		groups[keys[i]] = append(groups[keys[i]], i)
+	}
+	for _, members := range groups {
+		if len(members) < 2*tellingShare {
+			continue
+		}
+		numbers := make([][]string, len(members))
+		for j, i := range members {
+			numbers[j] = Numbers(texts[i])
+		}
+		telling := make([]bool, len(numbers[0]))
+		tells := false
+		for place := range telling {
+			values := map[string]bool{}
+			for _, n := range numbers {
+				values[n[place]] = true
+			}
+			telling[place] = len(values) > 1 && len(values) <= tellingValues && len(values)*tellingShare <= len(members)
+			tells = tells || telling[place]
+		}
+		if !tells {
+			continue
+		}
+		for j, i := range members {
+			place := -1
+			keys[i] = digits.ReplaceAllStringFunc(texts[i], func(string) string {
+				place++
+				if telling[place] {
+					return numbers[j][place]
+				}
+				return "0"
+			})
+		}
+	}
+	return keys
+}
 
 func identicalLines(lines []PlainLine, a, b, length int) bool {
 	for offset := 0; offset < length; offset++ {
