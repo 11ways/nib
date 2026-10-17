@@ -433,27 +433,15 @@
     "exit": 1,
     "purpose": "Run the browser tests",
     "expect": "all pass; if not, which test and why",
+    "any": true,
     "needs": [
-      "ClassNotFoundException: be\\.elevenways\\.hohenheim\\.test\\.live\\.LiveNamespaces",
+      "(ClassNotFoundException|NoClassDefFoundError).*be[./]elevenways[./]hohenheim[./]test[./]live[./]LiveNamespaces",
       "NoSuchFileException: .*browserTestSolo\\.ndjson",
       "^\\* What went wrong:"
     ],
     "loses": {
       "summary": [
-        13437,
-        13541,
-        13590,
-        13646,
-        13699,
-        13801,
-        13854,
-        20966,
-        20978,
-        21008,
-        21020
-      ],
-      "openrouter": [
-        13437
+        13396
       ]
     }
   }

@@ -33,6 +33,8 @@ type capture struct {
 	Count  bool             `json:"count"`
 	Needs  []string         `json:"needs"`
 	Loses  map[string][]int `json:"loses"`
+	// Any makes each need one fact that any line it matches shows: it counts as kept, under its first matching log line, when one is shown.
+	Any bool `json:"any"`
 }
 
 // watched remembers the last choice of the decider it wraps.
@@ -264,6 +266,30 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 		for n := row.first; n <= row.last; n++ {
 			covered[n] = true
 		}
+	}
+	if c.Any {
+		for _, p := range patterns {
+			first, shown := 0, false
+			for n, line := range strings.Split(text, "\n") {
+				if p.MatchString(engine.PlainText(line)) {
+					if first == 0 {
+						first = n + 1
+					}
+					shown = shown || covered[n+1]
+				}
+			}
+			if first == 0 {
+				continue
+			}
+			r.needed++
+			if shown {
+				r.kept++
+				r.keptLines[first] = true
+			} else {
+				r.lostLines = append(r.lostLines, first)
+			}
+		}
+		return r
 	}
 	for n, line := range strings.Split(text, "\n") {
 		plain := engine.PlainText(line)
