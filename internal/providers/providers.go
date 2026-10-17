@@ -33,6 +33,10 @@ const StartTimeout = 30 * time.Second
 // DescriptionLimit is where clients cut a tool description; a provider tool with a longer one is left out.
 const DescriptionLimit = 2048
 
+// ProtocolVersion is the MCP version nib asks a provider for: the protocol needs nothing later, and SDKs that predate 2026-07-28 log every
+// server/discover the newer handshake starts with as an invalid request before falling back.
+const ProtocolVersion = "2025-11-25"
+
 var (
 	nameShape = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 	toolShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -121,7 +125,7 @@ func (p *Provider) connect(ctx context.Context) error {
 	cmd.Dir = p.dir
 	cmd.Stderr = os.Stderr
 	client := mcp.NewClient(&mcp.Implementation{Name: "nib", Version: "provider-host"}, nil)
-	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, &mcp.ClientSessionOptions{ProtocolVersion: ProtocolVersion})
 	if err != nil {
 		return fmt.Errorf("%s: starting %s %s: %w", p.Name, program, Subcommand, err)
 	}
