@@ -1,0 +1,1 @@
+"{\"summary\": \"The run failed: TestQuoteKeepsTabs failed with Quote(tab) = \\\"$'a\\\\\\\\tb'\\\", \u003cnil\u003e; want a single-quoted tab (quote_test.go:58), and the package reports FAIL. All other shown tests, including the FuzzParsePrint seeds and examples, pass or skip.\", \"ranges\": [[5874, 5878], [109195, 109197]]}"

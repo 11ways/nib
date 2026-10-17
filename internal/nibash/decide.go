@@ -33,7 +33,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		for i, r := range middle {
 			texts[i] = r.text
 		}
-		return d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
+		return d.decider.Decide(ctx, decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Rows: texts})
 	}
 	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
 	cut := func(choice *decider.Choice, notes ...string) []row {
@@ -55,7 +55,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	}
 	lines := plainLines([]byte(raw))
 	ask := func(shown []int) (decider.Summary, bool) {
-		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines, Excerpt: shown}
+		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines, Excerpt: shown}
 		s := d.summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}

@@ -88,6 +88,7 @@ func parseSummary(list string) ([]SummaryEntry, error) {
 type SummaryInput struct {
 	Command  string
 	Purpose  string
+	Expect   string
 	Exit     int
 	TimedOut bool
 	Log      []string
@@ -219,14 +220,20 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 	}
 	text := "You condense the output of a shell command for a coding agent that ran it. The agent reads only your answer and the lines you point " +
 		"at, so a wrong statement costs it a wrong fix.\n" +
-		"The agent's description of why it ran the command: " + purpose + "\n" +
-		"Command: " + in.Command + "\n" +
+		"The agent's description of why it ran the command: " + purpose + "\n"
+	if in.Expect != "" {
+		text += "What the agent expected or wanted to find out: " + in.Expect + "\n"
+	}
+	text += "Command: " + in.Command + "\n" +
 		"Exit status (from the shell, always true): " + status + "\n" +
 		fmt.Sprintf("Output: %d lines, numbered below.\n\n", len(in.Log)) +
 		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
 		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
 		"lines or entries; the agent gets exact counts from the shell.\n" +
 		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines."
+	if in.Expect != "" {
+		text += "\nLead with what contradicts the expectation; if the output meets it, one short sentence saying so is the whole summary."
+	}
 	if excerpt {
 		text += "\nOnly an excerpt is shown: the start, the end, and the passages a relevance model judged most likely to matter, each with its " +
 			"real line number. Lines not shown exist; do not guess what they hold."

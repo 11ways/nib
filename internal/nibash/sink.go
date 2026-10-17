@@ -176,6 +176,7 @@ type decision struct {
 	summarizer decider.Summarizer
 	command    string
 	purpose    string
+	expect     string
 	exit       int
 	timedOut   bool
 }

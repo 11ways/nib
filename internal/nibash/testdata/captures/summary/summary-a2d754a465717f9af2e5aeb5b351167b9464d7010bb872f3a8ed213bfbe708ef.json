@@ -1,0 +1,1 @@
+"{\"summary\": \"The type check fails with 45 TS2554 errors: every call to fileTag passes one argument, but src/snapshots.ts:39 declares fileTag(text: string, seed: number), so the required 'seed' argument is missing. One error is in src/engine.ts:262 and the other 44 are in test/engine.test.ts.\", \"ranges\": [[1, 8], [10, 17], [407, 414], [181, 188], [244, 251]]}"

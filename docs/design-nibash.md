@@ -84,6 +84,8 @@ nibash
 
 `description` is optional, as in Claude Code's Bash, so it costs nothing when unused [m6]. It is kept with the call and handed to the renderer as the stated purpose, the input a later decision model would use (section 11).
 
+`expect` is optional too: what the agent expects or wants to learn ("all pass; if not, which and why"). The decision model's question then asks above all for a line that shows the expectation did not hold, and the summary prompt asks to lead with what contradicts it, a run that meets it getting one sentence. On the 33 recorded captures (`NIB_CAPTURES_EXPECT=1`), with an expectation written per case: the decision model alone kept every needed line in 27 cases against 25; the summary arm kept 27 either way (pytest-v-fail gained, go-build-x lost) with summaries a quarter shorter (6,381 characters against 8,394) and 5% fewer bytes shown, apart from javac-errors, a list, which the decision model then judged to need every line and cut instead of summarizing.
+
 The tool description says plainly:
 - this is nibash, a bash interpreter (mvdan/sh, bash dialect);
 - `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` and `wc` are nib's own when their output goes to the model or into another of them, and then print anchored rows;

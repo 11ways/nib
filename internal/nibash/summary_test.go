@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/server"
 )
 
 // fakeSummarizer answers with what summarize returns and remembers what it was asked.
@@ -133,6 +134,29 @@ func TestAnOutputWithinTheBudgetGetsASummaryPastItsOwnLimit(t *testing.T) {
 	out = renderSink(t, lines(200), decision{decider: choose, summarizer: summary, exit: 1})
 	if len(choose.asked) != 0 || !strings.Contains(out, "line 150 y") || strings.Contains(out, "no summary") {
 		t.Fatalf("decider asked %d times:\n%s", len(choose.asked), out)
+	}
+}
+
+func TestAnExpectationReachesTheDeciderAndTheSummarizer(t *testing.T) {
+	f := newFixture(t, nil)
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Line 5 is it.", Ranges: [][2]int{{5, 5}}}
+	}}
+	f.shell.Deciding(choose).Summarizing(summary)
+	out := f.call(server.ShellCall{Command: "seq 1 1000; exit 1", Description: "run it", Expect: "  all pass; if not, which  "})
+	if len(choose.asked) != 1 || choose.asked[0].Expect != "all pass; if not, which" || len(summary.asked) != 1 ||
+		summary.asked[0].Expect != "all pass; if not, which" || !strings.Contains(out, "<summary>Line 5 is it.</summary>") {
+		t.Fatalf("decider %+v, summarizer %+v:\n%s", choose.asked, summary.asked, out)
+	}
+}
+
+func TestExpectIsOfferedOnlyWhereAModelReadsIt(t *testing.T) {
+	if New(nil, false).Deciding(decider.Config{Kind: decider.Keywords}.New()).Expects() {
+		t.Fatal("keywords read no expectation")
+	}
+	if !New(nil, false).Deciding(decider.Config{Kind: decider.Keywords}.New()).Summarizing(&fakeSummarizer{}).Expects() {
+		t.Fatal("a summarizer reads the expectation")
 	}
 }
 

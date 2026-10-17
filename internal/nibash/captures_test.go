@@ -23,14 +23,16 @@ import (
 // capture is one recorded program output of the offline check, with the lines a model needs from it, and the needed log lines an arm is
 // known to lose that the check would otherwise fail on.
 type capture struct {
-	Name    string           `json:"name"`
-	File    string           `json:"file"`
-	Command string           `json:"command"`
-	Exit    int              `json:"exit"`
-	Purpose string           `json:"purpose"`
-	Count   bool             `json:"count"`
-	Needs   []string         `json:"needs"`
-	Loses   map[string][]int `json:"loses"`
+	Name    string `json:"name"`
+	File    string `json:"file"`
+	Command string `json:"command"`
+	Exit    int    `json:"exit"`
+	Purpose string `json:"purpose"`
+	// Expect is what an agent could have said it expects; the arms pass it on with NIB_CAPTURES_EXPECT=1.
+	Expect string           `json:"expect"`
+	Count  bool             `json:"count"`
+	Needs  []string         `json:"needs"`
+	Loses  map[string][]int `json:"loses"`
 }
 
 // watched remembers the last choice of the decider it wraps.
@@ -168,7 +170,7 @@ func check(t *testing.T, c capture, arms []arm) float64 {
 				t.Errorf("%s: no summary (%s); record it again", c.Name, s.last.Failure)
 			} else {
 				u := s.last.Usage
-				line += fmt.Sprintf("; summary by %s, %d ranges, %d dropped; %d requests, %d cached, %d tokens, $%.5f, %s", s.last.Who, len(s.last.Ranges),
+				line += fmt.Sprintf("; summary by %s, %d chars, %d ranges, %d dropped; %d requests, %d cached, %d tokens, $%.5f, %s", s.last.Who, len(s.last.Text), len(s.last.Ranges),
 					s.last.Dropped, u.Requests, u.Cached, u.InputTokens, u.Cost, u.Elapsed.Round(time.Millisecond))
 				cost += u.Cost
 			}
@@ -239,7 +241,7 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 	s.Write(raw)
 	rows, text, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
 	shown, _ := fit(context.Background(), rows, text, &logDirectory{path: t.TempDir()}, decision{decider: d, summarizer: summarize, command: c.Command,
-		purpose: c.Purpose, exit: c.Exit})
+		purpose: c.Purpose, expect: expectation(c), exit: c.Exit})
 	// NIB_CAPTURES_SHOW=NAME prints what the summary arm shows of that capture.
 	if summarize != nil && os.Getenv("NIB_CAPTURES_SHOW") == c.Name {
 		var texts []string
@@ -279,4 +281,12 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 		}
 	}
 	return r
+}
+
+// expectation is the capture's expectation when NIB_CAPTURES_EXPECT=1 asks for it.
+func expectation(c capture) string {
+	if os.Getenv("NIB_CAPTURES_EXPECT") == "1" {
+		return c.Expect
+	}
+	return ""
 }

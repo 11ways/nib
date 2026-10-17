@@ -192,7 +192,7 @@ func (o *openRouter) plan(in Input, model string, hits []Pick) ([]batch, []Unjud
 		w.size = jsonSize(w.text) + jsonSize(question(in, w.id)) + 2*len(w.id) + 16
 		windows = append(windows, w)
 	}
-	base := jsonSize(request{Model: model, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}})
+	base := jsonSize(request{Model: model, State: in.state()})
 	whole := 0
 	if in.Purpose != "" {
 		whole = jsonSize(wholeQuestion) + 16
@@ -287,6 +287,7 @@ type provider struct {
 type state struct {
 	Command    string  `json:"command"`
 	Purpose    string  `json:"purpose,omitempty"`
+	Expect     string  `json:"expectation,omitempty"`
 	ExitStatus int     `json:"exit_status"`
 	TimedOut   bool    `json:"timed_out,omitempty"`
 	Output     ordered `json:"output"`
@@ -334,6 +335,11 @@ func (o ordered) MarshalJSON() ([]byte, error) {
 // question asks whether a window matters: for the purpose when there is one, else for the failure or the timeout.
 func question(in Input, id string) noul {
 	switch {
+	case in.Purpose != "" && in.Expect != "":
+		return noul{"noul", fmt.Sprintf("Does `output.%s` contain a line the developer needs for `purpose`, above all one that shows `expectation` did not hold?", id), criteria{
+			"It has a line that contradicts the expectation or bears directly on the purpose, such as an error, a failure or the entry asked for.",
+			"It has only lines that agree with the expectation or are unrelated to the purpose, such as routine progress, passing results or timings.",
+		}}
 	case in.Purpose != "":
 		return noul{"noul", fmt.Sprintf("Does `output.%s` contain a line the developer needs for `purpose`?", id), criteria{
 			"It has a line that answers or directly bears on the purpose, such as an error, a failure or the entry asked for.",
@@ -356,8 +362,13 @@ var wholeQuestion = noul{"noul", "Does `purpose` need every line of the output, 
 	"The purpose is served by finding specific lines, such as an error, a failure or a particular entry.",
 }}
 
+// state is what a request tells the model about the call.
+func (in Input) state() state {
+	return state{Command: in.Command, Purpose: in.Purpose, Expect: in.Expect, ExitStatus: in.Exit, TimedOut: in.TimedOut}
+}
+
 func (o *openRouter) body(in Input, model string, b batch) request {
-	r := request{Model: model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: state{Command: in.Command, Purpose: in.Purpose, ExitStatus: in.Exit, TimedOut: in.TimedOut}}
+	r := request{Model: model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: in.state()}
 	for _, w := range b.windows {
 		r.State.Output = append(r.State.Output, field{w.id, w.text})
 		r.Questions = append(r.Questions, field{w.id, question(in, w.id)})

@@ -1,0 +1,1 @@
+"{\"summary\": \"The install failed: the package diff-sequences-nonexistent-pkg-zz@^1.0.0 could not be resolved because the registry returned 404 for it (lines 1190, 2652, 2654). All other resolution and download steps shown completed, ending with 'Resolved, downloaded and extracted [101]'.\", \"ranges\": [[2651, 2654], [1186, 1201], [178, 185]]}"

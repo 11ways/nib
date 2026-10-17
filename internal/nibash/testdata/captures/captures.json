@@ -6,6 +6,7 @@
     "command": "bun scripts/build.ts",
     "exit": 1,
     "purpose": "find out why the build fails",
+    "expect": "the build succeeds; if not, the first error",
     "needs": [
       "\\[worker\\] error: unsupported format"
     ]
@@ -17,6 +18,7 @@
     "command": "bun typecheck",
     "exit": 1,
     "purpose": "find what breaks the type check",
+    "expect": "no type errors; if any, which file and why",
     "needs": [
       "An argument for 'seed' was not provided",
       "export function fileTag\\(text: string, seed: number\\)"
@@ -113,6 +115,7 @@
     "command": "bun test",
     "exit": 1,
     "purpose": "find why the test fails",
+    "expect": "the test passes; if not, the assertion that fails",
     "needs": [
       "^Received: ",
       "^Expected substring",
@@ -126,6 +129,7 @@
     "command": "tail -n +1 logs/api-2026-10-13.log | cut -c1-200",
     "exit": 0,
     "purpose": "count GET /v1/orders requests that took 50 ms or more",
+    "expect": "a count of the matching requests",
     "count": true,
     "needs": [
       "GET /v1/orders/\\d+ 200 \\d+ms"
@@ -138,6 +142,7 @@
     "command": "bun scripts/serve.ts",
     "exit": 0,
     "purpose": "find why POST /v1/payments started answering 503 partway through the run",
+    "expect": "the log shows what changed when the 503s began",
     "needs": [
       "config: reloaded config/routes.json",
       "routes: /v1/payments -> upstream \"payments-v2\""
@@ -150,6 +155,7 @@
     "command": "bun test",
     "exit": 1,
     "purpose": "find the failing test and why it fails",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "^✕ durations",
       "got 90, want -90"
@@ -162,6 +168,7 @@
     "command": "go test -count=1 -v ./expand/ ./pattern/ ./shell/",
     "exit": 1,
     "purpose": "Run the expand, pattern and shell tests",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "pattern_test.go:\\d+: Regexp\\(\\[!a\\]\\)",
       "--- FAIL: TestRegexpQuotesBrackets"
@@ -174,6 +181,7 @@
     "command": "go test -count=1 -v ./syntax/",
     "exit": 1,
     "purpose": "Run the syntax package tests verbosely",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "quote_test.go:\\d+: Quote\\(tab\\)",
       "--- FAIL: TestQuoteKeepsTabs"
@@ -186,6 +194,7 @@
     "command": "go test -count=1 -v ./expand/ ./pattern/ ./shell/",
     "exit": 1,
     "purpose": "Run the expand, pattern and shell tests",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "^panic: runtime error: index out of range",
       "expand/braces_test.go:\\d+ "
@@ -198,6 +207,7 @@
     "command": "go test -count=1 -v -timeout 30s ./expand/ ./pattern/ ./shell/",
     "exit": 1,
     "purpose": "Run the expand, pattern and shell tests",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "^panic: test timed out after 30s",
       "^\\s+TestFieldsWaitsForReader \\(30s\\)"
@@ -210,6 +220,7 @@
     "command": "go build -x ./...",
     "exit": 1,
     "purpose": "Build everything and show the compiler commands",
+    "expect": "it builds; if not, the compile error",
     "needs": [
       "^internal/decider/openrouter.go:\\d+:\\d+: "
     ]
@@ -221,6 +232,7 @@
     "command": "python -m pytest -v tests/test_chunker.py tests/test_cache.py ...",
     "exit": 1,
     "purpose": "Run the chunker, cache, file and dedup tests",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
@@ -238,6 +250,7 @@
     "command": "python -m pytest -v tests/test_files.py tests/test_dedup.py ...",
     "exit": 1,
     "purpose": "Run the file, dedup and chunker tests",
+    "expect": "all pass; if not, which test and why",
     "needs": [
       "^E   AssertionError: assert None == 'kotlin'",
       "^E   AssertionError: shape hash depends on statement order"
@@ -250,6 +263,7 @@
     "command": "ruff check --select ALL --output-format concise src/zemble",
     "exit": 1,
     "purpose": "Check whether ruff finds any undefined names",
+    "expect": "no undefined names (F821); if any, where",
     "needs": [
       "F821 Undefined name"
     ]
@@ -261,6 +275,7 @@
     "command": "javac -Xmaxerrs 5000 -d out ./*.java",
     "exit": 1,
     "purpose": "List which protoblast packages are missing from the classpath",
+    "expect": "the list of missing protoblast packages",
     "count": true,
     "needs": [
       "package be\\.elevenways\\.protoblast\\.[a-z.]+ does not exist"
@@ -273,6 +288,7 @@
     "command": "bun install --verbose",
     "exit": 1,
     "purpose": "Install the dependencies",
+    "expect": "the install succeeds; if not, which package fails",
     "needs": [
       "^error: .*diff-sequences-nonexistent-pkg-zz"
     ]
@@ -284,6 +300,7 @@
     "command": "git log --stat -n 120",
     "exit": 0,
     "purpose": "Find the commit that made search print integer scores and the files it touched",
+    "expect": "one commit about integer scores, with its changed files",
     "needs": [
       "search: print scores as integers",
       "^ src/zemble/utils\\.py \\| 23 ",
@@ -297,6 +314,7 @@
     "command": "git log -p -n 40 -- src/zemble/daemon/server.py",
     "exit": 0,
     "purpose": "Find the commit that started skipping rebuilds that move nothing",
+    "expect": "the commit whose diff adds the skip for rebuilds that move nothing",
     "needs": [
       "Skip rebuilds that move nothing and share reused vector blocks",
       "^commit e6a3304945597de51dc7020fc47bec49e3973ea1"
@@ -314,6 +332,7 @@
     "command": "git log --format='%h %ad %s' --date=short -n 1500",
     "exit": 0,
     "purpose": "Find the commit where new-app stopped writing settings/auth.dry",
+    "expect": "the commit that stopped writing settings/auth.dry",
     "needs": [
       "new-app writes auth\\.\\* into default\\.dry"
     ]
@@ -325,6 +344,7 @@
     "command": "git diff HEAD~25 -- src/zemble/graph",
     "exit": 0,
     "purpose": "See how the graph MCP answers locate the line a symbol points at",
+    "expect": "the code that finds the line a symbol points at",
     "needs": [
       "^\\+def _line_part\\(root: str, entry",
       "return location_part\\(root, entry\\[\"file_path\"\\]"
@@ -337,6 +357,7 @@
     "command": "git blame --date=short src/zemble/daemon/server.py",
     "exit": 0,
     "purpose": "Find which commit last changed bring_current",
+    "expect": "the commit hash on bring_current's lines",
     "needs": [
       "async def bring_current\\(self, cache_key"
     ]
@@ -348,6 +369,7 @@
     "command": "git log --format='%h %an %s' -n 1200",
     "exit": 0,
     "purpose": "Count the bug-fix commits (the ones starting with the bug gitmoji)",
+    "expect": "a count",
     "count": true,
     "needs": [
       " 🐛"
@@ -360,6 +382,7 @@
     "command": "ls -la /usr/bin",
     "exit": 0,
     "purpose": "Count the setuid binaries in /usr/bin",
+    "expect": "a count",
     "count": true,
     "needs": [
       "^-rws"
@@ -372,6 +395,7 @@
     "command": "find . -name '*.go' -path '*grammars*'",
     "exit": 0,
     "purpose": "Find the file that defines gotreesitter's Python grammar",
+    "expect": "one file path for the Python grammar",
     "needs": [
       "grammars/python/python\\.go$"
     ]
@@ -383,6 +407,7 @@
     "command": "rg -n --no-heading '^func ' .",
     "exit": 0,
     "purpose": "Find where ClientSession.CallTool is defined in the go-sdk",
+    "expect": "the file and line of CallTool's definition",
     "needs": [
       "^\\./mcp/client\\.go:\\d+:func \\(cs \\*ClientSession\\) CallTool\\("
     ]
@@ -394,6 +419,7 @@
     "command": "pacman -Q",
     "exit": 0,
     "purpose": "Check the installed versions of go and ripgrep",
+    "expect": "both installed, with versions",
     "needs": [
       "^go 2:",
       "^ripgrep "
@@ -406,6 +432,7 @@
     "command": "systemctl --no-pager --all list-units",
     "exit": 0,
     "purpose": "Check whether docker and sshd are running",
+    "expect": "both units active and running",
     "needs": [
       "^\\s*docker\\.service ",
       "^\\s*sshd\\.service "
@@ -418,6 +445,7 @@
     "command": "gofmt -l internal; go build ./... && go test ./internal/engine 2>&1 | tail -3; bun test 2>&1 | grep -E \"^\\(fail\\)|pass$|fail$\"",
     "exit": 0,
     "purpose": "Build and run tests",
+    "expect": "it builds and all tests pass; if not, the first error",
     "needs": [
       "^internal/engine/edit\\.go:888:7: no new variables"
     ]
@@ -429,6 +457,7 @@
     "command": "go build -o /tmp/nib-e2e/nib ./cmd/nib && cd /tmp/nib-e2e && timeout 300 bun e2e.ts /tmp/nib-e2e/nib .../zemble ~/projects/nib '{\"name\":\"zemble_search\",...}' ...",
     "exit": 0,
     "purpose": "End-to-end run of nib hosting zemble",
+    "expect": "the tools list and each call's result without errors",
     "needs": [
       "^TOOLS: ",
       "^===== zemble_\\w+ .* isError="
@@ -441,6 +470,7 @@
     "command": "gofmt -l . ; go build ./... && go test ./... 2>&1 | tail -40",
     "exit": 0,
     "purpose": "Build and run Go tests to see breakage",
+    "expect": "all pass; if not, which tests and why",
     "needs": [
       "^--- FAIL: "
     ]
@@ -452,6 +482,7 @@
     "command": "bun test test/engine.test.ts -t \"anchored match and context rows|the default gives none|definitions that did not ask\" 2>&1 | grep -B3 -A14 \"error:\" | head -90",
     "exit": 0,
     "purpose": "Show the three grep failures",
+    "expect": "the three failures with expected and received",
     "needs": [
       "^\\(fail\\) ",
       "^error: "
@@ -464,6 +495,7 @@
     "command": "cd ~/projects/external/zemble && ls && ls src/zemble && zemble --help 2>&1 | head -40; zemble search --help 2>&1 | head -40",
     "exit": 0,
     "purpose": "Survey zemble's layout and CLI options",
+    "expect": "the layout and every option",
     "count": true,
     "needs": [
       "\\S"
@@ -476,6 +508,7 @@
     "command": "/usr/bin/grep -rn 'addHook\\|isNibHook\\|PreToolUse\\|hook\\.Matchers' --include=*.go --include=*.ts . | /usr/bin/grep -v '^./bench/results' | cut -c1-220",
     "exit": 0,
     "purpose": "Find hook registration usages and tests",
+    "expect": "every place hooks are registered",
     "count": true,
     "needs": [
       "\\S"

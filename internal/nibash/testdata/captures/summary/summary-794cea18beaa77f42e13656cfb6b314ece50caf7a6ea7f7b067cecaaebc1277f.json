@@ -1,0 +1,1 @@
+"{\"summary\": \"Both expected units are active and running: docker.service (line 85) and sshd.service (line 106) show loaded/active/running, and docker.socket (line 198) is active. The output meets the expectation.\", \"ranges\": [[85, 85], [106, 106], [198, 198]]}"

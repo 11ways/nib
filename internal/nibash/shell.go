@@ -79,6 +79,11 @@ func (s *Shell) Description() string {
 	return fmt.Sprintf(description, cut)
 }
 
+// Expects says whether a model reads a call's expectation: a decision model or a summarizer.
+func (s *Shell) Expects() bool {
+	return s.summarizer != nil || s.decider != nil && s.decider.Kind() == decider.OpenRouter
+}
+
 // session is one agent's jobs, which outlive the calls that start them, and the calls running now; nothing else of a shell carries over from
 // one call to the next.
 type session struct {
@@ -370,7 +375,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		status = 1
 	}
 	callTools.Ctx = ctx
-	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), exit: status})
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
 	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
@@ -403,7 +408,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		j.finish(err, out)
 	}()
 	c.tools.Ctx = ctx
-	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), timedOut: true})
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
 	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
 	return c.result(reports, text, tail, before, bodies), nil
 }

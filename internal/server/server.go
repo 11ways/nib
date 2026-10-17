@@ -64,6 +64,8 @@ type Options struct {
 type Shell interface {
 	// Description is the nibash tool's description.
 	Description() string
+	// Expects says whether a model reads a call's expect argument, which is offered only then.
+	Expects() bool
 	// Run executes one nibash call for the agent under key, one per agent of a client; jobs it starts stay with that key.
 	Run(ctx context.Context, key any, call ShellCall, tools *engine.Context) (engine.Result, error)
 	// Close kills the jobs under key and forgets it.
@@ -104,6 +106,7 @@ type ShellJob struct {
 type ShellCall struct {
 	Command     string
 	Description string
+	Expect      string
 	Timeout     *int
 	Background  bool
 }
@@ -246,7 +249,7 @@ func New(options Options) *Server {
 	s.AddTool(&mcp.Tool{Name: "edit", Description: EditDescription, InputSchema: json.RawMessage(editSchema), Annotations: writes, Meta: always}, s.handle(s.edit, true))
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
-		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
+		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema(options.Shell.Expects())), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
 		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), OutputSchema: json.RawMessage(statusOutputSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
 	}
 	for _, p := range options.Providers {
@@ -1198,6 +1201,9 @@ func (s *Server) nibash(ctx *engine.Context, args arguments, notes *[]string, c 
 	}
 	call := ShellCall{Command: command}
 	if call.Description, _, err = args.text("description"); err != nil {
+		return engine.Result{}, err
+	}
+	if call.Expect, _, err = args.text("expect"); err != nil {
 		return engine.Result{}, err
 	}
 	if call.Timeout, err = args.number("timeout", 1); err != nil {

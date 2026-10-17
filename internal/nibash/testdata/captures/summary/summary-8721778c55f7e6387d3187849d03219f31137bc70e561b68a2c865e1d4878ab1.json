@@ -1,0 +1,1 @@
+"{\"summary\": \"Expectation not met: 1 of 196 tests failed. tests/test_chunker.py::test_chunk_boundaries_keep_decorators failed at line 172 with AssertionError: chunk starts at line 1, expected the decorator line (assert 1 == 0). All other tests passed.\", \"ranges\": [[205, 210], [369, 371], [19, 19]]}"

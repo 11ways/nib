@@ -20,7 +20,9 @@ const (
 type Input struct {
 	Command string
 	// Purpose is the call's description; empty without one.
-	Purpose  string
+	Purpose string
+	// Expect is what the agent said it expects or wants to find out; empty without it.
+	Expect   string
 	Exit     int
 	TimedOut bool
 	// Rows are the candidate rows as the model would see them: colorless, collapsed, capped.

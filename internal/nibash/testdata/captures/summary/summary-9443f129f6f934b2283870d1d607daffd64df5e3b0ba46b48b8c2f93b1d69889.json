@@ -1,0 +1,1 @@
+"{\"summary\": \"The expectation is contradicted: one F821 undefined name is reported, `undefined_helper_name` at src/zemble/dedup/report.py:30:9. The rest of the output is other rule violations (docstrings, copyright notices, trailing commas, etc.), not undefined names.\", \"ranges\": [[705, 705], [702, 714]]}"

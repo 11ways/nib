@@ -1,0 +1,1 @@
+"{\"summary\": \"The expand and shell packages pass, but the pattern package fails: TestRegexpQuotesBrackets reports Regexp([!a]) = \\\"(?s)[^a]\\\", want \\\"[^a]x\\\" (pattern_test.go:353), causing the overall run to exit 1.\", \"ranges\": [[267, 272], [593, 598], [261, 263], [690, 692]]}"

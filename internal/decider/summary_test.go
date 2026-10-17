@@ -264,3 +264,26 @@ func TestTheNextDecisionModelAnswersWhenOneFails(t *testing.T) {
 		t.Fatalf("one model %+v", got)
 	}
 }
+
+func TestAnExpectationLeadsThePromptAndTheQuestion(t *testing.T) {
+	in := SummaryInput{Command: "go test ./...", Purpose: "run the tests", Expect: "all pass", Log: []string{"ok"}}
+	if p := summaryPrompt(in, false); !strings.Contains(p, "What the agent expected or wanted to find out: all pass\n") || !strings.Contains(p, "Lead with what contradicts the expectation") {
+		t.Fatalf("prompt:\n%s", p)
+	}
+	in.Expect = ""
+	if p := summaryPrompt(in, false); strings.Contains(p, "expect") {
+		t.Fatalf("prompt without an expectation:\n%s", p)
+	}
+	question := Input{Purpose: "run the tests", Expect: "all pass"}
+	if q := question.state(); q.Expect != "all pass" {
+		t.Fatalf("state %+v", q)
+	}
+	if q := questionFor(question); !strings.Contains(q, "`expectation` did not hold") {
+		t.Fatalf("question %q", q)
+	}
+	if q := questionFor(Input{Purpose: "run the tests"}); strings.Contains(q, "expectation") {
+		t.Fatalf("question without an expectation %q", q)
+	}
+}
+
+func questionFor(in Input) string { return question(in, "w0").Instructions }
