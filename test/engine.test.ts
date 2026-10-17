@@ -742,7 +742,7 @@ describe("write", () => {
         command: "bash",
         args: ["-c", 'ulimit -f 1; exec "$0"', await binary()],
         cwd: f.directory,
-        env: { PATH: process.env.PATH ?? "", NIB_DIRECTORY: f.directory, NIB_SHELL: "0" },
+        env: { PATH: process.env.PATH ?? "", XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? "", NIB_DIRECTORY: f.directory, NIB_SHELL: "0" },
         stderr: "pipe",
       }))
       try {

@@ -49,6 +49,9 @@ type Options struct {
 	Origin func(session string) (origin opencode.Origin, ok bool)
 	// Providers are the programs whose tools nib offers as its own, as NAME_TOOL.
 	Providers []*providers.Provider
+	// NamesFile, when set, turns on naming the directories an agent's paths keep running through, and keeps the names agents get there
+	// for the next server of Names.Base.
+	NamesFile string
 }
 
 // Shell is the nibash side of the server; nil offers no shell.
@@ -209,6 +212,9 @@ func New(options Options) *Server {
 		e = engine.New()
 	}
 	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, defined: names.NewDefined()}
+	if options.NamesFile != "" && options.Names != nil {
+		s.defined.Automatic(options.NamesFile, options.Names.Base)
+	}
 	instructions := Instructions(options)
 	s.Server = mcp.NewServer(&mcp.Implementation{Name: "nib", Version: options.Version}, &mcp.ServerOptions{
 		Instructions: instructions,
@@ -644,6 +650,9 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 		text := result.Text
 		if len(notes) > 0 {
 			text = strings.Join(notes, "\n") + "\n\n" + text
+		}
+		if named := s.defined.Announced(s.engineSession(c.agent)); len(named) > 0 {
+			text += "\n\n" + strings.Join(named, "\n")
 		}
 		content := []mcp.Content{&mcp.TextContent{Text: text}}
 		for _, image := range result.Images {

@@ -1,3 +1,4 @@
 # Bun's suites live in test/; mods/ holds Claude Code mods, whose tests run under `claude plugin test`.
 [test]
 root = "test"
+preload = ["./test/support/preload.ts"]

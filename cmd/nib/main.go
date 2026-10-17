@@ -104,6 +104,11 @@ func main() {
 		Names:               table,
 		Version:             version(),
 	}
+	// The names agents got in this directory before, theirs and nib's, are named from the start; NIB_AUTO_NAMES=0 turns both off.
+	if file := names.LearnedFile(table.Base); file != "" && os.Getenv("NIB_AUTO_NAMES") != "0" {
+		options.NamesFile = file
+		table.AddLearned(file)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	options.Providers = startProviders(ctx, specs, directory, options.Sandbox && os.Getenv("NIB_PROVIDERS_SANDBOX") != "1")

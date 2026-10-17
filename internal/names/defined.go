@@ -23,12 +23,19 @@ type Defined struct {
 	// Now stamps definitions; it must be comparable with other processes' clocks, as a spawn moment comes from the harness. Set it before
 	// first use.
 	Now func() time.Time
+	// automatic is set by Automatic: nib names the directories shown paths keep running through, and keeps names in file for base.
+	automatic  bool
+	file, base string
 }
 
-// defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins.
+// defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
+// directory that automatic naming weighs, auto the names it made, and pending its notes not yet told.
 type defined struct {
-	list []definition
-	own  int
+	list    []definition
+	own     int
+	counts  map[string]int
+	auto    int
+	pending []string
 }
 
 // definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited.
@@ -75,6 +82,7 @@ func (d *Defined) define(agent string, entry Entry) error {
 	}
 	names.own++
 	names.list = append(names.list, definition{entry, d.Now().UnixNano()})
+	d.learnLocked(entry)
 	return nil
 }
 
@@ -160,8 +168,12 @@ func (v *View) table() *Table {
 // Expand turns a leading ~name/ (or a bare ~name) into its directory; ok is false when input names none.
 func (v *View) Expand(input string) (string, bool) { return v.table().Expand(input) }
 
-// Display is canonical under the deepest named directory holding it; ok is false when none does.
-func (v *View) Display(canonical string) (string, bool) { return v.table().Display(canonical) }
+// Display is canonical under the deepest named directory holding it; ok is false when none does. With automatic naming on, the path counts
+// toward naming a directory it runs through, which may name one now.
+func (v *View) Display(canonical string) (string, bool) {
+	v.defined.observe(v.agent, v.table(), canonical)
+	return v.table().Display(canonical)
+}
 
 // Home is the directory of name; ok is false when it names none.
 func (v *View) Home(name string) (string, bool) { return v.table().Home(name) }
