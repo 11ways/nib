@@ -74,7 +74,7 @@ func (s *Shell) Description() string {
 	}
 	cut := kind.Cut()
 	if s.summarizer != nil {
-		cut += ", or to a model's summary, marked as one, and the log lines it points at"
+		cut += ", or to a <summary> of it and the log lines that summary points at"
 	}
 	return fmt.Sprintf(description, cut)
 }

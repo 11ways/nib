@@ -3,6 +3,7 @@ package nibash
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -38,9 +39,9 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		s := d.summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
 			Excerpt: excerpt(rows, choice, len(lines))})
 		if s.Failure == "" {
-			return summarized(rows, s, choice.Who, log)
+			return summarized(rows, s, log)
 		}
-		notes = append(notes, "no summary ("+s.Failure+")")
+		notes = append(notes, "no summary")
 	}
 	return assemble(rows, choice, log, d, notes...)
 }
@@ -96,9 +97,10 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// summarized shows a checked summary in place of a decider's cut: the summary, the rows of the log lines it points at with summaryContext
-// lines around each while they fit summaryRows (the first passage always), a read of the passages that did not fit, and the gaps named.
-func summarized(rows []row, s decider.Summary, picker string, log saved) []row {
+// summarized shows a checked summary in place of a decider's cut: the summary as a <summary> element, the rows of the log lines it points
+// at with summaryContext lines around each while they fit summaryRows (the first passage always), a read of the passages that did not
+// fit, and the gaps named.
+func summarized(rows []row, s decider.Summary, log saved) []row {
 	keep := make([]bool, len(rows))
 	shown := 0
 	var rest [][2]int
@@ -118,15 +120,14 @@ func summarized(rows []row, s decider.Summary, picker string, log saved) []row {
 		}
 		shown += len(add)
 	}
-	out := append([]row{{text: "[summary by " + s.Who + ", in its own words, not program output: " + s.Text + "]", header: -1}}, gapped(rows, keep)...)
-	read := "the summary's model pointed at the lines shown, and each line it quoted was checked against the log"
+	out := append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep)...)
+	read := "quotes checked against the log"
 	if s.Excerpt {
-		read = "the summary's model read only the start, the end and the passages " + picker + " chose; it pointed at the lines shown, and each line " +
-			"it quoted was checked against the log"
+		read = "summary of an excerpt; " + read
 	}
 	clauses := []string{read}
 	if s.Dropped > 0 {
-		clauses = append(clauses, fmt.Sprintf("%d of the lines and ranges it named did not match the log, so they were dropped", s.Dropped))
+		clauses = append(clauses, fmt.Sprintf("%d named lines or ranges not in the log dropped", s.Dropped))
 	}
 	if len(rest) > 0 {
 		var parts []string
@@ -137,13 +138,21 @@ func summarized(rows []row, s decider.Summary, picker string, log saved) []row {
 			}
 			parts = append(parts, part)
 		}
-		more := "the other passages it named are log " + spans(rest)
+		more := "other passages: log " + spans(rest)
 		if log.path != "" {
-			more = "read the other passages it named with read " + log.path + ":" + strings.Join(parts, ",") + " plain:true"
+			more = "other passages: read " + log.path + ":" + strings.Join(parts, ",") + " plain:true"
 		}
 		clauses = append(clauses, more)
 	}
 	return append(out, row{text: closing(shown, log, clauses), header: -1})
+}
+
+// summaryTag matches the element's own tags in any case, which a summary's text could otherwise use to close it early or fake another.
+var summaryTag = regexp.MustCompile(`(?i)</?\s*summary\s*>`)
+
+// summaryText is a summary's text as one line holding neither of its element's tags.
+func summaryText(text string) string {
+	return strings.Join(strings.Fields(summaryTag.ReplaceAllString(text, " ")), " ")
 }
 
 // gapped is the rows keep marks, with a row naming the log lines of each run left out between them.
