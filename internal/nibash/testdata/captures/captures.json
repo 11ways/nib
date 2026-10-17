@@ -2,7 +2,7 @@
   {
     "name": "build-log",
     "file": "build-log.out.gz",
-    "about": "the benchmark's build-log task: 3,013 colored lines, 106 warnings, one error in the middle",
+    "about": "nib captures",
     "command": "bun scripts/build.ts",
     "exit": 1,
     "purpose": "find out why the build fails",
@@ -13,7 +13,7 @@
   {
     "name": "type-errors",
     "file": "type-errors.out.gz",
-    "about": "the benchmark's type-errors task: under the budget, so nothing is cut",
+    "about": "nib captures",
     "command": "bun typecheck",
     "exit": 1,
     "purpose": "find what breaks the type check",
@@ -25,20 +25,20 @@
   {
     "name": "failing-test",
     "file": "failing-test.out.gz",
-    "about": "the benchmark's failing-test task: under the budget, one row of 20,000 characters",
+    "about": "nib captures",
     "command": "bun test",
     "exit": 1,
     "purpose": "find why the test fails",
     "needs": [
       "^Received: ",
       "^Expected substring",
-      "\u2717 large reads"
+      "✗ large reads"
     ]
   },
   {
     "name": "log-stats",
     "file": "log-stats.out.gz",
-    "about": "the benchmark's log-stats log through a real program; the purpose is a count, which no selection serves",
+    "about": "nib captures",
     "command": "tail -n +1 logs/api-2026-10-13.log | cut -c1-200",
     "exit": 0,
     "purpose": "count GET /v1/orders requests that took 50 ms or more",
@@ -50,7 +50,7 @@
   {
     "name": "noisy-service",
     "file": "noisy-service.out.gz",
-    "about": "made up (generate.ts): the cause names no problem, and 327 unrelated ERROR lines flood keywords",
+    "about": "nib captures (synthetic)",
     "command": "bun scripts/serve.ts",
     "exit": 0,
     "purpose": "find why POST /v1/payments started answering 503 partway through the run",
@@ -62,13 +62,270 @@
   {
     "name": "long-run",
     "file": "long-run.out.gz",
-    "about": "made up (generate.ts): 2,393 passing tests, many named for errors, and one failure marked only with a cross",
+    "about": "nib captures (synthetic)",
     "command": "bun test",
     "exit": 1,
     "purpose": "find the failing test and why it fails",
     "needs": [
-      "^\u2715 durations",
+      "^✕ durations",
       "got 90, want -90"
+    ]
+  },
+  {
+    "name": "go-test-v-sh",
+    "file": "go-test-v-sh.out.gz",
+    "about": "mvdan.cc/sh copy, one wrong expectation",
+    "command": "go test -count=1 -v ./expand/ ./pattern/ ./shell/",
+    "exit": 1,
+    "purpose": "Run the expand, pattern and shell tests",
+    "needs": [
+      "pattern_test.go:\\d+: Regexp\\(\\[!a\\]\\)",
+      "--- FAIL: TestRegexpQuotesBrackets"
+    ]
+  },
+  {
+    "name": "go-test-v-huge",
+    "file": "go-test-v-huge.out.gz",
+    "about": "mvdan.cc/sh copy, one wrong expectation",
+    "command": "go test -count=1 -v ./syntax/",
+    "exit": 1,
+    "purpose": "Run the syntax package tests verbosely",
+    "needs": [
+      "quote_test.go:\\d+: Quote\\(tab\\)",
+      "--- FAIL: TestQuoteKeepsTabs"
+    ]
+  },
+  {
+    "name": "go-test-panic",
+    "file": "go-test-panic.out.gz",
+    "about": "mvdan.cc/sh copy, one index panic",
+    "command": "go test -count=1 -v ./expand/ ./pattern/ ./shell/",
+    "exit": 1,
+    "purpose": "Run the expand, pattern and shell tests",
+    "needs": [
+      "^panic: runtime error: index out of range",
+      "expand/braces_test.go:\\d+ "
+    ]
+  },
+  {
+    "name": "go-test-timeout",
+    "file": "go-test-timeout.out.gz",
+    "about": "mvdan.cc/sh copy, one test that blocks forever",
+    "command": "go test -count=1 -v -timeout 30s ./expand/ ./pattern/ ./shell/",
+    "exit": 1,
+    "purpose": "Run the expand, pattern and shell tests",
+    "needs": [
+      "^panic: test timed out after 30s",
+      "^\\s+TestFieldsWaitsForReader \\(30s\\)"
+    ]
+  },
+  {
+    "name": "go-build-x",
+    "file": "go-build-x.out.gz",
+    "about": "nib copy, one type error, cold build cache",
+    "command": "go build -x ./...",
+    "exit": 1,
+    "purpose": "Build everything and show the compiler commands",
+    "needs": [
+      "^internal/decider/openrouter.go:\\d+:\\d+: "
+    ],
+    "loses": {
+      "summary": [
+        5133,
+        5134
+      ]
+    }
+  },
+  {
+    "name": "pytest-v-fail",
+    "file": "pytest-v-fail.out.gz",
+    "about": "zemble copy, one wrong assertion",
+    "command": "python -m pytest -v tests/test_chunker.py tests/test_cache.py ...",
+    "exit": 1,
+    "purpose": "Run the chunker, cache, file and dedup tests",
+    "needs": [
+      "^E   AssertionError: chunk starts at line",
+      "test_chunk_boundaries_keep_decorators FAILED"
+    ]
+  },
+  {
+    "name": "pytest-two-fail",
+    "file": "pytest-two-fail.out.gz",
+    "about": "zemble copy, two wrong assertions in two files",
+    "command": "python -m pytest -v tests/test_files.py tests/test_dedup.py ...",
+    "exit": 1,
+    "purpose": "Run the file, dedup and chunker tests",
+    "needs": [
+      "^E   AssertionError: assert None == 'kotlin'",
+      "^E   AssertionError: shape hash depends on statement order"
+    ]
+  },
+  {
+    "name": "ruff-all",
+    "file": "ruff-all.out.gz",
+    "about": "zemble copy, one undefined name among every rule's findings",
+    "command": "ruff check --select ALL --output-format concise src/zemble",
+    "exit": 1,
+    "purpose": "Check whether ruff finds any undefined names",
+    "needs": [
+      "F821 Undefined name"
+    ]
+  },
+  {
+    "name": "javac-errors",
+    "file": "javac-errors.out.gz",
+    "about": "zenit migration sources compiled without their classpath",
+    "command": "javac -Xmaxerrs 5000 -d out ./*.java",
+    "exit": 1,
+    "purpose": "List which protoblast packages are missing from the classpath",
+    "count": true,
+    "needs": [
+      "package be\\.elevenways\\.protoblast\\.[a-z.]+ does not exist"
+    ]
+  },
+  {
+    "name": "bun-install-missing",
+    "file": "bun-install-missing.out.gz",
+    "about": "nib package.json plus a dependency that does not exist",
+    "command": "bun install --verbose",
+    "exit": 1,
+    "purpose": "Install the dependencies",
+    "needs": [
+      "^error: .*diff-sequences-nonexistent-pkg-zz"
+    ]
+  },
+  {
+    "name": "git-log-stat",
+    "file": "git-log-stat.out.gz",
+    "about": "zemble history",
+    "command": "git log --stat -n 120",
+    "exit": 0,
+    "purpose": "Find the commit that made search print integer scores and the files it touched",
+    "needs": [
+      "search: print scores as integers",
+      "^ src/zemble/utils\\.py \\| 23 ",
+      "^ tests/test_mcp\\.py\\s+\\| 23 "
+    ]
+  },
+  {
+    "name": "git-log-p",
+    "file": "git-log-p.out.gz",
+    "about": "zemble history",
+    "command": "git log -p -n 40 -- src/zemble/daemon/server.py",
+    "exit": 0,
+    "purpose": "Find the commit that started skipping rebuilds that move nothing",
+    "needs": [
+      "Skip rebuilds that move nothing and share reused vector blocks",
+      "^commit e6a3304945597de51dc7020fc47bec49e3973ea1"
+    ],
+    "loses": {
+      "openrouter": [
+        429
+      ]
+    }
+  },
+  {
+    "name": "git-log-zenit",
+    "file": "git-log-zenit.out.gz",
+    "about": "zenit history",
+    "command": "git log --format='%h %ad %s' --date=short -n 1500",
+    "exit": 0,
+    "purpose": "Find the commit where new-app stopped writing settings/auth.dry",
+    "needs": [
+      "new-app writes auth\\.\\* into default\\.dry"
+    ]
+  },
+  {
+    "name": "git-diff-big",
+    "file": "git-diff-big.out.gz",
+    "about": "zemble history",
+    "command": "git diff HEAD~25 -- src/zemble/graph",
+    "exit": 0,
+    "purpose": "See how the graph MCP answers locate the line a symbol points at",
+    "needs": [
+      "^\\+def _line_part\\(root: str, entry",
+      "return location_part\\(root, entry\\[\"file_path\"\\]"
+    ]
+  },
+  {
+    "name": "git-blame",
+    "file": "git-blame.out.gz",
+    "about": "zemble source",
+    "command": "git blame --date=short src/zemble/daemon/server.py",
+    "exit": 0,
+    "purpose": "Find which commit last changed bring_current",
+    "needs": [
+      "async def bring_current\\(self, cache_key"
+    ]
+  },
+  {
+    "name": "count-commits",
+    "file": "count-commits.out.gz",
+    "about": "zenit history",
+    "command": "git log --format='%h %an %s' -n 1200",
+    "exit": 0,
+    "purpose": "Count the bug-fix commits (the ones starting with the bug gitmoji)",
+    "count": true,
+    "needs": [
+      " 🐛"
+    ]
+  },
+  {
+    "name": "count-setuid",
+    "file": "count-setuid.out.gz",
+    "about": "this machine",
+    "command": "ls -la /usr/bin",
+    "exit": 0,
+    "purpose": "Count the setuid binaries in /usr/bin",
+    "count": true,
+    "needs": [
+      "^-rws"
+    ]
+  },
+  {
+    "name": "find-grammar",
+    "file": "find-grammar.out.gz",
+    "about": "Go module cache",
+    "command": "find . -name '*.go' -path '*grammars*'",
+    "exit": 0,
+    "purpose": "Find the file that defines gotreesitter's Python grammar",
+    "needs": [
+      "grammars/python/python\\.go$"
+    ]
+  },
+  {
+    "name": "rg-definition",
+    "file": "rg-definition.out.gz",
+    "about": "Go module cache",
+    "command": "rg -n --no-heading '^func ' .",
+    "exit": 0,
+    "purpose": "Find where ClientSession.CallTool is defined in the go-sdk",
+    "needs": [
+      "^\\./mcp/client\\.go:\\d+:func \\(cs \\*ClientSession\\) CallTool\\("
+    ]
+  },
+  {
+    "name": "pacman-query",
+    "file": "pacman-query.out.gz",
+    "about": "this machine",
+    "command": "pacman -Q",
+    "exit": 0,
+    "purpose": "Check the installed versions of go and ripgrep",
+    "needs": [
+      "^go 2:",
+      "^ripgrep "
+    ]
+  },
+  {
+    "name": "systemd-units",
+    "file": "systemd-units.out.gz",
+    "about": "this machine",
+    "command": "systemctl --no-pager --all list-units",
+    "exit": 0,
+    "purpose": "Check whether docker and sshd are running",
+    "needs": [
+      "^\\s*docker\\.service ",
+      "^\\s*sshd\\.service "
     ]
   }
 ]
