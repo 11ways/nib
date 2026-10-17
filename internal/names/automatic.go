@@ -25,6 +25,8 @@ const (
 	autoLimit = 8
 	// learnedLimit bounds the names kept for the next session of one server directory.
 	learnedLimit = 16
+	// fullAgain is how many calls showing paths pass before a note is told in full again, as the first one may have left the agent's context.
+	fullAgain = 25
 )
 
 // Automatic turns on naming the directories an agent's shown paths keep running through, and keeps every name agents get, theirs and
@@ -36,7 +38,7 @@ func (d *Defined) Automatic(file, base string) {
 }
 
 // Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect; call it once at the
-// end of each call.
+// end of each call. The first note is told in full, as is the first after fullAgain more calls that showed paths, the rest briefly.
 func (d *Defined) Announced(agent string) []string {
 	if d == nil {
 		return nil
@@ -47,10 +49,19 @@ func (d *Defined) Announced(agent string) []string {
 	if names == nil {
 		return nil
 	}
+	if names.observed {
+		names.calls++
+		names.observed = false
+	}
 	var notes []string
 	for _, m := range names.made {
 		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano()})
-		notes = append(notes, note(m.Name, m.prefix, m.count))
+		if names.full == 0 || names.calls-names.full >= fullAgain {
+			names.full = names.calls
+			notes = append(notes, note(m.Name, m.prefix, m.count))
+		} else {
+			notes = append(notes, brief(m.Name, m.prefix, m.count))
+		}
 	}
 	names.made = nil
 	return notes
@@ -78,6 +89,7 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 		names = &defined{}
 		d.agents[agent] = names
 	}
+	names.observed = true
 	if names.auto >= autoLimit {
 		return
 	}
@@ -122,13 +134,22 @@ func (d *Defined) observe(agent string, table *Table, canonical string) {
 	d.learnLocked(entry)
 }
 
-// note announces a name nib made for the directory printed as prefix, which count shown paths ran through.
+// note announces in full a name nib made for the directory printed as prefix, which count shown paths ran through.
 func note(name, prefix string, count int) string {
-	why := fmt.Sprintf("which %d of the paths shown to you ran through", count)
+	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, prefix, why(count, "which %d of the paths shown to you ran through"), name)
+}
+
+// brief is note for an agent already told in full what such a name is.
+func brief(name, prefix string, count int) string {
+	return fmt.Sprintf("[~%s = %s, %s]", name, prefix, why(count, "%d paths shown"))
+}
+
+// why is the reason a name was made: count shown paths in the words of format, or a prefix named at first sight.
+func why(count int, format string) string {
 	if count == 1 {
-		why = "too long to print again"
+		return "too long to print again"
 	}
-	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, prefix, why, name)
+	return fmt.Sprintf(format, count)
 }
 
 var unslugged = regexp.MustCompile(`[^a-z0-9]+`)

@@ -81,6 +81,42 @@ func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
 	}
 }
 
+func TestLaterNotesAreBriefUntilManyCallsHavePassed(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	defined := NewDefined()
+	defined.Automatic("", root)
+	view := (&Table{Base: root}).For(defined, "main")
+	// name shows the paths of one call that earn leaf's directory a name, and returns the note on it.
+	name := func(leaf string) string {
+		directory := deep(t, filepath.Join(root, leaf), leaf)
+		for i := range 8 {
+			view.Display(filepath.Join(directory, fmt.Sprintf("f%d", i)))
+		}
+		notes := defined.Announced("main")
+		if len(notes) != 1 {
+			t.Fatalf("notes %v", notes)
+		}
+		return notes[0]
+	}
+	if got := name("widgets"); !strings.HasPrefix(got, "[nib named ~bewidgets = ") {
+		t.Fatalf("the first note is told in full, got %q", got)
+	}
+	if got := name("gadgets"); !strings.HasPrefix(got, "[~begadgets = gadgets/zenit/src/server/java/be/elevenways/gadgets, ") || !strings.HasSuffix(got, " paths shown]") {
+		t.Fatalf("got %q", got)
+	}
+	// Calls that show paths count toward telling a note in full again.
+	for range fullAgain - 3 {
+		view.Display(filepath.Join(root, "x"))
+		defined.Announced("main")
+	}
+	if got := name("doodads"); !strings.HasPrefix(got, "[~bedoodads = ") {
+		t.Fatalf("got %q", got)
+	}
+	if got := name("gizmos"); !strings.HasPrefix(got, "[nib named ~begizmos = ") {
+		t.Fatalf("a note is told in full again after %d calls, got %q", fullAgain, got)
+	}
+}
+
 func TestShortPrefixesAndTakenNamesAndTheLimit(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	defined := NewDefined()

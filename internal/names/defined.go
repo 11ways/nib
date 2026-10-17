@@ -29,13 +29,17 @@ type Defined struct {
 }
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
-// directory that automatic naming weighs, auto the names it made, and made those not yet told, which take effect once told.
+// directory that automatic naming weighs, auto the names it made, and made those not yet told, which take effect once told. calls counts the
+// calls that showed the agent paths, full the call of the last note told in full, and observed that the current call showed one.
 type defined struct {
-	list   []definition
-	own    int
-	counts map[string]int
-	auto   int
-	made   []made
+	list     []definition
+	own      int
+	counts   map[string]int
+	auto     int
+	made     []made
+	calls    int
+	full     int
+	observed bool
 }
 
 // made is a name nib made and has not told of yet: the directory as it printed, and the shown paths that ran through it.
