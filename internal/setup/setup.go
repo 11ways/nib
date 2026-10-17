@@ -46,6 +46,10 @@ var ClaudeDenied = []string{"Bash", "Grep", "Glob", "Edit", "Write"}
 // ClaudeUndenied are deny rules an older setup wrote that setup now removes: Claude Code 2.1 has no MultiEdit, and warns about the rule.
 var ClaudeUndenied = []string{"MultiEdit"}
 
+// ClaudeAllowed are nib's tools setup lets run without a prompt: nibash_status only reads what nib runs, and the nibash mod asks it every
+// second while something does, where a prompt each time would stop it.
+var ClaudeAllowed = []string{"mcp__nib__nibash_status"}
+
 // OpencodeDenied are OpenCode 2's built-in tools nib replaces, by permission action: edit also covers writing and patching, and shell is
 // nibash's, which setup's nib server always offers. OpenCode 2 has no list tool.
 var OpencodeDenied = []string{"shell", "read", "grep", "glob", "edit"}
@@ -421,6 +425,31 @@ func approve(json object, notes *[]string) ([]change, error) {
 	return adds("approval of the nib server in .mcp.json"), nil
 }
 
+// allow adds the allow rules for ClaudeAllowed that are missing.
+func allow(json object) ([]change, error) {
+	permissions, err := objectAt(json, "permissions")
+	if err != nil {
+		return nil, err
+	}
+	rules, err := listAt(permissions, "allow", "permissions.allow")
+	if err != nil {
+		return nil, err
+	}
+	var added []string
+	for _, tool := range ClaudeAllowed {
+		if !slices.Contains(rules, any(tool)) {
+			rules = append(rules, tool)
+			added = append(added, tool)
+		}
+	}
+	if len(added) == 0 {
+		return nil, nil
+	}
+	permissions.set("allow", rules)
+	json.set("permissions", permissions)
+	return adds("allow rules for " + strings.Join(added, ", ")), nil
+}
+
 // deny adds Claude Code deny rules for the built-in tools nib replaces, where a bare tool name removes the tool, also in bypass mode, and
 // removes the rules of ClaudeUndenied.
 func deny(json object) ([]change, error) {
@@ -728,6 +757,7 @@ func Setup(options Options) []string {
 	opencodeStep := all(addOpencodeServer(command, options.Providers), denyOpencode)
 	hookStep := func(json object, _ *[]string) ([]change, error) { return addHook(json, command) }
 	denyStep := func(json object, _ *[]string) ([]change, error) { return deny(json) }
+	allowStep := func(json object, _ *[]string) ([]change, error) { return allow(json) }
 	// Claude Code keeps user-scope servers, and local-scope ones by project folder, in a file it rewrites while it runs: setup only reads it,
 	// and its own CLI changes it.
 	registry := filepath.Join(home, ".claude.json")
@@ -818,7 +848,7 @@ func Setup(options Options) []string {
 		configure(filepath.Join(options.Directory, ".mcp.json"), func(json object, _ *[]string) ([]change, error) {
 			return addServer(json, "mcpServers", command, options.Providers)
 		})
-		configure(filepath.Join(options.Directory, ".claude", "settings.local.json"), all(approve, hookStep, denyStep))
+		configure(filepath.Join(options.Directory, ".claude", "settings.local.json"), all(approve, hookStep, denyStep, allowStep))
 		opencode := filepath.Join(options.Directory, "opencode.json")
 		if _, err := os.Stat(opencode); err == nil {
 			configure(opencode, opencodeStep)
@@ -841,7 +871,7 @@ func Setup(options Options) []string {
 	if config == "" {
 		config = filepath.Join(home, ".claude")
 	}
-	configure(filepath.Join(config, "settings.json"), all(hookStep, denyStep))
+	configure(filepath.Join(config, "settings.json"), all(hookStep, denyStep, allowStep))
 	switch {
 	case user != nil:
 		userWords, _ := program(user)
@@ -977,7 +1007,7 @@ func runClaude(dir string, args []string) (int, string) {
 
 var usage = `Usage: nib setup [--user] [--dry-run] [--provider NAME=PROGRAM]...
 Registers nib in this folder: the MCP server in .mcp.json; its approval, its Claude Code hook and deny rules for the built-in tools nib replaces
-(` + strings.Join(ClaudeDenied, ", ") + `) in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
+(` + strings.Join(ClaudeDenied, ", ") + `) and an allow rule for ` + strings.Join(ClaudeAllowed, ", ") + `, which the nibash mod polls, in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
 tools Claude Code no longer has (` + strings.Join(ClaudeUndenied, ", ") + `) are removed.
 --provider NAME=PROGRAM makes nib host PROGRAM's tools as NAME_TOOL (see nib --help) and removes the NAME server entries and registrations

@@ -32,5 +32,8 @@ const nibashSchema = `{"type":"object","properties":{"command":{"type":"string"}
 
 const statusSchema = `{"type":"object","properties":{"tail":{"description":"Last lines of each one's output; default 0, at most 50","type":"integer"}}}`
 
+// statusOutputSchema is ShellStatus as JSON Schema, declared so clients pass nibash_status's structured content on.
+const statusOutputSchema = `{"type":"object","properties":{"commands":{"type":"array","items":{"type":"object","properties":{"agent":{"type":"string"},"command":{"type":"string"},"description":{"type":"string"},"started":{"type":"integer"},"tail":{"type":"array","items":{"type":"string"}}},"required":["agent","command","started"]}},"jobs":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"agent":{"type":"string"},"command":{"type":"string"},"started":{"type":"integer"},"ended":{"type":"integer"},"running":{"type":"boolean"},"exit":{"type":"integer"},"log":{"type":"string"},"tail":{"type":"array","items":{"type":"string"}}},"required":["id","agent","command","started","running","log"]}}},"required":["commands","jobs"]}`
+
 // statusDescription is the nibash_status tool's description.
 const statusDescription = "List what nibash runs for you and your subagents: commands still in their call and background jobs (running, or ended in the last 10 minutes), with how long each ran and its log; tail adds the last lines of each one's output."

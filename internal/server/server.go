@@ -232,7 +232,7 @@ func New(options Options) *Server {
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
 		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
-		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
+		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), OutputSchema: json.RawMessage(statusOutputSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
 	}
 	for _, p := range options.Providers {
 		for _, tool := range p.Tools {
