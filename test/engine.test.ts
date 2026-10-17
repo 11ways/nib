@@ -2380,13 +2380,23 @@ describe("grep replace", () => {
     expect(applied.text).toBe(`[file.txt#${fileTag("one\n2\nII\nthree\n")}]\n1:one\n2:2\n3:II\n4:three`)
   })
 
+  test("a long matched line shows its start and the stretches around its matches, unless maxLineLength asks for more", async () => {
+    const line = `${"a".repeat(100)} needle ${"b".repeat(300)}`
+    const f = await fixture(line + "\n")
+    const short = (await f.engine.grep(f.ctx, { pattern: "needle" })).text
+    expect(short).toContain(`*[1 chars 1-40, 62-147 of 408]|${"a".repeat(40)} ... ${"a".repeat(39)} needle ${"b".repeat(39)}\n`)
+    expect(short).not.toContain("b".repeat(41))
+    // Asked for whole lines, the agent gets them.
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", maxLineLength: 1000 })).text).toContain(`\n*1:${line}`)
+  })
+
   test("a single file whose rows pass the output budget is cut with a way on, instead of left out", async () => {
     const f = await fixture(Array.from({ length: 300 }, (_, index) => `match ${"x".repeat(400)} ${index + 1}`).join("\n") + "\n")
-    const result = (await f.engine.grep(f.ctx, { pattern: "match" })).text
+    const result = (await f.engine.grep(f.ctx, { pattern: "match", maxLineLength: 512 })).text
     expect(Buffer.byteLength(result)).toBeLessThanOrEqual(40 * 1024 + 200)
     const next = Number(/\[output limit reached; grep file\.txt:(\d+)- to go on from line \1\]/.exec(result)![1])
     expect(result).toContain(`\n*${next - 1}:match `)
-    expect((await f.engine.grep(f.ctx, { pattern: "match", paths: [`file.txt:${next}-`] })).text).toContain(`\n*${next}:match `)
+    expect((await f.engine.grep(f.ctx, { pattern: "match", maxLineLength: 512, paths: [`file.txt:${next}-`] })).text).toContain(`\n*${next}:match `)
     const preview = (await f.engine.grep(f.ctx, { pattern: "match", replace: "MATCH" })).text
     const shown = [...preview.matchAll(/^>\d+\|/gm)].length
     expect(preview).toContain(`To apply the ${shown} replaced lines shown`)

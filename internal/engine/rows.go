@@ -85,9 +85,32 @@ func matchWindows(content string, spans []span, columns int) *windowed {
 	if len(spans) == 0 || spans[0].end <= columns {
 		return nil
 	}
-	reach := max(20, columns/(2*windows))
+	return stretches(content, nil, spans, max(20, columns/(2*windows)), columns)
+}
+
+// matchColumns is the length past which a grep match row, unless the agent asked for its lines whole, shows only its start and the
+// stretches around its matches: the rest of a long line costs much and tells little.
+const matchColumns = 200
+
+// headWindows are a long matched line's first matchHead characters and the stretches around its first matches.
+func headWindows(content string, spans []span) *windowed {
+	if len(spans) == 0 {
+		return nil
+	}
+	return stretches(content, []span{{0, matchHead}}, spans, matchReach, matchColumns)
+}
+
+const (
+	// matchHead is how much of a long matched line's start headWindows keeps, and matchReach how much on each side of a match.
+	matchHead  = 40
+	matchReach = 40
+)
+
+// stretches are the stretches of content around spans, reach on each side, after the given leading ones, merged where they meet and each
+// at most columns long.
+func stretches(content string, leading, spans []span, reach, columns int) *windowed {
 	length := js.Len(content)
-	var found []span
+	found := slices.Clone(leading)
 	for _, s := range spans {
 		start := max(0, s.start-reach)
 		end := min(length, s.end+reach, start+columns)
@@ -100,6 +123,7 @@ func matchWindows(content string, spans []span, columns int) *windowed {
 	labels := make([]string, len(found))
 	texts := make([]string, len(found))
 	for i, w := range found {
+		w.end = min(w.end, length)
 		labels[i] = fmt.Sprintf("%d-%d", w.start+1, w.end)
 		texts[i] = visible(js.Slice(content, w.start, w.end))
 	}

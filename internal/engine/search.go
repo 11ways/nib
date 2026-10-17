@@ -434,9 +434,11 @@ type replaced struct {
 }
 
 type grepShape struct {
-	limit           int
-	before, after   int
-	columns         int
+	limit         int
+	before, after int
+	columns       int
+	// explicit is set when the agent chose maxLineLength, so a long matched line is cut only past it.
+	explicit        bool
 	inside          func(int) bool
 	spans           map[int][]span
 	replaced        map[int]replaced
@@ -928,10 +930,11 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 		limit = grepSingleFile
 	}
 	shape := grepShape{
-		limit:   limit,
-		before:  valueOr(capped("before", args.Before, grepContext, &caps), defaultBefore),
-		after:   valueOr(capped("after", args.After, grepContext, &caps), defaultAfter),
-		columns: valueOr(capped("maxLineLength", args.MaxLineLength, LineLimit, &caps), grepColumns),
+		limit:    limit,
+		before:   valueOr(capped("before", args.Before, grepContext, &caps), defaultBefore),
+		after:    valueOr(capped("after", args.After, grepContext, &caps), defaultAfter),
+		columns:  valueOr(capped("maxLineLength", args.MaxLineLength, LineLimit, &caps), grepColumns),
+		explicit: args.MaxLineLength != nil,
 	}
 	// Rows for a file too big to hold, or one still growing, come from ripgrep itself, which reports the context lines too.
 	fallback := func(file string) (map[int]string, error) {
@@ -1193,10 +1196,13 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 			previous = line
 			continue
 		}
-		// A long matched line shows the stretches around its matches when cutting it at the start would hide them.
+		// A long matched line shows the stretches around its matches when cutting it at the start would hide them, and past matchColumns,
+		// unless maxLineLength asked for lines whole, its start and those stretches only.
 		var w *windowed
-		if hits[line] && js.Len(visible(content)) > f.shape.columns {
+		if length := js.Len(visible(content)); hits[line] && length > f.shape.columns {
 			w = matchWindows(content, f.shape.spans[line], f.shape.columns)
+		} else if hits[line] && !f.shape.explicit && length > matchColumns {
+			w = headWindows(content, f.shape.spans[line])
 		}
 		switch {
 		case f.untagged != "":
