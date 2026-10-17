@@ -43,8 +43,8 @@ type plan interface {
 }
 
 // command is one of nibash's own commands; prepare refuses with errUnsupported for anything it does not implement. renders marks a command
-// that runs the real program and only reshapes its output: it is nib's own only where that output reaches the model, and it has no rows to
-// edit from. prepare refuses with errForeign for a form it never handles, which then runs as the system program without a note.
+// that runs the real program and only reshapes its output, which has no rows to edit from; into another nib command its lines go as the
+// program printed them. prepare refuses with errForeign for a form it never handles, which then runs as the system program without a note.
 type command struct {
 	prepare func(name string, args []string) (plan, error)
 	renders bool

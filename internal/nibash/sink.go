@@ -160,6 +160,7 @@ type item struct {
 	gap         bool
 	plain       bool
 	display     bool
+	listed      *listedLine
 	first, last int
 }
 
@@ -201,6 +202,8 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	s.mu.Unlock()
 	rows, raw, echoed := s.collect(e, ctx)
 	rows, footer := fit(ctx.Ctx, rows, raw, logs, d)
+	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
+	rows = groupListings(rows)
 	// Only rows that are shown count as seen.
 	seen := map[*engine.Source][]int{}
 	var texts []string
@@ -290,6 +293,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 	var plain []engine.PlainLine
 	echoed := false
 	var plainAt []int
+	var plainListed []*listedLine
 	flushPlain := func() {
 		if len(plain) == 0 {
 			return
@@ -309,9 +313,14 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 			if k+1 < len(rows) {
 				last = plainAt[rows[k+1].At-1] - 1
 			}
-			items = append(items, item{text: r.Text, plain: true, first: first, last: max(first, last)})
+			// A collapsed run's row is no line the program printed.
+			var listed *listedLine
+			if r.Text == plain[r.At-1].Text {
+				listed = plainListed[r.At-1]
+			}
+			items = append(items, item{text: r.Text, plain: true, listed: listed, first: first, last: max(first, last)})
 		}
-		plain, plainAt = nil, nil
+		plain, plainAt, plainListed = nil, nil, nil
 	}
 	for _, en := range entries {
 		if en.record == nil {
@@ -329,6 +338,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 			for i, line := range plainLines(en.bytes) {
 				plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: line})
 				plainAt = append(plainAt, first+i)
+				plainListed = append(plainListed, nil)
 			}
 			log.bytes(en.bytes)
 			continue
@@ -341,6 +351,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 		if r.origin == nil {
 			plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: engine.PlainText(r.text)})
 			plainAt = append(plainAt, at)
+			plainListed = append(plainListed, r.listed)
 			continue
 		}
 		flushPlain()
@@ -386,6 +397,8 @@ type row struct {
 	// covers are the lines a held marker stands for; a match row (grep's match, a line a diff adds) is what the command is for, so it always
 	// prints.
 	covers []int
+	// listed is the path a plain row's line names, which the terminal may print under its folder.
+	listed *listedLine
 }
 
 // plainFollows separates a file's rows from plain output shaped like them, which is not an anchor.
@@ -410,7 +423,7 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 				text, _ = engine.Row(it.first, text, rowLimit)
 				capped = true
 			}
-			rows = append(rows, row{text: text, header: -1, plain: true, capped: capped, first: it.first, last: it.last})
+			rows = append(rows, row{text: text, header: -1, plain: true, capped: capped, listed: it.listed, first: it.first, last: it.last})
 			continue
 		}
 		source := it.source

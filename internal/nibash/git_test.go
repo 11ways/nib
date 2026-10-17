@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -90,7 +91,18 @@ func TestGitOutputGoingElsewhereOrInFormsNibDoesNotReadIsGits(t *testing.T) {
 	f := operationFixture(t)
 	raw := " M a.go\n M " + operation + "Operation.java\n M " + operation + "OperationResult.java\n M " + operation + "ResultStep.java"
 	// Into another command or a file, git's own lines go, so what reads them sees what git printed.
-	expect(t, f.run("git status --short | cat"), raw)
+	expect(t, f.run("git status --short | sort"), raw)
+	// Through nib's own commands, which select from git's own lines, what reaches the model is laid out by folder as git's would be.
+	expect(t, f.run("git status --short | cat"), " M a.go\n["+operation+"]\n   M Operation.java\n   M OperationResult.java\n   M ResultStep.java")
+	expect(t, f.run("git status --short | head -3"), " M a.go\n["+operation+"]\n   M Operation.java\n   M OperationResult.java")
+	expect(t, f.run("git status --short | tail -n 2"), " M "+operation+"OperationResult.java\n M "+operation+"ResultStep.java")
+	expect(t, f.run("git status --short | grep -v a.go"), "["+operation+"]\n   M Operation.java\n   M OperationResult.java\n   M ResultStep.java")
+	// grep -n changes each line, so they are no longer git's and print as grep printed them.
+	expect(t, f.run("git status --short | grep -n Result"), "3: M "+operation+"OperationResult.java\n4: M "+operation+"ResultStep.java")
+	// A diff's lines go on as git printed them, so head counts git's lines.
+	if out := f.run("git diff | head -2"); !regexp.MustCompile(`^diff --git a/a.go b/a.go\nindex [0-9a-f]+\.\.[0-9a-f]+ 100644$`).MatchString(out) {
+		t.Errorf("diff into head: %q", out)
+	}
 	if out := f.run("git status --short -uno > out.txt; /usr/bin/cat out.txt"); !strings.HasPrefix(out, raw+"\n[changed by this command: out.txt#") {
 		t.Errorf("into a file: %q", out)
 	}

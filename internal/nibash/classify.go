@@ -265,9 +265,6 @@ func (c *classifier) check(call *syntax.CallExpr, out destination) (nib, system 
 	if _, isLit := call.Args[0].Parts[0].(*syntax.Lit); !isLit {
 		return false, false
 	}
-	if cmd.renders && out != toTerminal {
-		return false, false
-	}
 	if _, err := cmd.prepare(name, words[1:]); err != nil {
 		return false, out == toTerminal && !errors.Is(err, errForeign)
 	}

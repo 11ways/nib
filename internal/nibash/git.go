@@ -34,6 +34,8 @@ type gitPlan struct {
 	wide bool
 	// forms are the kinds of path line the command line asks for, the only lines read as paths.
 	forms []*regexp.Regexp
+	// diffs is whether the output holds a diff's lines.
+	diffs bool
 }
 
 // gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
@@ -150,7 +152,7 @@ subcommand:
 			shapes = true
 			p.forms = append(p.forms, gitNumstat)
 		case "-p", "-u", "--patch":
-			shapes = true
+			shapes, p.diffs = true, true
 		}
 		if strings.HasPrefix(name, "-U") || strings.HasPrefix(name, "--unified=") {
 			shapes = true
@@ -182,6 +184,8 @@ subcommand:
 		p.patch = true
 	case "diff", "show":
 		p.patch = true
+		// Without a list of files they print the diff itself.
+		p.diffs = p.diffs || len(p.forms) == 0
 	}
 	return p, nil
 }
@@ -227,19 +231,57 @@ func (o gitOptions) takesNext(name string) bool {
 }
 
 func (p *gitPlan) run(inv *invocation) int {
-	args := p.args
-	if p.wide {
-		// git cuts a path to fit 80 columns, which would leave it out of its folder; its bars, at most 20 wide, still show each change's size
-		// against the others.
-		args = append(append(append([]string{}, args[:p.at+1]...), "--stat-width=1000", "--stat-graph-width=20"), args[p.at+1:]...)
+	command := append([]string{"git"}, p.args...)
+	parse := gitParser(p.forms)
+	if inv.out.link != nil {
+		// Into another nib command go git's own lines, as they come, those that name a path marked so the terminal can lay them out where
+		// they reach it; a diff's rows would not be the lines that command must read, so its lines are left unmarked.
+		if p.diffs {
+			parse = nil
+		}
+		return streamed(inv, command, func(line string) record { return listingRecord(line, parse) })
 	}
-	lines, status := captured(inv, append([]string{"git"}, args...))
+	lines, status := captured(inv, command, false)
+	if p.wide {
+		// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars at
+		// most 20 wide, it prints the form that is shorter laid out. A stat only reads, so running it twice changes nothing.
+		wideCommand := append(append(append([]string{"git"}, p.args[:p.at+1]...), "--stat-width=1000", "--stat-graph-width=20"), p.args[p.at+1:]...)
+		if wide, wideStatus := captured(inv, wideCommand, true); wideStatus == status && p.shown(wide) < p.shown(lines) {
+			lines = wide
+		}
+	}
 	if p.patch {
 		p.renderPatch(inv, lines)
 	} else {
-		emitLines(inv, compactListing(lines, gitParser(p.forms)))
+		emitListing(inv, lines, parse)
 	}
 	return status
+}
+
+// shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, and the rest as they are.
+func (p *gitPlan) shown(lines []string) int {
+	parse := gitParser(p.forms)
+	total := 0
+	var plain []string
+	for i := 0; i < len(lines); {
+		if !gitDiff.MatchString(lines[i]) {
+			plain = append(plain, lines[i])
+			i++
+			continue
+		}
+		end := sectionEnd(lines, i)
+		total += textSize(lines[i:end])
+		i = end
+	}
+	return total + textSize(compactListing(plain, parse))
+}
+
+func textSize(lines []string) int {
+	n := 0
+	for _, line := range lines {
+		n += len(line) + 1
+	}
+	return n
 }
 
 // splitLines splits a program's output into lines without their newline; a carriage return before it stays, for a diff to compare.
@@ -312,15 +354,11 @@ var gitExtended = []string{"old mode ", "new mode ", "deleted file mode ", "new 
 // that line, are the file's rows; removed lines and lines the file no longer holds there print in forms that are never anchors. Everything
 // else, the commits of a log and a stat included, prints as git printed it, its path listings with each folder once.
 func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
-	var plain []string
-	flush := func() {
-		emitLines(inv, compactListing(plain, gitParser(p.forms)))
-		plain = nil
-	}
+	parse := gitParser(p.forms)
 	base, asked := "", false
 	for i := 0; i < len(lines); {
 		if !gitDiff.MatchString(lines[i]) {
-			plain = append(plain, lines[i])
+			inv.out.emit(listingRecord(lines[i], parse))
 			i++
 			continue
 		}
@@ -329,14 +367,15 @@ func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
 			base, asked = p.base(inv), true
 		}
 		if source := p.sectionSource(inv, base, lines[i:end]); source != nil {
-			flush()
 			renderFile(inv, source, lines[i:end])
 		} else {
-			plain = append(plain, lines[i:end]...)
+			// A file's part with no new side nib can hold prints as git printed it; its lines are never a path list.
+			for _, line := range lines[i:end] {
+				inv.out.emit(record{text: line})
+			}
 		}
 		i = end
 	}
-	flush()
 }
 
 // sectionEnd is where one file's part of a diff that starts at start ends: after its extended header lines and the hunks their headers count,

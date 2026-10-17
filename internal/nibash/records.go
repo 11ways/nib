@@ -26,6 +26,8 @@ type record struct {
 	separator bool
 	// display is a line of nib's own or a program's that belongs under origin's file header but is not that file's line, as text shows it.
 	display bool
+	// listed is the path the line names, when the program that printed it read one there.
+	listed *listedLine
 }
 
 type origin struct {

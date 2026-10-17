@@ -15,8 +15,13 @@ type listerPlan struct {
 }
 
 func (p *listerPlan) run(inv *invocation) int {
-	lines, status := captured(inv, append([]string{p.name}, p.args...))
-	emitLines(inv, compactListing(lines, p.parse(inv.dir)))
+	command := append([]string{p.name}, p.args...)
+	parse := p.parse(inv.dir)
+	if inv.out.link != nil {
+		return streamed(inv, command, func(line string) record { return listingRecord(line, parse) })
+	}
+	lines, status := captured(inv, command, false)
+	emitListing(inv, lines, parse)
 	return status
 }
 
