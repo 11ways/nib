@@ -1489,12 +1489,12 @@ describe("SUB", () => {
     const f = await fixture(paragraph + "\nshort\n")
     const r = await f.read()
     const result = await f.patch(`[file.txt#${r.tag}]\nSUB 1: target\n+goal`)
-    // Prose is not minified, so the stretch reaches a sixth of the usual 2000 characters on each side of the change.
-    expect(result.text).toContain("\n[1 chars 2674-3343 of 3511]|")
+    // The stretch reaches a sixth of the 300 characters an edit response shows of a new row on each side of the change.
+    expect(result.text).toContain("\n[1 chars 2957-3060 of 3511]|")
     expect(result.text).toContain(" word goal word ")
     // A change near the start of a long line is visible in a plain cut, so that stays as it was.
     const start = await f.patch(`[file.txt#${result.tag}]\nSUB 1: alpha\n+first`)
-    expect(start.text).toContain("\n[1 cut at 2000 of 3511 chars]|first word word")
+    expect(start.text).toContain("\n[1 cut at 300 of 3511 chars]|first word word")
   })
 
   test("SUB rows that repeat the line's indentation get it once, with a lesson", async () => {

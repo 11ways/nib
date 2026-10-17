@@ -864,9 +864,15 @@ func knownLine(version *snapshots.Version, line int) bool {
 	return version.Seen[line] || version.Known[line]
 }
 
+const (
+	// editColumns is where an edit response cuts a new row, showing where a replaced line changed; keptColumns where it cuts a kept row.
+	editColumns = 300
+	keptColumns = 120
+)
+
 // preview is the rows of an edit response: the kept row on each side of every change, the new rows whole except a sparse N~ map inside a long
-// run, and one note per stretch of moved lines the agent knew, with their old numbers.
-func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit int) previewed {
+// run, and one note per stretch of moved lines the agent knew, with their old numbers. New rows are cut past limit and kept rows past keptLimit.
+func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, keptLimit int) previewed {
 	full := map[int]bool{}
 	mapped := map[int]bool{}
 	var contents []string
@@ -997,14 +1003,18 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit int) 
 		if whole {
 			content := lineContent(r.raw)
 			var w *windowed
-			if r.was != nil && js.Len(visible(content)) > limit {
-				w = matchWindows(content, []span{changedSpan(*r.was, content)}, limit)
+			rowLimit := limit
+			if r.origin >= 0 && r.was == nil {
+				rowLimit = keptLimit
+			}
+			if r.was != nil && js.Len(visible(content)) > rowLimit {
+				w = matchWindows(content, []span{changedSpan(*r.was, content)}, rowLimit)
 			}
 			if w != nil {
 				out.output = append(out.output, fmt.Sprintf("[%d %s]|%s", index+1, w.label, w.text))
 				out.marks = append(out.marks, marks{cut: true})
 			} else {
-				line := lineRow(index+1, content, limit)
+				line := lineRow(index+1, content, rowLimit)
 				out.output = append(out.output, line.text)
 				if line.anchor {
 					out.shown = append(out.shown, index+1)
@@ -1765,7 +1775,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		if minifiedReason(canonical, len(item.live.Key), item.live.Lines) != "" {
 			limit = minifiedColumns
 		}
-		rows := preview(item.applied.rows, item.applied.runs, item.prior, limit)
+		rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, limit)
 		// Rewriting the last line of a file without a final newline is the usual way to try adding one, which an edit never does on its own.
 		unterminated := false
 		if item.source.body != "" && !strings.HasSuffix(item.source.body, "\n") {
@@ -1857,11 +1867,12 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	if destination != nil {
 		limitPath = destination.canonical
 	}
-	limit := LineLimit
+	// The agent wrote the new rows, so a long one shows where it changed; the kept rows around a change are cut shorter still.
+	limit := min(LineLimit, editColumns)
 	if minifiedReason(limitPath, len(next.Key), next.Lines) != "" {
 		limit = minifiedColumns
 	}
-	rows := preview(item.applied.rows, item.applied.runs, item.prior, limit)
+	rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, min(limit, keptColumns))
 	shownDisplay := display
 	if destination != nil {
 		shownDisplay = destination.display
