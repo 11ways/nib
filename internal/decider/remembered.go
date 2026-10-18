@@ -93,14 +93,10 @@ func keyFile(getenv func(string) string) string {
 	return filepath.Join(config, "nib", "openrouter-key")
 }
 
-// readKeyFile is the key file's first line; a missing file is no key, and one others may read is refused, since the key is a secret.
+// readKeyFile is the key file's first line; a missing file is no key.
 func readKeyFile(file string) (string, error) {
-	info, err := os.Stat(file)
-	if err != nil {
+	if _, err := os.Stat(file); err != nil {
 		return "", nil
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s holds the OpenRouter key but others may read it; chmod 600 it", file)
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {

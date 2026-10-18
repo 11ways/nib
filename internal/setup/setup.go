@@ -1124,7 +1124,7 @@ setup each time it starts Claude Code.
 --decider KIND (fixed, keywords, or openrouter:MODEL,... for decision models in order of preference) and --summary LIST (summarizers, as
 NIB_DECIDER_SUMMARY takes them) are remembered in the same file, and every nib reads them when it starts, unless its environment sets a
 NIB_DECIDER variable itself; an empty value (--decider= or --summary=) forgets one. A choice nib would refuse is not remembered. The
-OpenRouter key is never written anywhere: nib reads NIB_DECIDER_KEY or OPENROUTER_API_KEY, else ~/.config/nib/openrouter-key (mode 600),
+OpenRouter key is never written anywhere: nib reads NIB_DECIDER_KEY or OPENROUTER_API_KEY, else ~/.config/nib/openrouter-key,
 else the openrouter entry of OpenCode's auth.json.`
 
 // Main is `nib setup` from the command line; it returns the exit code.

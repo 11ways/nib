@@ -44,10 +44,6 @@ func TestTheKeyIsFoundInNibsFileThenOpencodes(t *testing.T) {
 	if c, err := Parse(getenv); err != nil || c.Key != "from-file" {
 		t.Fatalf("%v %v", c.Key, err)
 	}
-	os.Chmod(file, 0o644)
-	if _, err := Parse(getenv); err == nil || !strings.Contains(err.Error(), "chmod 600") {
-		t.Fatalf("a key file others may read must be refused: %v", err)
-	}
 	env["NIB_DECIDER_KEY"] = "from-env"
 	if c, err := Parse(getenv); err != nil || c.Key != "from-env" {
 		t.Fatalf("%v %v", c.Key, err)

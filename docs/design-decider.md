@@ -230,7 +230,7 @@ directory under the roots is writable by sandboxed programs.
 | variable | default | meaning |
 | --- | --- | --- |
 | `NIB_DECIDER` | `keywords` | `fixed`, `keywords` or `openrouter`; anything else stops nib at startup |
-| `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | (user decision 4); without either, `~/.config/nib/openrouter-key` (mode 600), then OpenCode's `auth.json` `openrouter` entry; `openrouter` with none found stops nib at startup, naming where it looked. `nib setup --decider/--summary` remember `NIB_DECIDER`, `NIB_DECIDER_MODEL` and `NIB_DECIDER_SUMMARY` (`decider.Remembered`) in `setup.json`, read at startup unless the environment sets one |
+| `NIB_DECIDER_KEY` | `$OPENROUTER_API_KEY` | (user decision 4); without either, `~/.config/nib/openrouter-key`, then OpenCode's `auth.json` `openrouter` entry; `openrouter` with none found stops nib at startup, naming where it looked. `nib setup --decider/--summary` remember `NIB_DECIDER`, `NIB_DECIDER_MODEL` and `NIB_DECIDER_SUMMARY` (`decider.Remembered`) in `setup.json`, read at startup unless the environment sets one |
 | `NIB_DECIDER_MODEL` | `typesafe/jev-1.14` | Decisions models, comma separated, in order of preference |
 | `NIB_DECIDER_URL` | `https://openrouter.ai/api/alpha/decisions` | tests point it at a fake |
 | `NIB_DECIDER_TIMEOUT` | `30000` | ms for the whole decision |
