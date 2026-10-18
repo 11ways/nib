@@ -4,3 +4,4 @@ bun.lock
 bun.lockb
 bench/results/
 bench/.cache/
+.claude/worktrees/
