@@ -129,7 +129,7 @@ describe("read", () => {
     const long = "word ".repeat(400) + "w"
     const f = await fixture(long + "\nshort\n")
     const r = await f.read()
-    expect(r.text).toContain("\n[1 cut at 2000 of 2001 chars]|word word")
+    expect(r.text).toContain("\n[line 1, chars 1-2000 of 2001]|word word")
     expect(r.text).toEndWith("\n[cut rows: change them in place with SUB N: OLD, or read file.txt:N with maxLineLength to see one whole]")
     expect(r.anchors).toEqual([2])
     await expect(f.edit(r.tag, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow("Preview of the first 1 unseen line(s)")
@@ -1034,7 +1034,7 @@ describe("grep", () => {
     const f = await fixture("x".repeat(600) + "needle\nneedle\n")
     const result = await f.engine.grep(f.ctx, { pattern: "needle" })
     // The match sits past the first 512 characters, so the row shows the stretch around it instead of the start.
-    expect(result.text).toContain(`*[1 chars 516-606 of 606]|${"x".repeat(85)}needle\n`)
+    expect(result.text).toContain(`*[line 1, chars 516-606 of 606]|${"x".repeat(85)}needle\n`)
     expect(result.text).toContain("*2:needle")
   })
 })
@@ -1482,7 +1482,7 @@ describe("SUB", () => {
     const result = await f.patch(`[file.txt#${r.tag}]\nSUB 1: marker\n+MARKER`)
     expect(await readFile(f.filePath, "utf8")).toBe(long.replace("marker", "MARKER") + "\nshort\n")
     // The line is dense, so the file counts as minified: the response shows 50 characters on each side of the change, not the start of the line.
-    expect(result.text).toContain(`\n[1 chars 2952-3057 of 3108]|${"x".repeat(49)} MARKER ${"y".repeat(49)}\n`)
+    expect(result.text).toContain(`\n[line 1, chars 2952-3057 of 3108]|${"x".repeat(49)} MARKER ${"y".repeat(49)}\n`)
     expect(result.text).toContain("\n[cut rows: change them in place with SUB N: OLD")
     expect(await refusal(f.patch(`[file.txt#${result.tag}]\nPUT 1.=1:\n~xxx\n+short`))).toContain("never displayed in full")
   })
@@ -1493,11 +1493,11 @@ describe("SUB", () => {
     const r = await f.read()
     const result = await f.patch(`[file.txt#${r.tag}]\nSUB 1: target\n+goal`)
     // The stretch reaches a sixth of the 300 characters an edit response shows of a new row on each side of the change.
-    expect(result.text).toContain("\n[1 chars 2957-3060 of 3511]|")
+    expect(result.text).toContain("\n[line 1, chars 2957-3060 of 3511]|")
     expect(result.text).toContain(" word goal word ")
     // A change near the start of a long line is visible in a plain cut, so that stays as it was.
     const start = await f.patch(`[file.txt#${result.tag}]\nSUB 1: alpha\n+first`)
-    expect(start.text).toContain("\n[1 cut at 300 of 3511 chars]|first word word")
+    expect(start.text).toContain("\n[line 1, chars 1-300 of 3511]|first word word")
   })
 
   test("rows an edit response cuts stay seen when the agent wrote them or knew them before", async () => {
@@ -1506,14 +1506,14 @@ describe("SUB", () => {
     const r = await f.read()
     // A new long row the agent wrote, shown cut at 300 characters, still anchors an insert after it.
     const written = await f.patch(`[file.txt#${r.tag}]\nPUT >1:\n+${prose("new")}${"tail ".repeat(60)}marker`)
-    expect(written.text).toContain("\n[2 cut at 300 of ")
+    expect(written.text).toContain("\n[line 2, chars 1-300 of ")
     const after = await f.patch(`[file.txt#${written.tag}]\nPUT >2:\n+after new`)
     // The kept line moved down and showed cut at 120 characters; the agent read it whole before, so it anchors an edit at its new number.
-    expect(after.text).toContain("\n[4 cut at 120 of ")
+    expect(after.text).toContain("\n[line 4, chars 1-120 of ")
     const kept = await f.patch(`[file.txt#${after.tag}]\nPUT >4:\n+after kept`)
     // A SUB on a line the agent read whole leaves a line it knows, though the response shows only the stretch around the change.
     const sub = await f.patch(`[file.txt#${kept.tag}]\nSUB 2: marker\n+MARKER`)
-    expect(sub.text).toContain("\n[2 chars ")
+    expect(sub.text).toContain("\n[line 2, chars ")
     await f.patch(`[file.txt#${sub.tag}]\nPUT 2.=2:\n+short new`)
     expect(await readFile(f.filePath, "utf8")).toBe(`top\nshort new\nafter new\n${prose("kept")}\nafter kept\nend\n`)
   })
@@ -1623,7 +1623,7 @@ describe("grep options", () => {
     await expect(f.engine.grep(f.ctx, { pattern: "one", paths: ["file.txt:1:2"] })).rejects.toThrow("file.txt:1:2 does not exist; for lines 1 to 2, write file.txt:1-2")
   })
 
-  test("past 40 context lines on a page only definitions get theirs, and the other matches stay anchors", async () => {
+  test("past 40 context lines on a page definitions keep the context asked for, and the other matches share the rest evenly", async () => {
     const f = await fixture()
     const pad = (from: number, count: number) => Array.from({ length: count }, (_, index) => `// pad ${from + index}`)
     const lines = [
@@ -1646,27 +1646,30 @@ describe("grep options", () => {
     const roomy = (await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], after: 1 })).text
     expect(roomy).toContain(`\n${rows(55, 57).join("\n")}\n`)
     expect(roomy).not.toContain("match rows shown")
-    // An import, the definition, a use in a value and a use in a body; 3 lines before and 12 after each would be 57 context lines.
+    // An import, the definition, a use in a value and a use in a body; 3 lines before and 12 after each would be 57 context lines. The
+    // definition takes 15, and 3 before and 6 after the other three come to 24 of the 25 left.
     expect((await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], before: 3, after: 12 })).text).toBe([
       "4 matches in 1 files",
-      [`[size.ts#${fileTag(source)}]`, row(1), "...", ...rows(18, 33), "...", row(56), "...", row(80)].join("\n"),
-      "[all 4 match rows shown, context lines only around the definition at size.ts:21: around all 4 they would be 57 lines, over grep's budget of 40; for another match's, read a range like size.ts:1-13]",
+      [`[size.ts#${fileTag(source)}]`, row(1), ...rows(2, 7), "...", ...rows(18, 33), "...", ...rows(53, 62), "...", ...rows(77, 86)].join("\n"),
+      "[all 4 match rows shown; the definition at size.ts:21 got the asked 3 before and 12 after, the other matches 3 before and 6 after each: around all 4 the asked context would be 57 lines, over grep's budget of 40; for more around one, read a range like size.ts:1-13]",
     ].join("\n\n"))
     await f.patch(`[size.ts#${fileTag(source)}]\nPUT 56:\n+const half = formatSize(1024)`)
     expect(await readFile(path.join(f.directory, "size.ts"), "utf8")).toBe(source.replace("formatSize(512)", "formatSize(1024)"))
   })
 
-  test("with no definition among the matches the first ones get the context asked for, and the default gives none", async () => {
+  test("with no definition among the matches every match gets the widest context that fits the budget, the same for each", async () => {
     // A hit every fifth line: 20 matches.
     const f = await fixture(Array.from({ length: 100 }, (_, index) => (index + 1) % 5 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const asked = (await f.engine.grep(f.ctx, { pattern: "hit", before: 0, after: 5 })).text
-    expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n...\n*60:hit 60\n")
-    expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines only around the first 10: around all 20 they would be 76 lines, over grep's budget of 40; for another match's, read a range like file.txt:55-60]")
-    // The default context goes to none of them once it would pass the budget: a hit every third line is 50 matches.
+    // 2 lines after each of 20 hits come to 40; 3 would be 60.
+    expect(asked).toContain("\n*5:hit 5\n 6:miss 6\n 7:miss 7\n...\n*10:hit 10\n")
+    expect(asked).toContain("\n*95:hit 95\n 96:miss 96\n 97:miss 97\n...\n*100:hit 100\n")
+    expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines: 0 before and 2 after each instead of the asked 0 before and 5 after: around all 20 the asked context would be 76 lines, over grep's budget of 40; for more around one, read a range like file.txt:5-10]")
+    // A hit every third line is 50 matches: even one line after each would pass the budget, so the default context goes to none.
     const g = await fixture(Array.from({ length: 150 }, (_, index) => (index + 1) % 3 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const plain = (await g.engine.grep(g.ctx, { pattern: "hit" })).text
     expect(plain).not.toContain("miss")
-    expect(plain).toEndWith("\n\n[all 50 match rows shown, without context lines: around all 50 they would be 99 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:2-4]")
+    expect(plain).toEndWith("\n\n[all 50 match rows shown, context lines: none instead of the default 1 before and 1 after: around all 50 the default context would be 99 lines, over grep's budget of 40; for more around one, read a range like file.txt:2-4]")
     // hit 5 to hit 25 of the first file: few enough for the default context.
     expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n...\n 9:miss 9\n*10:hit 10\n")
   })
@@ -1684,17 +1687,19 @@ describe("grep options", () => {
     for (const [name, lines] of Object.entries(files)) await writeFile(path.join(f.directory, name), lines.join("\n") + "\n")
     // 1 line before and 20 after: 21 context lines per match, so any two are over the budget.
     const grep = (pattern: string, paths: string[]) => f.engine.grep(f.ctx, { pattern, paths, before: 1, after: 20 })
-    const given = async (pattern: string, paths: string[]) => /context lines only around (.+?): around all/.exec((await grep(pattern, paths)).text)?.[1]
+    const given = async (pattern: string, paths: string[]) => /; (the .+?) got the asked/.exec((await grep(pattern, paths)).text)?.[1]
     expect(await given("format", ["sizes.ts"])).toBe("the definition at sizes.ts:2")
     expect(await given("Handle", ["server.go"])).toBe("the definition at server.go:3")
-    // A name in a Go receiver or in parameters is not what its line declares.
-    expect(await given("Server", ["server.go"])).toBe("the first 1")
+    // A name in a Go receiver or in parameters is not what its line declares, so every match shares the budget.
+    expect(await given("Server", ["server.go"])).toBeUndefined()
     expect(await given("formatSize", ["notes.md"])).toBe("the definition at notes.md:3")
-    // The definition wins over matches in a file earlier on the page.
+    // The definition keeps its context; the matches in a file earlier on the page share what is left.
     const python = (await grep("format_size", ["a.py", "b.py"])).text
-    expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n...\n*28:value = format_size(2)\n\n[b.py#")
+    expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n 3:# pad\n")
+    expect(python).toContain("\n 11:# pad\n...\n 27:# pad\n*28:value = format_size(2)\n 29:# pad\n")
+    expect(python).toContain("the other matches 1 before and 9 after each:")
     expect(python).toContain("\n*1:def format_size(bytes):\n 2:    return bytes\n 3:# pad\n")
-    expect(python).toContain("context lines only around the definition at b.py:1:")
+    expect(python).toContain("the definition at b.py:1 got the asked 1 before and 20 after,")
   })
 
   test("definitions keep all their context past the budget, also when the pattern matches their declaring word", async () => {
@@ -1707,14 +1712,14 @@ describe("grep options", () => {
     expect(text).toEndWith("\n...\n 116:}\n 117:/** Doc 29. */\n*118:function f29() {")
   })
 
-  test("past the budget, definitions that did not ask for context share it and the rest stay a list", async () => {
+  test("past the budget with the default context every match gets the same smaller context, so many definitions stay a short list", async () => {
     const f = await fixture()
     const lines = Array.from({ length: 30 }, (_, index) => [index % 2 ? `/** Doc ${index}. */` : "", `function f${index}() {`, `  return ${index}`, "}"]).flat()
     await writeFile(path.join(f.directory, "fns.ts"), lines.join("\n") + "\n")
     const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"] })).text
-    // One line before and one after: each definition comes to 2 lines, so 20 fit in 40.
-    expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n...\n 53:/** Doc 13. */\n*54:function f13() {\n")
-    expect(text).toEndWith("\n\n[all 30 match rows shown, context lines only around the first 20 of 30 definitions: around all 30 they would be 60 lines, over grep's budget of 40; for another match's, read a range like fns.ts:81-83]")
+    // One line on each side would be 60 lines; one line after each, the body's first, comes to 30.
+    expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n...\n*54:function f13() {\n 55:  return 13\n")
+    expect(text).toEndWith("\n\n[all 30 match rows shown, context lines: 0 before and 1 after each instead of the default 1 before and 1 after: around all 30 the default context would be 60 lines, over grep's budget of 40; for more around one, read a range like fns.ts:1-3]")
   })
 
   test("one file shows its first 100 matches, like a harness's own grep", async () => {
@@ -1820,7 +1825,7 @@ describe("grep options", () => {
     const content = "needle " + "x".repeat(50) + "\nneedle\n"
     const f = await fixture(content)
     const result = await f.engine.grep(f.ctx, { pattern: "needle", maxLineLength: 20 })
-    expect(result.text).toBe(`2 matches in 1 files\n\n[file.txt#${fileTag(content)}]\n*[1 cut at 20 of 57 chars]|needle ${"x".repeat(13)}\n*2:needle\n[cut rows: change them in place with SUB N: OLD, or read file.txt:N with maxLineLength to see one whole]`)
+    expect(result.text).toBe(`2 matches in 1 files\n\n[file.txt#${fileTag(content)}]\n*[line 1, chars 1-20 of 57]|needle ${"x".repeat(13)}\n*2:needle\n[cut rows: change them in place with SUB N: OLD, or read file.txt:N with maxLineLength to see one whole]`)
     await expect(f.patch(`[file.txt#${fileTag(content)}]\nPUT 1.=1:\n+x`)).rejects.toThrow("never displayed in full")
   })
 })
@@ -1890,15 +1895,15 @@ describe("color codes", () => {
     const content = "plain line\n\x1b[31mERROR\x1b[0m disk full\n"
     const f = await fixture(content)
     const r = await f.read()
-    expect(r.text).toBe(`[file.txt#${fileTag(content)}]\n1:plain line\n[2 ansi]|ERROR disk full\n[ansi rows: their color codes are stripped, so they are not anchors; change them in place with SUB N: OLD]`)
+    expect(r.text).toBe(`[file.txt#${fileTag(content)}]\n1:plain line\n[line 2, ansi]|ERROR disk full\n[ansi rows: their color codes are stripped, so they are not anchors; change them in place with SUB N: OLD]`)
     expect(r.anchors).toEqual([1])
     const subbed = await f.patch(`[file.txt#${r.tag}]\nSUB 2: disk full\n+disk ok`)
     expect(await readFile(f.filePath, "utf8")).toBe("plain line\n\x1b[31mERROR\x1b[0m disk ok\n")
-    expect(subbed.text).toContain("\n[2 ansi]|ERROR disk ok\n")
+    expect(subbed.text).toContain("\n[line 2, ansi]|ERROR disk ok\n")
     const replaced = await refusal(f.patch(`[file.txt#${subbed.tag}]\nPUT 2.=2:\n+x`))
     expect(replaced).toContain("Preview of the first 1 unseen line(s)")
     expect(replaced).not.toContain("REAPPLY")
-    expect((await f.engine.grep(f.ctx, { pattern: "ERROR" })).text).toContain("*[2 ansi]|ERROR disk ok")
+    expect((await f.engine.grep(f.ctx, { pattern: "ERROR" })).text).toContain("*[line 2, ansi]|ERROR disk ok")
   })
 })
 
@@ -2114,16 +2119,16 @@ describe("minified files", () => {
     const r = await f.read(":1-")
     expect(r.text.split("\n").slice(0, 2)).toEqual([
       `[file.txt#${r.tag}] minified, so lines are cut at 300 chars; pass maxLineLength for more`,
-      `[1 cut at 300 of ${code(2000).length} chars]|${code(2000).slice(0, 300)}`,
+      `[line 1, chars 1-300 of ${code(2000).length}]|${code(2000).slice(0, 300)}`,
     ])
     const wide = await f.read(":1", { maxLineLength: 1000 })
-    expect(wide.text.split("\n").slice(0, 2)).toEqual([`[file.txt#${wide.tag}]`, `[1 cut at 1000 of ${code(2000).length} chars]|${code(2000).slice(0, 1000)}`])
+    expect(wide.text.split("\n").slice(0, 2)).toEqual([`[file.txt#${wide.tag}]`, `[line 1, chars 1-1000 of ${code(2000).length}]|${code(2000).slice(0, 1000)}`])
   })
 
   test("grep shows the stretches around matches deep in a long line, also for files over 2 MiB", async () => {
     const line = "a".repeat(3000) + "NEEDLE" + "b".repeat(3000) + "NEEDLE" + "c".repeat(50)
     const f = await fixture(line + "\n")
-    expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE" })).text).toContain(`\n*[1 chars 2916-3091, 5922-6062 of 6062]|${"a".repeat(85)}NEEDLE${"b".repeat(85)} ... ${"b".repeat(85)}NEEDLE${"c".repeat(50)}\n`)
+    expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE" })).text).toContain(`\n*[line 1, chars 2916-3091, 5922-6062 of 6062]|${"a".repeat(85)}NEEDLE${"b".repeat(85)} ... ${"b".repeat(85)}NEEDLE${"c".repeat(50)}\n`)
     await writeFile(path.join(f.directory, "huge.js"), "q".repeat(1_500_000) + "NEEDLE" + "r".repeat(800_000) + "\n")
     expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE", paths: ["huge.js"] })).text).toContain(`\n*1|[chars 1499916-1500091 of 2300006] ${"q".repeat(85)}NEEDLE${"r".repeat(85)}\n`)
   })
@@ -2344,7 +2349,7 @@ describe("grep replace", () => {
     const line = "a".repeat(3000) + "NEEDLE" + "b".repeat(100)
     const f = await fixture(`${line}\nshort\n`)
     const preview = (await f.engine.grep(f.ctx, { pattern: "NEEDLE", replace: "PIN" })).text
-    expect(preview).toContain(`]\n>[1 chars 2916-3088 of 3103]|${"a".repeat(85)}PIN${"b".repeat(85)}\n`)
+    expect(preview).toContain(`]\n>[line 1, chars 2916-3088 of 3103]|${"a".repeat(85)}PIN${"b".repeat(85)}\n`)
     const applied = await f.patch(`REAPPLY ${token(preview)}`)
     expect(await readFile(f.filePath, "utf8")).toBe(`${"a".repeat(3000)}PIN${"b".repeat(100)}\nshort\n`)
     // The preview showed only a stretch of the new line, so it is not seen as a whole.
@@ -2405,7 +2410,7 @@ describe("grep replace", () => {
     const line = `${"a".repeat(100)} needle ${"b".repeat(300)}`
     const f = await fixture(line + "\n")
     const short = (await f.engine.grep(f.ctx, { pattern: "needle" })).text
-    expect(short).toContain(`*[1 chars 1-40, 62-147 of 408]|${"a".repeat(40)} ... ${"a".repeat(39)} needle ${"b".repeat(39)}\n`)
+    expect(short).toContain(`*[line 1, chars 1-40, 62-147 of 408]|${"a".repeat(40)} ... ${"a".repeat(39)} needle ${"b".repeat(39)}\n`)
     expect(short).not.toContain("b".repeat(41))
     // Asked for whole lines, the agent gets them.
     expect((await f.engine.grep(f.ctx, { pattern: "needle", maxLineLength: 1000 })).text).toContain(`\n*1:${line}`)

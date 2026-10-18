@@ -465,118 +465,103 @@ type matchRef struct {
 	line int
 }
 
-// frameMatches lists context lines around the page's shown matches while they come to at most GrepContextLines; past that, definitions first.
-// It returns the note saying which matches got context, when not all did.
+// frameMatches lists context lines around the page's shown matches while they come to at most GrepContextLines. Past that, definitions keep
+// the context asked for with before or after, and the other matches all get the widest context that fits what is left of the budget.
+// It returns the note saying what context the matches got, when not all got what was asked.
 func frameMatches(files []*grepFile, before, after int, asked bool) string {
-	around := func(f *grepFile, line int) []int {
+	around := func(m matchRef, before, after int) []int {
 		var found []int
-		for index := max(1, line-before); index <= line+after; index++ {
-			if _, ok := f.lineAt(index); !f.listed[index] && ok && (f.shape.inside == nil || f.shape.inside(index)) {
+		for index := max(1, m.line-before); index <= m.line+after; index++ {
+			if _, ok := m.file.lineAt(index); !m.file.listed[index] && ok && (m.file.shape.inside == nil || m.file.shape.inside(index)) {
 				found = append(found, index)
 			}
 		}
 		return found
 	}
+	// count is how many context lines, overlaps counted once, matches would add with before and after each.
+	count := func(matches []matchRef, before, after int) int {
+		set := map[matchRef]bool{}
+		for _, m := range matches {
+			for _, index := range around(m, before, after) {
+				set[matchRef{m.file, index}] = true
+			}
+		}
+		return len(set)
+	}
+	list := func(matches []matchRef, before, after int) {
+		for _, m := range matches {
+			for _, index := range around(m, before, after) {
+				m.file.listed[index] = true
+			}
+		}
+	}
 	var all []matchRef
-	wanted := 0
 	for _, f := range files {
-		set := map[int]bool{}
 		for _, line := range f.shown {
 			all = append(all, matchRef{f, line})
-			for _, index := range around(f, line) {
-				set[index] = true
-			}
 		}
-		wanted += len(set)
 	}
+	wanted := count(all, before, after)
 	if wanted <= GrepContextLines {
-		for _, m := range all {
-			for _, index := range around(m.file, m.line) {
-				m.file.listed[index] = true
-			}
-		}
+		list(all, before, after)
 		return ""
 	}
-	defined := map[*grepFile]map[int]bool{}
-	for _, f := range files {
-		if f.lines != nil {
-			defined[f] = definitionLines(f.target.display, f.lines, f.shown, f.shape.spans)
-		} else {
-			defined[f] = map[int]bool{}
-		}
-	}
-	var definitions []matchRef
-	for _, m := range all {
-		if defined[m.file][m.line] {
-			definitions = append(definitions, m)
-		}
-	}
-	given := map[matchRef]bool{}
-	var givenOrder []matchRef
-	left := GrepContextLines
-	give := func(m matchRef) bool {
-		fresh := around(m.file, m.line)
-		if len(fresh) > left {
-			return false
-		}
-		left -= len(fresh)
-		for _, index := range fresh {
-			m.file.listed[index] = true
-		}
-		given[m] = true
-		givenOrder = append(givenOrder, m)
-		return true
-	}
-	if len(definitions) > 0 && asked {
-		for _, m := range definitions {
-			for _, index := range around(m.file, m.line) {
-				m.file.listed[index] = true
+	// Only context that was asked for marks definitions out: the default line on each side of a definition tells no more than elsewhere.
+	var definitions, others []matchRef
+	if asked {
+		defined := map[*grepFile]map[int]bool{}
+		for _, f := range files {
+			if f.lines != nil {
+				defined[f] = definitionLines(f.target.display, f.lines, f.shown, f.shape.spans)
 			}
-			given[m] = true
-			givenOrder = append(givenOrder, m)
+		}
+		for _, m := range all {
+			if defined[m.file][m.line] {
+				definitions = append(definitions, m)
+			} else {
+				others = append(others, m)
+			}
 		}
 	} else {
-		candidates := definitions
-		if len(definitions) == 0 {
-			candidates = nil
-			if asked {
-				candidates = all
-			}
-		}
-		for _, m := range candidates {
-			if !give(m) {
-				break
-			}
+		others = all
+	}
+	left := GrepContextLines
+	if len(definitions) > 0 {
+		left = max(0, left-count(definitions, before, after))
+		list(definitions, before, after)
+	}
+	// The larger side gives up a line first, and before on a tie: the line after a match is more often its body or its continuation.
+	b, a := before, after
+	for (b > 0 || a > 0) && count(others, b, a) > left {
+		if b > a || (b == a && b > 0) {
+			b--
+		} else {
+			a--
 		}
 	}
-	var bare *matchRef
-	for i := range all {
-		if !given[all[i]] {
-			bare = &all[i]
-			break
-		}
-	}
-	if bare == nil {
+	list(others, b, a)
+	if len(others) == 0 || (b == before && a == after) {
 		return ""
 	}
-	over := fmt.Sprintf("around all %d they would be %d lines, over grep's budget of %d", len(all), wanted, GrepContextLines)
-	rangeText := fmt.Sprintf("%s:%d-%d", bare.file.target.display, max(1, bare.line-before), bare.line+after)
-	if len(givenOrder) == 0 {
-		return fmt.Sprintf("[all %d match rows shown, without context lines: %s; ask with before or after for some around the first matches, or read a range like %s]", len(all), over, rangeText)
+	kind := "the default"
+	if asked {
+		kind = "the asked"
 	}
-	first := givenOrder[0]
-	var which string
-	switch {
-	case len(definitions) == 0:
-		which = fmt.Sprintf("the first %d", len(givenOrder))
-	case len(givenOrder) == 1:
-		which = fmt.Sprintf("the definition at %s:%d", first.file.target.display, first.line)
-	case len(givenOrder) < len(definitions):
-		which = fmt.Sprintf("the first %d of %d definitions", len(givenOrder), len(definitions))
-	default:
-		which = fmt.Sprintf("the %d definitions", len(givenOrder))
+	got := "none"
+	if b > 0 || a > 0 {
+		got = fmt.Sprintf("%d before and %d after each", b, a)
 	}
-	return fmt.Sprintf("[all %d match rows shown, context lines only around %s: %s; for another match's, read a range like %s]", len(all), which, over, rangeText)
+	first := others[0]
+	over := fmt.Sprintf("around all %d %s context would be %d lines, over grep's budget of %d; for more around one, read a range like %s:%d-%d", len(all),
+		kind, wanted, GrepContextLines, first.file.target.display, max(1, first.line-before), first.line+after)
+	if len(definitions) == 0 {
+		return fmt.Sprintf("[all %d match rows shown, context lines: %s instead of %s %d before and %d after: %s]", len(all), got, kind, before, after, over)
+	}
+	which := fmt.Sprintf("the %d definitions", len(definitions))
+	if len(definitions) == 1 {
+		which = fmt.Sprintf("the definition at %s:%d", definitions[0].file.target.display, definitions[0].line)
+	}
+	return fmt.Sprintf("[all %d match rows shown; %s got %s %d before and %d after, the other matches %s: %s]", len(all), which, kind, before, after, got, over)
 }
 
 // replaceLine swaps a line's submatches for ripgrep's replacements; ripgrep reports UTF-8 byte offsets.
@@ -613,9 +598,9 @@ func replacementRow(line int, content string, spans []span, columns int) string 
 		return fmt.Sprintf(">%d|%s", line, shown)
 	}
 	if w := matchWindows(content, spans, columns); w != nil {
-		return fmt.Sprintf(">[%d %s]|%s", line, w.label, w.text)
+		return ">" + cutRow(line, w.label, w.text)
 	}
-	return fmt.Sprintf(">[%d cut at %d of %d chars]|%s", line, columns, js.Len(shown), js.Slice(shown, 0, columns))
+	return ">" + cutRow(line, charsLabel([]string{fmt.Sprintf("1-%d", columns)}, js.Len(shown)), js.Slice(shown, 0, columns))
 }
 
 // allocate splits budget across demands so small entries get everything and large ones share the rest equally.
@@ -1218,7 +1203,7 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 			}
 			g.rows = append(g.rows, fmt.Sprintf("%s%d|%s", marker, line, text))
 		case w != nil:
-			g.rows = append(g.rows, fmt.Sprintf("%s[%d %s]|%s", marker, line, w.label, w.text))
+			g.rows = append(g.rows, marker+cutRow(line, w.label, w.text))
 			g.mark = &marks{cut: true}
 		default:
 			r := lineRow(line, content, f.shape.columns)

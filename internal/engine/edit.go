@@ -1014,7 +1014,7 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 			// A cut row still shows the line's new number, so a line the agent knew whole before stays one it may anchor.
 			anchor := knew(index)
 			if w != nil {
-				out.output = append(out.output, fmt.Sprintf("[%d %s]|%s", index+1, w.label, w.text))
+				out.output = append(out.output, cutRow(index+1, w.label, w.text))
 				out.marks = append(out.marks, marks{cut: true})
 			} else {
 				line := lineRow(index+1, content, rowLimit)

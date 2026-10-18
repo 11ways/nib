@@ -270,12 +270,13 @@ When the command finishes or its time runs out, the sink is rendered once:
     rows, so `sed -n 101,4612p LOG` shows exactly that; the closing note says how many rows are shown of how many log
     lines and who chose. 30 KiB stays under Claude Code's 50,000-character result limit [m2].
   - A plain row longer than 2,000 characters is cut in `read`'s bracketed form, numbered with its log line
-    (`[2 cut at 2000 of 20157 chars]|...`), and the log is kept so it can be read whole.
+    (`[line 2, chars 1-2000 of 20157]|...`), and the log is kept so it can be read whole.
 - **Facts** [M2]:
   - `head`/`tail` on a file: `[lines 1-20 of 1,234]`.
   - `head` on a nib `grep`: the writer keeps counting after `head` stops reading, for up to 2 s, without writing, and
     the renderer adds `[20 of 312 matches shown, from 4 of 17 files]` ("at least" when cut short).
   - A real program before `head` is closed at once, as in bash, and the fact covers only what `head` received.
+  - `tail` of a program's output keeps all of it in a log and says what it left out: `[4,762 earlier lines in LOG]`.
 - **Exit status:** a nonzero exit status ends the output with `[exit 1]`.
 - **Files changed by the command** [missing]:
   - Before the call, nibash notes size and mtime of every file the session's store holds. Every file a redirect opens
@@ -542,8 +543,9 @@ Where the implementation departed from the text above, deliberately:
   work as before. The moment is taken as the hook runs, after the compaction; Claude Code keeps a tail of recent
   messages through a compaction (`preservedSegment`), but nib drops those lines too, which can only cost a re-read.
   OpenCode 2 appends a `compaction` message when one ends, so nib reads its latest per call. Markers
-  (`[lines A-B unchanged since you saw them]`) replace runs of 3 or more rows held whole and unchanged since, found
-  through the line map to every version the agent still holds; the lines a marker stands for are recorded seen in the
+  (`[lines A-B unchanged since you saw them]`) replace runs of 8 or more rows held whole and unchanged since, found
+  through the line map to every version the agent still holds, in a call that shows more than 60 rows of the file
+  (`heldFew`; fewer are a narrow request whose rows print whole); the lines a marker stands for are recorded seen in the
   version shown, so anchoring is unchanged. Grep's match rows always print, since they are the answer and carry the
   match; edit responses show one kept row on each side of a change, which never makes a run, and the agent checks its
   range against them. An immediate repeat of the same call is how an agent asks for the rows again, besides `full: true`

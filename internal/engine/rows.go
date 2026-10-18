@@ -127,7 +127,17 @@ func stretches(content string, leading, spans []span, reach, columns int) *windo
 		labels[i] = fmt.Sprintf("%d-%d", w.start+1, w.end)
 		texts[i] = visible(js.Slice(content, w.start, w.end))
 	}
-	return &windowed{label: fmt.Sprintf("chars %s of %d", strings.Join(labels, ", "), length), text: strings.Join(texts, " ... ")}
+	return &windowed{label: charsLabel(labels, length), text: strings.Join(texts, " ... ")}
+}
+
+// charsLabel names the character stretches of a line a cut row shows, as "chars 1-40, 62-147 of 408".
+func charsLabel(stretches []string, length int) string {
+	return fmt.Sprintf("chars %s of %d", strings.Join(stretches, ", "), length)
+}
+
+// cutRow is the one form of a bracketed row that is never an anchor: the line's number spelled out, what was done to it, and the text shown.
+func cutRow(line int, label, text string) string {
+	return fmt.Sprintf("[line %d, %s]|%s", line, label, text)
 }
 
 type row struct {
@@ -150,9 +160,9 @@ func lineRow(line int, content string, limit int) row {
 		labels = append(labels, "ansi")
 	}
 	if cut {
-		labels = append(labels, fmt.Sprintf("cut at %d of %d chars", limit, length))
+		labels = append(labels, charsLabel([]string{fmt.Sprintf("1-%d", limit)}, length))
 	}
-	return row{text: fmt.Sprintf("[%d %s]|%s", line, strings.Join(labels, ", "), js.Slice(shown, 0, limit)), marks: marks{cut, colored}}
+	return row{text: cutRow(line, strings.Join(labels, ", "), js.Slice(shown, 0, limit)), marks: marks{cut, colored}}
 }
 
 // rowNotes are footer notes explaining the bracketed rows among rows, once per block.

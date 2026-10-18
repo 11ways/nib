@@ -102,7 +102,7 @@ stops. Tests: a sink with a binary chunk, a separator, an unterminated chunk bef
 every log line belongs to exactly one row and `sed -n A,Bp` on each gap returns exactly the left-out lines.
 
 **Long rows (review M6).** Plain rows had no length limit. A plain row over `engine.LineLimit` (2,000) is now cut in
-read's bracketed non-anchor form, numbered with its log line (`[2 cut at 2000 of 20157 chars]|...`), with a footer
+read's bracketed non-anchor form, numbered with its log line (`[line 2, chars 1-2000 of 20157]|...`), with a footer
 `[cut rows: N is the row's line in the whole output; read LOG:N with maxLineLength to see one whole]`; the log is saved
 whenever a row is cut.
 

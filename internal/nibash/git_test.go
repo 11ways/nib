@@ -142,14 +142,26 @@ func TestGitDiffPrintsTheChangedFilesRowsThatEditAccepts(t *testing.T) {
 }
 
 func TestGitDiffRowsTheAgentHoldsPrintAsOneMarkerButAddedOnesAlways(t *testing.T) {
-	f := gitFixture(t, map[string]string{"a.txt": "one\ntwo\nthree\nfour\n"})
+	var before, after strings.Builder
+	for i := 1; i <= 70; i++ {
+		fmt.Fprintf(&before, "line %d\n", i)
+		if i == 70 {
+			fmt.Fprintf(&after, "LINE %d\n", i)
+		} else {
+			fmt.Fprintf(&after, "line %d\n", i)
+		}
+	}
+	f := gitFixture(t, map[string]string{"a.txt": before.String()})
 	f.markers = true
 	f.run("cat a.txt")
-	f.write("a.txt", "one\ntwo\nthree\nFOUR\n")
+	f.write("a.txt", after.String())
 	f.run("cat a.txt")
-	out := f.run("git diff")
-	if !strings.Contains(out, "\n[lines 1-3 unchanged since you saw them]\n-|four\n+4:FOUR") {
-		t.Errorf("diff with held rows:\n%s", out)
+	// A diff's few rows of context are what it is for, so they print however well the agent knows them.
+	if out := f.run("git diff"); !strings.Contains(out, "\n 67:line 67\n 68:line 68\n 69:line 69\n-|line 70\n+70:LINE 70") {
+		t.Errorf("diff with few held rows:\n%s", out)
+	}
+	if out := f.run("git diff -U80"); !strings.Contains(out, "\n[lines 1-69 unchanged since you saw them]\n-|line 70\n+70:LINE 70") {
+		t.Errorf("diff with many held rows:\n%s", out)
 	}
 }
 

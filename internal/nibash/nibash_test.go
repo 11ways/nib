@@ -277,7 +277,7 @@ func TestOutputIsShapedAndCutWithALog(t *testing.T) {
 		t.Fatalf("log %s: %v", log, err)
 	}
 	out = f.run("seq 1 5000 | tail -2")
-	if !strings.HasPrefix(out, "4999\n5000\n[tail: last 2 of 5,000 lines; all of them: ") {
+	if !strings.HasPrefix(out, "4999\n5000\n[4,998 earlier lines in ") {
 		t.Fatalf("got %s", out)
 	}
 }
@@ -433,20 +433,24 @@ func parse(command string) (*syntax.File, error) {
 }
 
 func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
-	f := newFixture(t, map[string]string{"a.txt": numbers + "six\nseven\n"})
+	f := newFixture(t, map[string]string{"a.txt": numbers + "six\nseven\n" + numberedLines(8, 80)})
 	f.markers = true
 	first := f.run("cat a.txt")
 	tag := tagOf(t, first)
 	if !strings.Contains(first, "3:three\n4:four needle") {
 		t.Fatalf("the first view prints the rows: %s", first)
 	}
-	again := f.run("sed -n 1,7p a.txt")
-	expect(t, again, fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]\n%s", tag, heldLessonText(t, again)))
-	if later := f.run("head -n 7 a.txt"); later != fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]", tag) {
+	// A command showing few rows of a file asked for exactly those lines, so they print however well the session knows them.
+	if few := f.run("sed -n 1,7p a.txt"); !strings.Contains(few, "1:one\n2:two needle\n") || strings.Contains(few, "[lines") {
+		t.Fatalf("few rows: %s", few)
+	}
+	again := f.run("cat a.txt")
+	expect(t, again, fmt.Sprintf("[a.txt#%s]\n[lines 1-80 unchanged since you saw them]\n%s", tag, heldLessonText(t, again)))
+	if later := f.run("head -n 70 a.txt"); later != fmt.Sprintf("[a.txt#%s]\n[lines 1-70 unchanged since you saw them]\n[a.txt: lines 1-70 of 80]", tag) {
 		t.Fatalf("the lesson comes once: %s", later)
 	}
 	// A grep match row is what the command is for, so it prints however well the session knows it.
-	if out := f.run("grep -n -A3 two a.txt"); !strings.Contains(out, "*2:two needle\n[lines 3-5 unchanged since you saw them]") {
+	if out := f.run("grep -n -A70 two a.txt"); !strings.Contains(out, "*2:two needle\n[lines 3-72 unchanged since you saw them]") {
 		t.Fatalf("grep: %s", out)
 	}
 	// The lines a marker stands for stay seen, so an edit anchors on them with no read.
@@ -454,9 +458,18 @@ func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
 		t.Fatalf("edit inside a marker: %v", err)
 	}
 	f.markers = false
-	if out := f.run("sed -n 1,3p a.txt"); !strings.Contains(out, "1:one\n2:two needle\n3:three") {
+	if out := f.run("cat a.txt"); !strings.Contains(out, "1:one\n2:two needle\n3:three") {
 		t.Fatalf("without markers the rows print: %s", out)
 	}
+}
+
+// numberedLines is "line N\n" for each N from first to last.
+func numberedLines(first, last int) string {
+	var b strings.Builder
+	for i := first; i <= last; i++ {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	return b.String()
 }
 
 // heldLessonText is the lesson line a first held marker ends with.

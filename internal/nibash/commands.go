@@ -342,10 +342,14 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 		path := inv.call.logs.save(inv.in.all.String()).path
 		where := ""
 		if path != "" {
-			where = "; all of them: " + path
+			where = " in " + path
 		}
-		shown, all := len(kept), total
-		inv.out.sink.fact(func() string { return fmt.Sprintf("[tail: last %d of %s lines%s]", shown, thousands(all), where) })
+		earlier := total - len(kept)
+		s := "s"
+		if earlier == 1 {
+			s = ""
+		}
+		inv.out.sink.fact(func() string { return fmt.Sprintf("[%s earlier line%s%s]", thousands(earlier), s, where) })
 	}
 }
 

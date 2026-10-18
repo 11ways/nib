@@ -240,7 +240,7 @@ func TestLongPlainRowsAreCutWithTheirLogLine(t *testing.T) {
 	f := newFixture(t, nil)
 	out := f.run("echo short; printf '%5000s\n' '' | tr ' ' x")
 	rows := strings.Split(out, "\n")
-	if len(rows) != 3 || rows[0] != "short" || rows[1] != "[2 cut at 2000 of 5000 chars]|"+strings.Repeat("x", 2000) {
+	if len(rows) != 3 || rows[0] != "short" || rows[1] != "[line 2, chars 1-2000 of 5000]|"+strings.Repeat("x", 2000) {
 		t.Fatalf("got %.300s", out)
 	}
 	if !strings.HasPrefix(rows[2], "[cut rows: N is the row's line in the whole output; read ") {

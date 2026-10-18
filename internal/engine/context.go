@@ -17,7 +17,7 @@ const (
 	OutputLimit = 40 * 1024
 	LineLimit   = 2000
 	ReadLines   = 2000
-	// GrepContextLines is the context one grep page shows in all; past it definitions get theirs first.
+	// GrepContextLines is the context one grep page shows in all; past it every match gets less, except definitions that asked for theirs.
 	GrepContextLines = 2 * grepContext
 
 	previewContext    = 2

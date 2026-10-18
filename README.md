@@ -93,13 +93,14 @@ reads the file as asked, though a minified file still gets shorter lines.
   (logs, CSV, generated lists, pretty-printed JSON), the read returns the first 100 lines instead, with a hint to
   continue or grep.
 
-Lines longer than `maxLineLength` (default 2000) print as `[N cut at 2000 of M chars]|prefix`, which is not an edit
+Lines longer than `maxLineLength` (default 2000) print as `[line N, chars 1-2000 of M]|prefix`, which is not an edit
 anchor, and the block ends with a note saying so. `SUB` changes such a line in place without reading it; to see it
 whole, read it with a larger `maxLineLength`. A larger value works for any selection within the shared 40 KiB budget,
 and one `path:N` entry alone may go up to 2 MiB; a row bigger than the whole budget is replaced by a hint to read that
-line alone. A line with terminal color codes prints as `[N ansi]|text` with the codes stripped, which is not an anchor
-either; the tag still covers the real bytes, and `SUB` edits such a line too. Directories list their entries; PNG, JPEG,
-GIF and WebP files are returned as MCP image content; PDFs are refused, so use the client's own reader for them.
+line alone. A line with terminal color codes prints as `[line N, ansi]|text` with the codes stripped, which is not an
+anchor either; the tag still covers the real bytes, and `SUB` edits such a line too. Directories list their entries;
+PNG, JPEG, GIF and WebP files are returned as MCP image content; PDFs are refused, so use the client's own reader for
+them.
 
 Headers show paths relative to the server's working directory when inside it, absolute otherwise. Text files are limited
 to 2 MiB (plain reads excepted), images to 5 MiB.
@@ -188,23 +189,24 @@ tag is a base for a later `path#TAG` read. `info` takes no selectors, `plain`, `
 ```
 
 `*` marks matches; other rows are context (1 before and 1 after by default). Context lines on one page come to at most
-40, so they cannot multiply the output; within that, `before` and `after` give what they ask for. Past it, context goes
-to definitions first, and the other matches show bare: context that was asked for with `before` or `after` goes to every
-definition (up to the 40 KiB output budget), while the default context goes to definitions in page order only while it
-fits in the 40 lines, so a grep that lists many definitions, like `^function`, stays a list. A definition is a match in
+40, so they cannot multiply the output; within that, `before` and `after` give what they ask for. Past it, every match
+gets the same smaller context, the widest that fits: the larger side gives up a line first, and `before` on a tie, down
+to none, so a grep that lists many definitions, like `^function`, stays a short list. Context asked for with `before`
+or `after` is the one exception: definitions keep all of it (up to the 40 KiB output budget), and the other matches
+share what is left of the 40 lines. A definition is a match in
 the declaring part of its line, before the parameters, type, value or body: on a top-level line whose declaring part
 holds a word like `function`, `const`, `class`, `def` or `fn` (the match may be that word, as with a pattern
-`^function`), on a member of a top-level class or similar container, or in a Markdown heading. With no definition among
-the matches, context that was asked for goes to the first matches in page order, up to the first that no longer fits,
-and the default context goes to none. A note then says that every match row is still shown, which matches got context,
-how many lines all of them would have needed, and a range to read for another match. Every fully shown row counts as
+`^function`), on a member of a top-level class or similar container, or in a Markdown heading. A note then says that
+every match row is still shown, what context the matches got instead of what was asked, how many lines that would have
+needed, and a range to read for more around a match. Every fully shown row counts as
 seen, so an edit can anchor on it without a read. Pages hold 20 files (continue with `skip`), with 20 matches per file,
 or 100 when only one file matches, the most a harness's own grep shows (OpenCode stops at 100). A matched line over 200
 characters shows only its first 40 and the 40 on each side of its first matches, as
-`*[N chars 1-40, 62-147 of 408]|start ... match`, not an anchor, unless `maxLineLength` was given, which then bounds it
-instead. Matched lines over `maxLineLength` characters (default 512, at most 2000) are cut and not anchorable; when the
-first match sits past the cut, the row shows the stretches around the first 3 matches instead of the line's start, as
-`*[N chars 3142-3324, 28924-29106 of 31625]|...`. The search uses `rg --hidden` without `.git/`. It follows git's ignore
+`*[line N, chars 1-40, 62-147 of 408]|start ... match`, not an anchor, unless `maxLineLength` was given, which then
+bounds it instead. Matched lines over `maxLineLength` characters (default 512, at most 2000) are cut and not
+anchorable; when the first match sits past the cut, the row shows the stretches around the first 3 matches instead of
+the line's start, as `*[line N, chars 3142-3324, 28924-29106 of 31625]|...`. The search uses `rg --hidden` without
+`.git/`. It follows git's ignore
 rules, which count only inside a repository (ripgrep's default; outside git a `.gitignore` means nothing), plus
 ripgrep's own `.ignore` and `.rgignore`. A nested repository is searched by its own rules even when the repository
 holding it ignores it, as a workspace whose `.gitignore` keeps out every checkout it holds does: git lists the nested
@@ -511,13 +513,13 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   script) are the system's.
 - **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`); `head` after a nib
   grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s
-  after `head` stops reading); `tail` of a program's output keeps all of it in a log
-  (`[tail: last 50 of 4,812 lines; all of them: <log>]`).
+  after `head` stops reading); `tail` of a program's output keeps all of it in a log and names it with the lines left
+  out (`[4,762 earlier lines in <log>]`).
 - **Output.** Color codes go, a `\r` progress line keeps its final text, invalid UTF-8 shows as U+FFFD and binary output
   only as its size. Plain output shaped like rows (`N:` or `N~`, as `grep -n` through a real program prints) that
   follows a file's rows is set apart by a line of nib's own, `[plain program output follows, not anchors]`. Plain output
   over 20 lines collapses exact repeats, and a plain row over 2,000 characters is cut in `read`'s bracketed form with
-  its log line (`[2 cut at 2000 of 20157 chars]|...`), so it never looks like an anchor. Output over 400 rows or 30 KiB
+  its log line (`[line 2, chars 1-2000 of 20157]|...`), so it never looks like an anchor. Output over 400 rows or 30 KiB
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
@@ -746,14 +748,16 @@ line shown, and `path#TAG` reads record it like an edit response.
   insert may anchor on any line a check confirms; a replace or cut may span known lines when each end that was not
   displayed is confirmed (a block's end, which nib finds itself, needs no check). Lines the agent neither saw nor wrote
   stay refused for replacement, check or not.
-- **Held markers.** Where nib can tell when an agent's context is dropped (below), a run of 3 or more rows that agent
+- **Held markers.** Where nib can tell when an agent's context is dropped (below), a run of 8 or more rows that agent
   was shown whole before, in this version or one it still holds, and that have not changed since, prints as one row:
   `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit moved
-  them. This holds in `read`, in `grep`'s context rows and in nibash's own commands; a grep match row always prints,
-  since it is what the search is for. The lines a marker stands for stay seen at their current numbers, so an edit
-  anchors on them with no read. The first marker an agent gets ends with a line saying what it means; the same call sent
-  again straight away, or a read with `full: true`, prints the rows. Edit responses are unchanged: their kept rows are
-  one on each side of a change, never a run of 3, and the agent's own new rows always print.
+  them. This holds in `read`, in `grep`'s context rows and in nibash's own commands, but only in a call that shows more
+  than 60 rows of the file: fewer rows are a narrow request for exactly those lines, so they print whole (with grep's
+  40 context lines, that is nearly always). A grep match row always prints, since it is what the search is for. The
+  lines a marker stands for stay seen at their current numbers, so an edit anchors on them with no read. The first
+  marker an agent gets ends with a line saying what it means; the same call sent again straight away, or a read with
+  `full: true`, prints the rows. Edit responses are unchanged: their kept rows are one on each side of a change, never
+  a run of 8, and the agent's own new rows always print.
 - **Dropped contexts.** When Claude Code compacts an agent's conversation, or a session starts anew (`/clear`, a
   resume), the agent no longer has what it was shown: every line it saw or knew before that moment stops counting, for
   markers and for edits, which then need the lines shown again (the usual refusal, and an unchanged resend), and the
