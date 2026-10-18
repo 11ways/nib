@@ -27,14 +27,15 @@ const REPO = path.join(import.meta.dir, "../..")
 let built: Promise<string> | undefined
 
 /**
- * Builds the nib binary once per test run, into one path per user that every run reuses, so runs leave nothing behind; the build goes to a
- * name of its own and is renamed into place, so a binary another run is executing is never overwritten.
+ * Builds the nib binary once per test run, into one path per user and checkout that every run reuses, so runs leave nothing behind and
+ * parallel worktrees never run each other's build; the build goes to a name of its own and is renamed into place, so a binary another run
+ * is executing is never overwritten.
  */
 export function binary() {
   return built ??= (async () => {
     const directory = path.join(tmpdir(), `nib-test-${process.getuid?.() ?? "user"}`)
     await mkdir(directory, { recursive: true, mode: 0o700 })
-    const output = path.join(directory, "nib")
+    const output = path.join(directory, `nib-${Bun.hash(REPO).toString(16)}`)
     const staged = `${output}.${process.pid}`
     const child = Bun.spawn(["go", "build", "-o", staged, "./cmd/nib"], { cwd: REPO, stdout: "pipe", stderr: "pipe" })
     const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
