@@ -221,7 +221,7 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 		stageOut := out
 		if i < len(list)-1 {
 			stageOut = toOther
-			if verdicts[i+1] == own && !all[i] && !redirectsInput(list[i+1]) {
+			if verdicts[i+1] == own && !all[i] && !redirectsInput(list[i+1]) && !readsBytes(list[i+1]) {
 				stageOut = toBand
 			}
 		}
@@ -322,6 +322,29 @@ func (c *classifier) rowWriter(s *syntax.Stmt) string {
 		return true
 	})
 	return found
+}
+
+// readsBytes says whether s is a nib command that counts its input's bytes, which must then come as a program wrote them, not as rows.
+func readsBytes(s *syntax.Stmt) bool {
+	call, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return false
+	}
+	words := make([]string, len(call.Args))
+	for i, word := range call.Args {
+		if value, ok := wordLiteral(word); ok {
+			words[i] = value
+		} else {
+			words[i] = expansion
+		}
+	}
+	cmd, found := commands[words[0]]
+	if !found {
+		return false
+	}
+	p, err := cmd.prepare(words[0], words[1:])
+	r, isReader := p.(interface{ readsBytes() bool })
+	return err == nil && isReader && r.readsBytes()
 }
 
 func redirectsInput(s *syntax.Stmt) bool {

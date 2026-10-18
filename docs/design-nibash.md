@@ -217,7 +217,7 @@ The first wave is small, chosen by measured use and anchor value:
 | Command | Options handled as nib |
 | --- | --- |
 | `cat` | files, `-` (stdin), `-n` |
-| `head`, `tail` | `-n N`, `-N`, `-nN`, `-n +N` (tail); one or more files |
+| `head`, `tail` | `-n N`, `-N`, `-nN`, `-n +N` (tail), `-c N`, `-c +N` (tail), `--lines=`, `--bytes=`; one or more files |
 | `grep`, `egrep`, `fgrep` | `-n -r -R -E -F -G -v -i -w -x -l -c -h -H -s -q -m N -A N -B N -C N --include= --exclude= --exclude-dir= --color=never` and their bundled forms; basic regex (`\|`, `\(`, `\)`, `\{`, `\}`, `\+`, `\?`) translated to ripgrep's syntax |
 | `rg` | `-n -i -S -F -w -l -c -v -g -t -T -A -B -C --hidden --no-ignore -u -m` |
 | `sed` | `-n` with `Np`, `N,Mp`, `N,$p`, and several joined with `;` or given as repeated `-e` |
@@ -303,7 +303,11 @@ When the command finishes or its time runs out, the sink is rendered once:
   - A plain row longer than 2,000 characters is cut in `read`'s bracketed form, numbered with its log line
     (`[line 2, chars 1-2000 of 20157]|...`), and the log is kept so it can be read whole.
 - **Facts** [M2]:
-  - `head`/`tail` on a file: `[lines 1-20 of 1,234]`.
+  - `head`/`tail` on a file: `[lines 1-20 of 1,234]`; none for a `head` of a file nib does not hold, which stops reading
+    before it knows how many lines there are.
+  - `head -c`/`tail -c` print the system programs' bytes as lines: whole lines as rows, the one cut at the edge as a
+    bracketed row naming the characters it shows (plain text where the cut splits a character or the file is not held).
+    The classifier never sends rows into them: a nib command before one writes the bytes a program would.
   - `head` on a nib `grep`: the writer keeps counting after `head` stops reading, for up to 2 s, without writing, and
     the renderer adds `[20 of 312 matches shown, from 4 of 17 files]` ("at least" when cut short).
   - A real program before `head` is closed at once, as in bash, and the fact covers only what `head` received.

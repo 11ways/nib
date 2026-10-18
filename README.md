@@ -469,7 +469,7 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
 - **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections), `cut -c`
   (character selections) and `wc` run as nib's own when their output goes to the model or into another of them and
   nibash implements their options. Before running, nibash parses the command and decides this per command; a command
-  written with a path (`/usr/bin/grep`), shadowed by a function, given an option nibash lacks (`grep -P`, `head -c`,
+  written with a path (`/usr/bin/grep`), shadowed by a function, given an option nibash lacks (`grep -P`, `head -c 2K`,
   `sed -i`, `cut -f`), redirected to a file, inside `$(...)` or feeding a real program is the real program. Where only an
   expansion gives what decides it (`sed -n "${r}p"`, `cut -c "$n"`), it is decided as the command runs, from the words
   the expansion gave. One given an option or pattern nibash lacks whose output reaches the model ends the call with a
@@ -540,11 +540,16 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   trash. An agent's first call that trashes something ends with `[moved to the trash, not deleted: ...]`, later ones
   with `[in the trash: ...; trash restore PATH]`. Deletes a program makes itself (`xargs rm`, `bash -c 'rm ...'`, a
   script) are the system's.
-- **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`); `head` after a nib
+- **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`; a `head` of a file
+  nib does not hold stops reading, so it says nothing); `head` after a nib
   grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s
   after `head` stops reading); `tail` of a program's output keeps all of it in a log and names it with the lines left
   out (`[4,762 earlier lines in <log>]`); with a decision model or a summarizer, those lines may be checked first
   ([below](#long-output-and-deciders)).
+- **Byte counts.** `head -c N` and `tail -c N` (or `+N`) print exactly the bytes the system programs print, as lines: a
+  line they print whole is the file's row, and the line cut at the edge shows as `[line 4012, chars 61-75 of 75]|...`,
+  never an anchor (plain text where the cut splits a character). Their input is always bytes, so a nib command before
+  them writes as the real program would, without rows.
 - **Output.** Color codes go, a `\r` progress line keeps its final text, invalid UTF-8 shows as U+FFFD and binary output
   only as its size. Plain output shaped like rows (`N:` or `N~`, as `grep -n` through a real program prints) that
   follows a file's rows is set apart by a line of nib's own, `[plain program output follows, not anchors]`. Plain output

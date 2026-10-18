@@ -86,6 +86,9 @@ func (s *Source) Raw(each func(line int, text string) bool) error {
 	return s.lines(false, each)
 }
 
+// Open opens the file the source was opened from, for a command that needs its bytes as they are.
+func (s *Source) Open() (*os.File, error) { return os.Open(s.path) }
+
 func (s *Source) lines(valid bool, each func(line int, text string) bool) error {
 	if s.View != nil {
 		// An empty file holds one empty line as a version, but no line to print.

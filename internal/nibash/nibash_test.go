@@ -215,13 +215,13 @@ func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	expect(t, f.run("echo $(head -1 a.txt)"), "one")
 	// A command that would be nib's own but for an option or pattern says why its output is plain, once and only when it printed.
 	system := "[head ran as the system program: nib's own does not implement this form of it, so its lines are plain output, not edit anchors]"
-	expect(t, f.run("head -c 3 a.txt; head -c 3 a.txt"), "oneone\n"+system)
+	expect(t, f.run("head -q -n 1 a.txt; head -q -n 1 a.txt"), "one\none\n"+system)
 	expect(t, f.run("grep '\\<one' a.txt"), "one\n[grep ran as the system program: its pattern needs a feature nib's own cannot run exactly, so its lines are plain output, not edit anchors]")
 	expect(t, f.run("head -c 0 a.txt"), "(no output)")
 	expect(t, f.run("/usr/bin/head -1 a.txt"), "one")
 	// An option only an expansion supplies runs the system program, unless the command is joined to another nib command.
-	expect(t, f.run("F=-c; head $F 3 a.txt"), "one\n"+system)
-	if out := f.run("F=-c; head $F 3 a.txt | wc -l"); !strings.Contains(out, "head: an option nibash does not implement reached it through an expansion") {
+	expect(t, f.run("F=-q; head $F -n 1 a.txt"), "one\n"+system)
+	if out := f.run("F=-q; head $F -n 1 a.txt | wc -l"); !strings.Contains(out, "head: an option nibash does not implement reached it through an expansion") {
 		t.Fatalf("got %s", out)
 	}
 	out := f.run("head -1 a.txt > first.txt; cat first.txt")
@@ -391,24 +391,27 @@ func TestSandboxConfinesShellAndPrograms(t *testing.T) {
 func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 	// Each command line, with the commands that run as nibash's own and how they read.
 	cases := map[string][]string{
-		"grep -n x a":             {"B:grep"},
-		"grep -P x a":             {"S:grep"},
-		"grep x a > out":          nil,
-		"grep x a | tr a b":       nil,
-		"grep x a | head -1":      {"B:grep", "L:head"},
-		"echo $(grep x a)":        nil,
-		"grep() { :; }; grep x":   nil,
-		"/bin/grep x a":           nil,
-		"head -c 5 a":             {"S:head"},
-		"head -c 5 a | wc":        {"B:wc"},
-		"sed -n 1,5p a":           {"B:sed"},
-		"sed -i s/a/b/ a":         {"S:sed"},
-		"cat a |& head":           {"B:head"},
-		"cat a | head < b":        {"B:head"},
-		"tr a b < f | head -2":    {"B:head"},
-		"cut -c1-5 a":             {"B:cut"},
-		"cut -f1 a":               {"S:cut"},
-		"sed -n 1p a | cut -c1-3": {"B:sed", "L:cut"},
+		"grep -n x a":                   {"B:grep"},
+		"grep -P x a":                   {"S:grep"},
+		"grep x a > out":                nil,
+		"grep x a | tr a b":             nil,
+		"grep x a | head -1":            {"B:grep", "L:head"},
+		"echo $(grep x a)":              nil,
+		"grep() { :; }; grep x":         nil,
+		"/bin/grep x a":                 nil,
+		"head -c 5 a":                   {"B:head"},
+		"head -c 5K a":                  {"S:head"},
+		"head -c 5 a | wc":              {"B:head", "L:wc"},
+		"cat a | tail -c 5":             {"B:tail"},
+		"{ echo x; cat a; } | tail -c5": {"B:tail"},
+		"sed -n 1,5p a":                 {"B:sed"},
+		"sed -i s/a/b/ a":               {"S:sed"},
+		"cat a |& head":                 {"B:head"},
+		"cat a | head < b":              {"B:head"},
+		"tr a b < f | head -2":          {"B:head"},
+		"cut -c1-5 a":                   {"B:cut"},
+		"cut -f1 a":                     {"S:cut"},
+		"sed -n 1p a | cut -c1-3":       {"B:sed", "L:cut"},
 		"for f in a; do sed -n 1p $f; done | cut -c1": {"B+:sed", "W:cut"},
 		`sed -n "$r" a`:                {"B:sed"},
 		`sed -n "$r" a | cut -c1`:      {"B+:sed", "W:cut"},

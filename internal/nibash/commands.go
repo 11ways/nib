@@ -228,23 +228,27 @@ func (p *catPlan) run(inv *invocation) int {
 type edgePlan struct {
 	tail     bool
 	count    int
-	from     bool // tail -n +N
+	from     bool // tail -n +N or -c +N
+	bytes    bool // -c: count counts bytes
 	operands []string
 }
+
+// edgeSpec is head's and tail's options: -n and -c, the last one given counting.
+var edgeSpec = optionSpec{values: "nc", numeric: true, long: map[string]string{"lines=": "n", "bytes=": "c"}}
 
 func prepareHead(name string, args []string) (plan, error) { return prepareEdge(false, args) }
 func prepareTail(name string, args []string) (plan, error) { return prepareEdge(true, args) }
 
 func prepareEdge(tail bool, args []string) (plan, error) {
-	options, operands, err := parseOptions(optionSpec{values: "n", numeric: true, long: map[string]string{"lines=": "n"}}, args)
+	options, operands, err := parseOptions(edgeSpec, args)
 	if err != nil {
 		return nil, err
 	}
 	p := &edgePlan{tail: tail, count: 10, operands: operands}
 	for _, o := range options {
 		value := o.value
-		if tail && strings.HasPrefix(value, "+") {
-			p.from = true
+		from := tail && strings.HasPrefix(value, "+")
+		if from {
 			value = value[1:]
 		}
 		n, ok := count(value)
@@ -252,10 +256,14 @@ func prepareEdge(tail bool, args []string) (plan, error) {
 			// A negative count (all but the last N) and suffixes like 5K are left to the real program.
 			return nil, errUnsupported
 		}
-		p.count = n
+		p.count, p.from, p.bytes = n, from, o.name == "c"
 	}
 	return p, nil
 }
+
+// readsBytes is set for head -c and tail -c, which must read their input's bytes as a program wrote them, never rows sent between nib's
+// own commands.
+func (p *edgePlan) readsBytes() bool { return p.bytes }
 
 func (p *edgePlan) run(inv *invocation) int {
 	operands := p.operands
@@ -275,7 +283,11 @@ func (p *edgePlan) run(inv *invocation) int {
 			inv.out.emit(record{text: fmt.Sprintf("==> %s <==", name)})
 		}
 		if operand == "-" {
-			p.edgeOfStdin(inv)
+			if p.bytes {
+				status = max(status, p.bytesOfStdin(inv))
+			} else {
+				p.edgeOfStdin(inv)
+			}
 			continue
 		}
 		source := inv.open(operand, false)
@@ -283,7 +295,11 @@ func (p *edgePlan) run(inv *invocation) int {
 			status = 1
 			continue
 		}
-		p.edgeOfFile(inv, source)
+		if p.bytes {
+			status = max(status, p.bytesOfFile(inv, operand, source))
+		} else {
+			p.edgeOfFile(inv, source)
+		}
 	}
 	return status
 }
@@ -311,22 +327,34 @@ func (p *edgePlan) edgeOfFile(inv *invocation, source *engine.Source) {
 		}
 		return true
 	})
-	if !p.tail && total > p.count && source.View != nil {
-		total = len(source.View.Lines)
+	// A head of a file nib does not hold stops reading, so how many lines it has is unknown.
+	known := true
+	if !p.tail && total > p.count {
+		known = source.View != nil
+		if known {
+			total = len(source.View.Lines)
+		}
 	}
 	for _, r := range kept {
 		if !inv.out.emit(r) {
 			break
 		}
 	}
-	if inv.out.sink != nil && len(kept) > 0 && len(kept) < total {
+	if known && len(kept) > 0 {
 		first, last := 1, len(kept)
 		if p.tail {
 			first, last = total-len(kept)+1, total
 		}
-		display := source.Display
-		inv.out.sink.fact(func() string { return fmt.Sprintf("[%s: %s of %s]", display, lineSpan(first, last), thousands(total)) })
+		inv.spanFact(source.Display, first, last, total)
 	}
+}
+
+// spanFact says, at the terminal, which of a file's lines a head or tail showed when it showed only some.
+func (inv *invocation) spanFact(display string, first, last, total int) {
+	if inv.out.sink == nil || last-first+1 >= total {
+		return
+	}
+	inv.out.sink.fact(func() string { return fmt.Sprintf("[%s: %s of %s]", display, lineSpan(first, last), thousands(total)) })
 }
 
 func (p *edgePlan) edgeOfStdin(inv *invocation) {
