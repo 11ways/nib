@@ -148,8 +148,11 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 	args = append([]string{name}, args[1:]...)
 	prepare := commands[name].prepare
 	p, err := prepare(name, args[1:])
+	because := fmt.Sprintf("an option nibash does not implement reached it through an expansion, inside a pipeline of nib's own commands; write the option literally, or the command as /usr/bin/%s", name)
 	if s, ok := p.(standIn); err == nil && ok {
-		err = s.standIn(c, hc)
+		if err = s.standIn(c, hc); err != nil {
+			because = fmt.Sprintf("%v, and inside a pipeline of nib's own commands the system program cannot stand in; write the command as /usr/bin/%s", err, name)
+		}
 	}
 	if err != nil {
 		// An option the command line or an expansion gave it that nib's own lacks. With no other nib command reading or writing its records,
@@ -159,7 +162,7 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		if mode != fromLink && mode != fromBand && (band || !(isFile && c.links.get(out) != nil)) {
 			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err) })
 		}
-		fmt.Fprintf(hc.Stderr, "%s: an option nibash does not implement reached it through an expansion, inside a pipeline of nib's own commands; write the option literally, or the command as /usr/bin/%s\n", name, name)
+		fmt.Fprintf(hc.Stderr, "%s: %s\n", name, because)
 		// The stages it was joined to must still see it end, or they would wait for it.
 		if isFile && !band {
 			if l := c.links.get(out); l != nil {

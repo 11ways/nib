@@ -47,6 +47,20 @@ func TestCutFormsNibsOwnLacksRunTheSystemProgram(t *testing.T) {
 	}
 }
 
+// TestACutThatCountsInAnUnknownWayRunsItselfAloneAndSaysWhyInAPipeline gives cut's probe an answer it cannot read: alone, the system cut runs;
+// fed by another nib command, it cannot stand in, and the message names that cause rather than an expansion.
+func TestACutThatCountsInAnUnknownWayRunsItselfAloneAndSaysWhyInAPipeline(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": "abcdef\n"})
+	odd := `mkdir -p bin; printf '#!/bin/sh\necho odd\n' > bin/cut; chmod +x bin/cut; export PATH="$PWD/bin:$PATH"; `
+	if out := f.run(odd + "cut -c1-2 a.txt"); !strings.HasPrefix(out, "odd\n") || !strings.Contains(out, "[cut ran as the system program") {
+		t.Fatalf("alone, got %s", out)
+	}
+	out := f.run(odd + "sed -n 1p a.txt | cut -c1-2")
+	if !strings.Contains(out, "cut: the system cut counts in a way nib's own does not know, and inside a pipeline") || strings.Contains(out, "expansion") {
+		t.Fatalf("in a pipeline, got %s", out)
+	}
+}
+
 // shownLines reads nibash output back into the lines it shows: a row's text, the stretches a cut row shows joined, a plain line as it is;
 // headers and nib's own notes are left out.
 func shownLines(out string) []string {
