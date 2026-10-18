@@ -323,3 +323,64 @@ describe('the summary indicator and its switch', () => {
     expect(await say('summaries')).toContain('no summary model')
   })
 })
+
+describe('the band line for a hosted provider that takes long', () => {
+  const searching = { agent: 'main', tool: 'zemble_graph_callers', started: 39_000 }
+
+  test('a hosted call is read in nib shape only, and named once it has run a few seconds', () => {
+    const answer = { commands: [], jobs: [], calls: [searching] }
+    expect(parse(answer, 43_000)).toEqual({ commands: [], jobs: [], calls: [searching], at: 43_000 })
+    expect(parse({ ...answer, calls: [{ ...searching, started: 'soon' }] }, 0)).toBeUndefined()
+    expect(parse({ ...answer, calls: 'none' }, 0)).toBeUndefined()
+    expect(rows({ commands: [], jobs: [], calls: [searching, { agent: 'agent:a1', tool: 'zemble_search', started: 42_000 }], at: 43_000 }, false)
+      .map(row => [row.label, row.time, row.title, row.agent])).toEqual([['zemble', '0:04', 'graph_callers', undefined]])
+  })
+
+  test('the band names the hosted call that runs long, and the mod asks nib while it runs', async ($, on) => {
+    const clock = mock.clock(on, { now: 43_000 })
+    const asked: string[] = []
+    let calls: unknown[] = [searching]
+    on('mcp.call', async (_, e) => {
+      asked.push(e.tool)
+      return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [], calls } } }
+    })
+    let release = () => {}
+    on('tool.call', { tool: 'mcp__nib__zemble_graph_callers' }, async () => {
+      await new Promise<void>(resolve => (release = resolve))
+      return { result: 'done' }
+    })
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Box } = $.ui.resolve(e)
+      return <Box key="engine" />
+    })
+    const call = $.tool.call({ tool: 'mcp__nib__zemble_graph_callers' })
+    await clock.settle()
+    expect(asked).toContain('nibash_status')
+    const band = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100 } as never })
+    expect((await band.find({ text: /zemble/ }))?.text).toContain('zemble 0:04 graph_callers')
+    release()
+    await call
+    calls = []
+    await clock.advance(1_000)
+    await clock.advance(1_000)
+    expect(await band.find({ text: /zemble/ })).toBeUndefined()
+    const after = asked.length
+    await clock.advance(5_000)
+    expect(asked.length).toBe(after)
+  })
+
+  test("a tool of another server, and nib's own status tool, start no polling", async ($, on) => {
+    const clock = mock.clock(on, { now: 43_000 })
+    const asked: string[] = []
+    on('mcp.call', async (_, e) => {
+      asked.push(e.tool)
+      return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [] } } }
+    })
+    on('tool.call', { tool: 'mcp__other__zemble_search' }, async () => ({ result: 'done' }))
+    on('tool.call', { tool: 'mcp__nib__nibash_status' }, async () => ({ result: 'done' }))
+    await $.tool.call({ tool: 'mcp__other__zemble_search' })
+    await $.tool.call({ tool: 'mcp__nib__nibash_status' })
+    await clock.settle()
+    expect(asked).toEqual([])
+  })
+})

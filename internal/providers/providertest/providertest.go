@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -48,6 +49,12 @@ func Serve() {
 	})
 	add("pid", "Answers with its process id.", func(map[string]any) *mcp.CallToolResult {
 		return &mcp.CallToolResult{Content: text(strconv.Itoa(os.Getpid()))}
+	})
+	// slow answers after the milliseconds it is sent, so a test sees a call running.
+	add("slow", "Answers after a pause.", func(args map[string]any) *mcp.CallToolResult {
+		ms, _ := args["ms"].(float64)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		return &mcp.CallToolResult{Content: text("slept")}
 	})
 	add("Shouting", "Has a name nib does not take.", func(map[string]any) *mcp.CallToolResult { return nil })
 	add("wordy", strings.Repeat("word ", 500), func(map[string]any) *mcp.CallToolResult { return nil })

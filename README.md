@@ -1015,9 +1015,9 @@ refuses a path where a file is now and never replaces it, and the pane shows nib
 rules count in: in all, per agent and per tool with its calls, and the eight largest results with the start of the
 arguments that asked for each. nib counts them where it builds a result, `nibash_status` itself and the rounds of a call
 that paused to ask a question left out; the mod adds nothing.
-`/names` lists, for each agent that called, the named directories it sees: nib's own (`nib.json`, detected source roots,
-names kept from earlier sessions), those it defined with `hash -d`, those nib made for it and those it inherited from the
-agent that started it, each with the directory and the paths nib printed under the name.
+`/names` lists, for each agent that called, the named directories it sees: nib's own (`nib.json`, detected source
+roots, names kept from earlier sessions), those it defined with `hash -d`, those nib made for it and those it inherited
+from the agent that started it, each with the directory and the paths nib printed under the name.
 `/seen` lists, for each agent that called, the files nib holds a version of for it and the lines of each it counts as
 seen in full, the ones an edit may anchor on, as ranges, with the tag of the version, the lines it knows only by their
 content, and "edits may anchor anywhere" for a file nib has no record of seen lines for. It reads the snapshot store
@@ -1029,6 +1029,11 @@ from the places where the decider and the summarizer ask a model (an answer from
 asking nib while one runs. `/nibash summaries off` turns the summaries of long output off for this server, `on` turns
 them on again, and `/nibash summaries` alone flips them; the pane says which they are. It is `nibash_status`'s
 `summaries` argument, so a client without the mod can send it too, and with no summarizer set there is nothing to turn.
+
+A call to a hosted provider's tool (`zemble_graph_callers`) that has run three seconds gets a band line too,
+`zemble 0:04 graph_callers`, since the program behind it may start or index for minutes: nib lists the hosted calls
+running in `nibash_status` (`calls`; its own tools are not among them), and the mod, which asks nib while one runs,
+names a call only from its third second.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, ModelCall, NameList, SeenList, Status, Tokens, TrashEntry, Views } from '../types'
+import type { Command, Job, ModelCall, NameList, ProviderCall, SeenList, Status, Tokens, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -11,6 +11,8 @@ const TAIL = 12
 const POLL_MS = 1000
 /** How many rows the band lists before it counts the rest. */
 const BAND_ROWS = 3
+/** How long a hosted provider's call runs before the band names it: a program that answers at once is not worth a line. */
+const PROVIDER_AFTER_MS = 3000
 
 const status = atom({ plugin: 'nibash', key: 'status' } as const, null)
 const server = atom({ plugin: 'nibash', key: 'server' } as const, 'nib')
@@ -18,6 +20,8 @@ const views = atom({ plugin: 'nibash', key: 'views' } as const, {} as Views)
 
 /** A nibash call of any nib server, as Claude Code names it: mcp__<server>__nibash. */
 const NIBASH = /^mcp__(.+)__nibash$/
+/** A hosted provider's tool of a nib server, as Claude Code names it: mcp__<server>__<provider>_<tool>. */
+const HOSTED = /^mcp__(.+?)__([a-z][a-z0-9-]*)_(.+)$/
 
 /** The panes that show one list of nib's, each opened by the slash command of its name; the list is nibash_status's view of that name. */
 const VIEWS = {
@@ -63,13 +67,21 @@ function job(value: unknown): Job | undefined {
   return { id: v.id, agent: v.agent, command: v.command, started: v.started, ended: v.ended as number | undefined, running: v.running, exit: v.exit as number | undefined, log: v.log, tail: v.tail as string[] | undefined }
 }
 
-/** Reads a nibash_status answer; undefined for anything else, so a server that is not nib, or another version of it, shows nothing. */
+/** A decision or summary model nib is asking, as nibash_status gives it. */
 function modelCall(value: unknown): ModelCall | undefined {
   const v = value as Record<string, unknown> | null
   if (typeof v !== 'object' || v === null || typeof v.kind !== 'string' || typeof v.model !== 'string' || !isNumber(v.started)) return undefined
   return { kind: v.kind, model: v.model, started: v.started }
 }
 
+/** A hosted provider's tool call running, as nibash_status gives it. */
+function providerCall(value: unknown): ProviderCall | undefined {
+  const v = value as Record<string, unknown> | null
+  if (typeof v !== 'object' || v === null || typeof v.agent !== 'string' || typeof v.tool !== 'string' || !isNumber(v.started)) return undefined
+  return { agent: v.agent, tool: v.tool, started: v.started }
+}
+
+/** Reads a nibash_status answer; undefined for anything else, so a server that is not nib, or another version of it, shows nothing. */
 export function parse(content: unknown, at: number): Status | undefined {
   const v = content as Record<string, unknown> | null
   if (typeof v !== 'object' || v === null || !Array.isArray(v.commands) || !Array.isArray(v.jobs)) return undefined
@@ -87,6 +99,11 @@ export function parse(content: unknown, at: number): Status | undefined {
     const on = (v.summaries as { on?: unknown } | null)?.on
     if (typeof on !== 'boolean') return undefined
     status.summaries = on
+  }
+  if (v.calls !== undefined) {
+    const calls = Array.isArray(v.calls) ? v.calls.map(providerCall) : undefined
+    if (calls === undefined || calls.some(c => c === undefined)) return undefined
+    status.calls = calls as ProviderCall[]
   }
   return status
 }
@@ -250,6 +267,19 @@ export function rows(s: Status, ended: boolean, waiting: readonly string[] = [])
       isDone: false,
     })
   }
+  for (const c of s.calls ?? []) {
+    if (s.at - c.started < PROVIDER_AFTER_MS) continue
+    const [provider, ...tool] = c.tool.split('_')
+    out.push({
+      key: `p:${c.agent}:${c.tool}:${c.started}`,
+      label: provider ?? c.tool,
+      time: elapsed(s.at - c.started),
+      title: tool.join('_') || c.tool,
+      agent: who(c.agent),
+      tail: [],
+      isDone: false,
+    })
+  }
   for (const j of s.jobs) {
     if (!j.running && !ended) continue
     out.push({
@@ -310,7 +340,7 @@ async function poll($: EngineInterface): Promise<void> {
       }
     }
     await update($, status, () => next)
-    if (inFlight === 0 && next.commands.length === 0 && !(next.models?.length) && !next.jobs.some(j => j.running)) stop()
+    if (inFlight === 0 && next.commands.length === 0 && !(next.models?.length) && !(next.calls?.length) && !next.jobs.some(j => j.running)) stop()
   } catch {
     // No nib server by that name (yet), or it went away: nothing to show until a nibash call names one.
     stop()
@@ -436,7 +466,19 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const match = NIBASH.exec(e.tool)
-    if (match === null) return next(e)
+    if (match === null) {
+      // A hosted provider's tool, mcp__nib__zemble_search: the program behind it may take long to start or to answer, which nib reports.
+      const hosted = HOSTED.exec(e.tool)
+      if (hosted === null || hosted[1] !== (await read($, server)) || e.tool.endsWith('__nibash_status')) return next(e)
+      inFlight += 1
+      watch($)
+      try {
+        return await next(e)
+      } finally {
+        inFlight -= 1
+        void poll($)
+      }
+    }
     await update($, server, () => match[1])
     const command = (e as { command?: unknown }).command
     if (typeof command === 'string') waiting.push(command)

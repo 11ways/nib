@@ -52,7 +52,7 @@ func TestStartListsTheToolsNibCanOffer(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if strings.Join(names, ",") != "crash,fails,future,locate,pid,plain" {
+	if strings.Join(names, ",") != "crash,fails,future,locate,pid,plain,slow" {
 		t.Fatalf("tools %v", names)
 	}
 	if len(p.Skipped) != 2 || !strings.Contains(strings.Join(p.Skipped, "\n"), "Shouting: its name") || !strings.Contains(strings.Join(p.Skipped, "\n"), "wordy: its description has 2500 characters") {

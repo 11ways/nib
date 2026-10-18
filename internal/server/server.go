@@ -89,6 +89,8 @@ type ShellStatus struct {
 	// Models are the decision and summary models being asked now, and Summaries whether summaries are on.
 	Models    []ModelCall   `json:"models,omitempty"`
 	Summaries *SummaryState `json:"summaries,omitempty"`
+	// Calls are the hosted providers' tool calls running now, which a program outside nib may take long to answer.
+	Calls []Flight `json:"calls,omitempty"`
 }
 
 // RunningCommand is a nibash call still running; times are Unix milliseconds.
@@ -1190,6 +1192,11 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 		}
 		return k.agent, true
 	}, lines)
+	for _, f := range s.state(c.key).usage.flying() {
+		if f.Hosted {
+			status.Calls = append(status.Calls, f)
+		}
+	}
 	if restore != "" {
 		status.Restore = s.restore(ctx, restore)
 	}
