@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { count, elapsed, parse, parseNames, parseRestored, parseSeen, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
+import { count, elapsed, parse, parseNames, parseRestored, parseSeen, parseTokens, parseTrash, rows, said, structuredText } from '../hooks/register'
 
 const go = { agent: 'main', command: 'go test ./...', description: 'Run all Go tests', started: 1_000, tail: ['ok  internal/engine'] }
 const bench = { id: 1, agent: 'agent:a1', command: 'bun bench/run.ts', started: 0, running: true, log: '/run/nib/job-1.log', tail: ['run 1 of 3', 'run 2 of 3'] }
@@ -25,13 +25,23 @@ describe('reading nibash_status', () => {
     expect(parse({ commands: [], jobs: [{ ...bench, running: 'yes' }] }, 0)).toBeUndefined()
   })
 
-  test('the band leaves ended jobs out; the pane keeps them', () => {
+  test('the band leaves out ended jobs past a window; the pane keeps them', () => {
     const status = { commands: [go], jobs: [bench, { ...bench, id: 2, running: false, exit: 1, ended: 30_000 }], at: 43_000 }
     expect(rows(status, false).map(row => [row.label, row.time, row.title, row.command, row.agent])).toEqual([
       ['nibash', '0:42', 'Run all Go tests', 'go test ./...', undefined],
       ['job %1', '0:43', 'bun bench/run.ts', undefined, 'subagent'],
     ])
     expect(rows(status, true).at(-1)?.time).toBe('exit 1 after 0:30')
+    expect(rows(status, 14_000)).toHaveLength(3)
+    expect(rows(status, 13_000)).toHaveLength(2)
+  })
+
+  test('a job carrying on a call the mod saw is titled by its description, its command beneath', () => {
+    const described = new Map([[said('bun  bench/run.ts'), 'Benchmark three runs']])
+    expect(rows({ commands: [], jobs: [bench], at: 43_000 }, false, [], described).map(row => [row.title, row.command])).toEqual([['Benchmark three runs', 'bun bench/run.ts']])
+    // A lone cmd & is the job nib prints as "cmd &", however the call spaced it.
+    expect(said('sleep 5&')).toBe(said('sleep  5 &'))
+    expect(rows({ commands: [], jobs: [bench], at: 43_000 }, false).map(row => [row.title, row.command])).toEqual([['bun bench/run.ts', undefined]])
   })
 
   test('a call still in its request is left out once, as the transcript shows it', () => {
@@ -42,7 +52,7 @@ describe('reading nibash_status', () => {
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`a nibash call shows in the band while it runs, and a job that ends gets a toast (${surface})`, async ($, on) => {
+  test(`a nibash call shows as a card while it runs, and a job that ends turns green, gets a toast and goes (${surface})`, async ($, on) => {
     const clock = mock.clock(on, { now: 43_000 })
     let answer: unknown = { commands: [go], jobs: [bench] }
     const asked: unknown[] = []
@@ -73,30 +83,60 @@ for (const surface of ['terminal', 'desktop'] as const) {
       plugin: 'nibash',
       surface,
       component: 'AbovePrompt',
-      props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100 } as never,
+      props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 100 } as never,
     })
     // The call in its request shows in the transcript, so the band leaves it out until the request ends.
     expect(await band.find({ text: /Run all Go tests/ })).toBeUndefined()
-    expect(await band.find({ text: /bun bench\/run\.ts/ })).toBeDefined()
+    expect((await band.find({ key: 'j1:agent:a1' }))?.text).toBe('job %1 0:43 bun bench/run.ts subagentrun 2 of 3')
     release()
     await call
     await clock.advance(1_000)
-    const row = await band.find({ text: /Run all Go tests/ })
-    expect(row?.text).toContain('nibash 0:43 Run all Go tests /nibash')
-    expect(row?.text).not.toContain('main')
-    expect(await band.find({ text: /\/nibash/ })).toBeDefined()
-    // The job ends: the next look toasts it once, and the band empties.
-    answer = { commands: [], jobs: [{ ...bench, running: false, exit: 0, ended: 50_000 }] }
-    await clock.advance(1_000)
+    const card = await band.find({ key: 'c0:main:1000' })
+    expect(card?.text).toBe('nibash 0:43 Run all Go testsgo test ./...ok  internal/engine')
+    expect(card?.props).toMatchObject({ borderStyle: 'round', borderColor: 'suggestion', width: 49 })
+    // Two cards side by side on a band 100 wide, and the hint beneath.
+    expect((await band.find({ key: 'line:0' }))?.children).toHaveLength(2)
+    expect(await band.find({ text: '/nibash shows the full output' })).toBeDefined()
+    // The job ends: the next look toasts it once, and its card turns green until ENDED_MS has passed.
+    answer = { commands: [], jobs: [{ ...bench, running: false, exit: 0, ended: 45_000 }] }
     await clock.advance(1_000)
     expect(toasts).toEqual(['nibash job %1 ended, exit 0: bun bench/run.ts'])
+    expect((await band.find({ key: 'j1:agent:a1' }))?.props).toMatchObject({ borderColor: 'success' })
+    expect((await band.find({ key: 'j1:agent:a1' }))?.text).toContain('job %1 exit 0 after 0:45')
+    await clock.advance(11_000)
     expect(await band.find({ text: /bun bench/ })).toBeUndefined()
-    // Nothing runs, so nib is asked no more.
+    // Nothing runs and nothing just ended, so nib is asked no more.
     const count = asked.length
     await clock.advance(5_000)
     expect(asked.length).toBe(count)
   })
 }
+
+test('a narrow band stacks its cards, a failed job is red, and cards past the cap are counted', async ($, on) => {
+  const clock = mock.clock(on, { now: 43_000 })
+  const failed = { ...bench, id: 2, command: 'npm run lint', running: false, exit: 2, ended: 42_000 }
+  const jobs = [bench, failed, { ...bench, id: 3 }, { ...bench, id: 4 }]
+  on('mcp.call', async () => ({ value: { content: [], isError: false, structuredContent: { commands: [], jobs } } }))
+  on('tool.call', { tool: 'mcp__nib__nibash' }, async () => ({ result: 'done' }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
+  // The call the failed job carries on, as the mod sees it: its description titles the job's card.
+  await $.tool.call({ tool: 'mcp__nib__nibash', command: 'npm run lint', description: 'Lint the tree' } as never)
+  await clock.settle()
+  const band = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 60 } as never })
+  // 60 columns hold one card of at least 34 across: they stack, three at most, and the fourth is counted.
+  for (const line of ['line:0', 'line:1', 'line:2']) expect((await band.find({ key: line }))?.children).toHaveLength(1)
+  expect(await band.find({ key: 'line:3' })).toBeUndefined()
+  expect((await band.find({ key: 'j2:agent:a1' }))?.props).toMatchObject({ borderColor: 'error', width: 60 })
+  expect((await band.find({ key: 'j2:agent:a1' }))?.text).toContain('Lint the tree')
+  expect(await band.find({ text: '+1 more in /nibash' })).toBeDefined()
+  // A band with room for one row of cards shows only that row.
+  await band.redraw({ hasSurvey: false, isWorking: true, maxRows: 6, bodyColumns: 60 } as never)
+  expect(await band.find({ key: 'line:1' })).toBeUndefined()
+  expect(await band.find({ text: '+3 more in /nibash' })).toBeDefined()
+})
 
 test('the pane shows each command and job with its last output lines', async ($, on) => {
   const clock = mock.clock(on, { now: 43_000 })

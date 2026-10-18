@@ -1046,18 +1046,24 @@ configured for `Edit|Write` matchers do not run for them unless their matcher al
 
 ### The nibash mod
 
-`mods/nibash` is a Claude Code mod (a plugin of function hooks) that shows what nibash runs. A band above the prompt lists
-up to three running jobs and calls, one line each, `nibash 0:42 Run all Go tests` (the description, else the command) or
-`job %1 3:10 bun bench/run.ts subagent`, the first ending in `/nibash` (or `+2 more /nibash`). A call still in its
+`mods/nibash` is a Claude Code mod (a plugin of function hooks) that shows what nibash runs. A band above the prompt shows
+up to three running jobs and calls as cards, side by side where each gets at least 34 columns and stacked otherwise, as
+many rows of them as the band has room for: a rounded box with `nibash 0:42 Run all Go tests` or
+`job %1 3:10 Benchmark three runs` (the call's description; for a job, that of the call the mod saw it begin as, with
+`background`, past its timeout, or as a call's one `cmd &`, since `nibash_status` leaves job descriptions out so an
+agent reading it pays nothing for them; else the command), `subagent` for a subagent's, the command dimmed beneath when
+there is a description, and the last output line. A job that ended stays for ten
+seconds, its box green for exit 0 and red otherwise. Beneath the cards, `/nibash shows the full output`, or
+`+2 more in /nibash` for those that did not fit. A call still in its
 request is left out, since the transcript already shows it, until Claude Code moves it to the background. `/nibash`
 opens a pane with every command and job, the ones ended in the last 10 minutes included, each with its command and
 last output lines (Escape closes it while it holds the keys, and a second `/nibash` closes it too); and a job that
 ends while the mod watched it gets a toast with its exit status. The mod hooks every
 `mcp__<server>__nibash` call, which tells it nib's server name and when to look, and while anything runs it asks that
-server's `nibash_status` once a second (with `tail: 12`), stopping once nothing runs; nib is the only source of what
-runs, so subagents' commands and jobs show too. Claude Code passes a tool's structured content on as the JSON of its one
-text block, which the mod reads. The poll needs `mcp__nib__nibash_status` allowed, which `nib setup` adds; without it
-Claude Code would ask about every poll.
+server's `nibash_status` once a second (with `tail: 12`), stopping once nothing runs or just ended; nib is the only
+source of what runs, so subagents' commands and jobs show too. Claude Code passes a tool's structured content on as the
+JSON of its one text block, which the mod reads. The poll needs `mcp__nib__nibash_status` allowed, which `nib setup`
+adds; without it Claude Code would ask about every poll.
 
 Besides `/nibash`, one slash command per list opens a pane of its own, which Escape or the same command again closes.
 Such a pane asks `nibash_status` for its list (`view`) every two seconds while it is open, and the lists only read what
@@ -1076,14 +1082,15 @@ seen in full, the ones an edit may anchor on, as ranges, with the tag of the ver
 content, and "edits may anchor anywhere" for a file nib has no record of seen lines for. It reads the snapshot store
 without touching it, so asking changes nothing about what an agent may edit; it lists the 40 files used most recently.
 
-While nib asks a decision or summary model about a long output, the band also lists it, `summary 0:07 deepseek/...` or
-`decider 0:02 typesafe/jev-1.14`, so a call that waits shows what it waits for: nib reports them in `nibash_status`
-from the places where the decider and the summarizer ask a model (an answer from the cache asks none), and the mod keeps
+While nib asks a decision or summary model about a long output, the band also shows it as a card,
+`summary 0:07 deepseek/...` or `decider 0:02 typesafe/jev-1.14`, so a call that waits shows what it waits for: nib
+reports them in `nibash_status` from the places where the decider and the summarizer ask a model (an answer from the
+cache asks none), and the mod keeps
 asking nib while one runs. `/nibash summaries off` turns the summaries of long output off for this server, `on` turns
 them on again, and `/nibash summaries` alone flips them; the pane says which they are. It is `nibash_status`'s
 `summaries` argument, so a client without the mod can send it too, and with no summarizer set there is nothing to turn.
 
-A call to a hosted provider's tool (`zemble_graph_callers`) that has run three seconds gets a band line too,
+A call to a hosted provider's tool (`zemble_graph_callers`) that has run three seconds gets a card too,
 `zemble 0:04 graph_callers`, since the program behind it may start or index for minutes: nib lists the hosted calls
 running in `nibash_status` (`calls`; its own tools are not among them), and the mod, which asks nib while one runs,
 names a call only from its third second.

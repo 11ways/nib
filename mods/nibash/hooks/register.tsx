@@ -9,8 +9,12 @@ const PANE = 'nibash'
 const TAIL = 12
 /** How often nib is asked while something runs. */
 const POLL_MS = 1000
-/** How many rows the band lists before it counts the rest. */
-const BAND_ROWS = 3
+/** How many cards the band shows before it counts the rest. */
+const BAND_CARDS = 3
+/** How narrow a card may be; a band too narrow for cards side by side stacks them. */
+const CARD_MIN = 34
+/** How long a job that ended stays in the band, green for exit 0 and red otherwise, before it goes. */
+const ENDED_MS = 10_000
 /** How long a hosted provider's call runs before the band names it: a program that answers at once is not worth a line. */
 const PROVIDER_AFTER_MS = 3000
 
@@ -227,17 +231,22 @@ export function count(n: number): string {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
-/** One row of the band or the pane: a running command or a job. */
-type Row = { key: string; label: string; time: string; title: string; command?: string; agent?: string; tail: string[]; isDone: boolean }
+/** One row of the pane, or card of the band: a running command, a model or hosted call, or a job; exit is set once a job ended. */
+type Row = { key: string; label: string; time: string; title: string; command?: string; agent?: string; tail: string[]; isDone: boolean; exit?: number }
 
 /** A row's agent as it shows: nothing for the main one. */
 const who = (agent: string) => (agent === 'main' ? undefined : 'subagent')
 
+/** How a command is looked up among the descriptions: spaces collapsed, and a final & spaced as nib prints a job's. */
+export const said = (command: string) => command.replace(/\s+/g, ' ').trim().replace(/\s*&$/, ' &')
+
 /**
- * The rows a status shows; with ended, the jobs that ended too.
+ * The rows a status shows.
+ * @param ended which ended jobs show: all with true, none with false, or those that ended less than that many milliseconds before
  * @param waiting the commands of nibash calls still in their request, which the transcript already shows; one row each is left out
+ * @param described the descriptions of nibash calls the mod saw, by said(command): a job carrying on such a call is titled by it
  */
-export function rows(s: Status, ended: boolean, waiting: readonly string[] = []): Row[] {
+export function rows(s: Status, ended: boolean | number, waiting: readonly string[] = [], described: ReadonlyMap<string, string> = new Map()): Row[] {
   const left = [...waiting]
   const out: Row[] = []
   s.commands.forEach((c, index) => {
@@ -281,15 +290,17 @@ export function rows(s: Status, ended: boolean, waiting: readonly string[] = [])
     })
   }
   for (const j of s.jobs) {
-    if (!j.running && !ended) continue
+    if (!j.running && (ended === false || (typeof ended === 'number' && s.at - (j.ended ?? s.at) >= ended))) continue
     out.push({
       key: `j${j.id}:${j.agent}`,
       label: `job %${j.id}`,
       time: j.running ? elapsed(s.at - j.started) : `exit ${j.exit ?? '?'} after ${elapsed((j.ended ?? s.at) - j.started)}`,
-      title: short(j.command),
+      title: described.get(said(j.command)) || short(j.command),
+      command: described.has(said(j.command)) ? short(j.command) : undefined,
       agent: who(j.agent),
       tail: j.tail ?? [],
       isDone: !j.running,
+      exit: j.exit,
     })
   }
   return out
@@ -313,6 +324,13 @@ let asking = false
 const watched = new Set<string>()
 /** The commands of nibash calls still in their request; Claude Code moving one to the background ends its request. */
 const waiting: string[] = []
+/**
+ * The description of each nibash call the mod saw, any agent's, by said(command), the newest last: nib's status leaves descriptions out, since
+ * an agent reading it would pay for them, so the band takes them from the calls; a job a call became, or its one cmd &, has its command.
+ */
+const described = new Map<string, string>()
+/** How many descriptions are kept. */
+const DESCRIBED = 100
 
 function stop(): void {
   timer?.cancel()
@@ -336,11 +354,13 @@ async function poll($: EngineInterface): Promise<void> {
       if (j.running) {
         watched.add(key)
       } else if (watched.delete(key)) {
-        $.ui.toast(`nibash job %${j.id} ended, exit ${j.exit ?? '?'}: ${short(j.command, 50)}`)
+        $.ui.toast(`nibash job %${j.id} ended, exit ${j.exit ?? '?'}: ${described.get(said(j.command)) || short(j.command, 50)}`)
       }
     }
     await update($, status, () => next)
-    if (inFlight === 0 && next.commands.length === 0 && !(next.models?.length) && !(next.calls?.length) && !next.jobs.some(j => j.running)) stop()
+    // A job that just ended stays in the band a while, so nib is asked until it has gone.
+    const fresh = next.jobs.some(j => !j.running && next.at - (j.ended ?? 0) < ENDED_MS)
+    if (inFlight === 0 && next.commands.length === 0 && !(next.models?.length) && !(next.calls?.length) && !next.jobs.some(j => j.running) && !fresh) stop()
   } catch {
     // No nib server by that name (yet), or it went away: nothing to show until a nibash call names one.
     stop()
@@ -482,6 +502,12 @@ export const register: Register = on => {
     await update($, server, () => match[1])
     const command = (e as { command?: unknown }).command
     if (typeof command === 'string') waiting.push(command)
+    const description = (e as { description?: unknown }).description
+    if (typeof command === 'string' && typeof description === 'string' && description.trim() !== '') {
+      described.delete(said(command))
+      described.set(said(command), description.trim())
+      if (described.size > DESCRIBED) described.delete(described.keys().next().value as string)
+    }
     inFlight += 1
     watch($)
     try {
@@ -495,23 +521,43 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, status)
-    const running = s === null ? [] : rows(s, false, waiting)
-    if (e.props.hasSurvey || running.length === 0) return next(e)
+    const shown = s === null ? [] : rows(s, ENDED_MS, waiting, described)
+    if (e.props.hasSurvey || shown.length === 0) return next(e)
     const { Box, Text } = $.ui.resolve(e)
-    const more = running.length - BAND_ROWS
+    const columns = e.props.bodyColumns > 0 ? e.props.bodyColumns : 80
+    // Side by side as many as are at least CARD_MIN wide, the rest below, and no more rows of cards than the band has room for.
+    const across = Math.max(1, Math.min(BAND_CARDS, Math.floor((columns + 1) / (CARD_MIN + 1))))
+    const fit = Math.max(1, Math.floor((e.props.maxRows - 1) / 5)) * across
+    const cards = shown.slice(0, Math.min(BAND_CARDS, fit))
+    const more = shown.length - cards.length
+    const width = Math.floor((columns - (Math.min(cards.length, across) - 1)) / Math.min(cards.length, across))
+    const lines: Row[][] = []
+    for (let at = 0; at < cards.length; at += across) lines.push(cards.slice(at, at + across))
     return (
       <Box flexDirection="column">
-        {running.slice(0, BAND_ROWS).map((row, index) => (
-          <Box key={row.key} flexDirection="row">
-            <Box flexGrow={1} flexShrink={1}>
-              <Text wrap="truncate-end">
-                <Text color="cyan">{row.label}</Text> <Text dimColor>{row.time}</Text> {row.title}
-                {row.agent ? <Text dimColor> {row.agent}</Text> : null}
-              </Text>
-            </Box>
-            {index === 0 ? <Text dimColor>{more > 0 ? ` +${more} more /${PANE}` : ` /${PANE}`}</Text> : null}
+        {lines.map((line, index) => (
+          <Box key={`line:${index}`} flexDirection="row" columnGap={1} alignItems="flex-start">
+            {line.map(row => {
+              const tone = row.isDone ? (row.exit === 0 ? 'success' : 'error') : 'suggestion'
+              const last = row.tail.at(-1)
+              return (
+                <Box key={row.key} flexDirection="column" borderStyle="round" borderColor={tone} paddingX={1} width={width} flexShrink={0}>
+                  <Box flexDirection="row">
+                    <Box flexGrow={1} flexShrink={1}>
+                      <Text wrap="truncate-end">
+                        <Text color={tone}>{row.label}</Text> <Text dimColor tabular>{row.time}</Text> <Text weight="semibold">{row.title}</Text>
+                      </Text>
+                    </Box>
+                    {row.agent ? <Text dimColor> {row.agent}</Text> : null}
+                  </Box>
+                  {row.command ? <Text dimColor wrap="truncate-end">{row.command}</Text> : null}
+                  {last ? <Text dimColor italic wrap="truncate-end">{last}</Text> : null}
+                </Box>
+              )
+            })}
           </Box>
         ))}
+        <Text dimColor>{more > 0 ? `+${more} more in /${PANE}` : `/${PANE} shows the full output`}</Text>
       </Box>
     )
   })
@@ -519,7 +565,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const s = await read($, status)
-    const all = s === null ? [] : rows(s, true)
+    const all = s === null ? [] : rows(s, true, [], described)
     if (all.length === 0) {
       return (
         <Box flexDirection="column">
