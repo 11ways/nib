@@ -993,15 +993,17 @@ configured for `Edit|Write` matchers do not run for them unless their matcher al
 
 ### The nibash mod
 
-`mods/nibash` is a Claude Code mod (a plugin of function hooks) that shows what nibash runs. While a nibash call or job
-runs, a band above the prompt lists up to three of them, `nibash 0:42 Run all Go tests  go test ./... [main]` or
-`job %1 3:10 bun bench/run.ts [agent:...]`; `/nibash` opens a pane with every command and job, the ones ended in the
-last 10 minutes included, each with its last output lines; and a job that ends while the mod watched it gets a toast
-with its exit status. The mod hooks every `mcp__<server>__nibash` call, which tells it nib's server name and when to
-look, and while anything runs it asks that server's `nibash_status` once a second (with `tail: 12`), stopping once
-nothing runs; nib is the only source of what runs, so subagents' commands and jobs show too. Claude Code passes a tool's
-structured content on as the JSON of its one text block, which the mod reads. The poll needs `mcp__nib__nibash_status`
-allowed, which `nib setup` adds; without it Claude Code would ask about every poll.
+`mods/nibash` is a Claude Code mod (a plugin of function hooks) that shows what nibash runs. A band above the prompt lists
+up to three running jobs and calls, one line each, `nibash 0:42 Run all Go tests` (the description, else the command) or
+`job %1 3:10 bun bench/run.ts subagent`, the first ending in `/nibash` (or `+2 more /nibash`). A call still in its
+request is left out, since the transcript already shows it, until Claude Code moves it to the background. `/nibash`
+opens a pane with every command and job, the ones ended in the last 10 minutes included, each with its command and
+last output lines; and a job that ends while the mod watched it gets a toast with its exit status. The mod hooks every
+`mcp__<server>__nibash` call, which tells it nib's server name and when to look, and while anything runs it asks that
+server's `nibash_status` once a second (with `tail: 12`), stopping once nothing runs; nib is the only source of what
+runs, so subagents' commands and jobs show too. Claude Code passes a tool's structured content on as the JSON of its one
+text block, which the mod reads. The poll needs `mcp__nib__nibash_status` allowed, which `nib setup` adds; without it
+Claude Code would ask about every poll.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

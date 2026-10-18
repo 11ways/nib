@@ -27,11 +27,17 @@ describe('reading nibash_status', () => {
 
   test('the band leaves ended jobs out; the pane keeps them', () => {
     const status = { commands: [go], jobs: [bench, { ...bench, id: 2, running: false, exit: 1, ended: 30_000 }], at: 43_000 }
-    expect(rows(status, false).map(row => `${row.label} ${row.time} ${row.title}`)).toEqual([
-      'nibash 0:42 Run all Go tests  go test ./...',
-      'job %1 0:43 bun bench/run.ts',
+    expect(rows(status, false).map(row => [row.label, row.time, row.title, row.command, row.agent])).toEqual([
+      ['nibash', '0:42', 'Run all Go tests', 'go test ./...', undefined],
+      ['job %1', '0:43', 'bun bench/run.ts', undefined, 'subagent'],
     ])
     expect(rows(status, true).at(-1)?.time).toBe('exit 1 after 0:30')
+  })
+
+  test('a call still in its request is left out once, as the transcript shows it', () => {
+    const status = { commands: [go, { ...go, started: 2_000 }], jobs: [], at: 43_000 }
+    expect(rows(status, false, ['go test ./...']).map(row => row.time)).toEqual(['0:41'])
+    expect(rows(status, false, ['go vet ./...'])).toHaveLength(2)
   })
 })
 
@@ -50,13 +56,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
       toasts.push(e.text)
       return { value: undefined }
     })
-    on('tool.call', { tool: 'mcp__nib__nibash' }, async () => ({ result: 'done' }))
+    let release = () => {}
+    on('tool.call', { tool: 'mcp__nib__nibash' }, async () => {
+      await new Promise<void>(resolve => (release = resolve))
+      return { result: 'done' }
+    })
     // The engine's own band, which the mod's gives way to once nothing runs.
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Box } = $.ui.resolve(e)
       return <Box key="engine" />
     })
-    await $.tool.call({ tool: 'mcp__nib__nibash', command: 'go test ./...' })
+    const call = $.tool.call({ tool: 'mcp__nib__nibash', command: 'go test ./...' })
     await clock.settle()
     expect(asked.at(-1)).toEqual({ server: 'nib', tool: 'nibash_status', args: { tail: 12 } })
     const band = await $.ui.mount({
@@ -65,8 +75,16 @@ for (const surface of ['terminal', 'desktop'] as const) {
       component: 'AbovePrompt',
       props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100 } as never,
     })
-    expect((await band.find({ text: /Run all Go tests/ }))?.text).toContain('0:42')
+    // The call in its request shows in the transcript, so the band leaves it out until the request ends.
+    expect(await band.find({ text: /Run all Go tests/ })).toBeUndefined()
     expect(await band.find({ text: /bun bench\/run\.ts/ })).toBeDefined()
+    release()
+    await call
+    await clock.advance(1_000)
+    const row = await band.find({ text: /Run all Go tests/ })
+    expect(row?.text).toContain('nibash 0:43 Run all Go tests /nibash')
+    expect(row?.text).not.toContain('main')
+    expect(await band.find({ text: /\/nibash/ })).toBeDefined()
     // The job ends: the next look toasts it once, and the band empties.
     answer = { commands: [], jobs: [{ ...bench, running: false, exit: 0, ended: 50_000 }] }
     await clock.advance(1_000)
