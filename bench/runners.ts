@@ -180,6 +180,7 @@ export const NOTE_PATTERNS: { kind: Note["kind"]; pattern: RegExp }[] = [
   { kind: "warned", pattern: /^Lines \d+ and \d+ now nearly match:.*$/gm },
   { kind: "warned", pattern: /^Brackets no longer balance:.*$/gm },
   { kind: "warned", pattern: /^The edit of lines? [\d-]+ replaced lines \d+-\d+:.*$/gm },
+  { kind: "warned", pattern: /^The edit of lines \d+-\d+ dropped line \d+, .*$/gm },
   // A path that names nothing, noted while the call serves its other paths.
   { kind: "warned", pattern: /^\[.* does not exist.*\]$/gm },
   // nibash's gaps in cut output and the closing note that ends it (log lines, or rows for output without log lines), and its footer for long rows,

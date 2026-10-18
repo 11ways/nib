@@ -237,6 +237,11 @@ describe("harness output", () => {
     expect(await notes("edit", { input: `[code.ts#${stray}]\nPUT 2:\n+  return 3 }` })).toEqual([
       "warned: Brackets no longer balance: before this edit they did, and now the file has 1 more } than {. The new line 2 has 1 more } than {, counted against the lines they replaced; check them and the lines just outside them.",
     ])
+    await writeFile(path.join(directory, "save.ts"), "function save(record) {\n  const row = toRow(record)\n  store.insert(row)\n}\n")
+    const save = /#([0-9A-F]{4})\]/.exec(await call("read", { paths: ["save.ts"] }))![1]
+    expect(await notes("edit", { input: `[save.ts#${save}]\nPUT 2.=3:\n+  const row = toRow(record, now())` })).toEqual([
+      "warned: The edit of lines 2-3 dropped line 3, \"store.insert(row)\": no new row resembles it, while they keep the range's other lines. If the range was meant to end at line 2, this hunk, with the new tag, puts it back:",
+    ])
     // nibash's notes on cut output: keywords choosing the middle, the fixed cut when they find nothing, and the footer of a row cut for length.
     const decided = await notes("nibash", { command: "seq 1 3000; echo 'error: boom'; seq 5001 5200" })
     expect(decided).toEqual([

@@ -595,42 +595,42 @@ func ResolveEdges(edits []LineEdit, length int) []LineEdit {
 	return resolved
 }
 
-// RemapEdits rebases edits authored against previous onto current when every anchor moved by one uniform offset; ok is false otherwise.
-func RemapEdits(previous *Version, current []string, edits []LineEdit) (offset int, remapped []LineEdit, ok bool) {
+// RemapEdits rebases edits authored against previous onto current when each edit's anchors moved by one offset of their own, as lines an
+// edit in between left unchanged do; moved says whether any did, and ok is false when an anchor changed or its context does not hold.
+func RemapEdits(previous *Version, current []string, edits []LineEdit) (moved bool, remapped []LineEdit, ok bool) {
 	var anchors []int
 	for _, edit := range edits {
 		anchors = append(anchors, AnchorLines(edit)...)
 	}
 	if len(anchors) == 0 {
-		return 0, ResolveEdges(edits, len(current)), true
+		return false, ResolveEdges(edits, len(current)), true
 	}
 	mapping, ok := LineMap(previous.Lines, current)
 	if !ok || !contextHolds(previous.Lines, current, mapping, anchors) {
-		return 0, nil, false
-	}
-	offsets := map[int]bool{}
-	for _, line := range anchors {
-		target, ok := mapping[line]
-		if !ok {
-			return 0, nil, false
-		}
-		offsets[target-line] = true
-	}
-	if len(offsets) != 1 {
-		return 0, nil, false
-	}
-	for o := range offsets {
-		offset = o
+		return false, nil, false
 	}
 	shifted := make([]LineEdit, len(edits))
 	for i, edit := range edits {
-		if !edit.Edge {
+		offsets := map[int]bool{}
+		for _, line := range AnchorLines(edit) {
+			target, ok := mapping[line]
+			if !ok {
+				return false, nil, false
+			}
+			offsets[target-line] = true
+		}
+		// A replaced range must still be one stretch: lines inserted inside it would be replaced too.
+		if len(offsets) > 1 {
+			return false, nil, false
+		}
+		for offset := range offsets {
 			edit.Start += offset
 			edit.End += offset
+			moved = moved || offset != 0
 		}
 		shifted[i] = edit
 	}
-	return offset, ResolveEdges(shifted, len(current)), true
+	return moved, ResolveEdges(shifted, len(current)), true
 }
 
 func uniqueEvidence(lines []string, line int) (string, bool) {

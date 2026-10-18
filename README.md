@@ -352,14 +352,21 @@ REM
 - A refusal lists every problem in the patch at once: every malformed line, and for every section all its failed `~`
   checks, `SUB` texts and `-` rows together with its unseen lines (or its stale tag), each kind run on the hunks the
   kinds before it passed. One corrected resend is then enough.
-- When the only problems are unseen lines (see below), the refusal ends with
+- Every refusal of a patch that parses ends with a token for it. When the only problems are unseen lines (see below),
+  the token applies the patch unchanged: the refusal ends with
   `To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY t0k3n5`, or after an
-  agent's first such refusal with just `REAPPLY t0k3n5`. That input applies the stored patch through the full normal
-  validation, as an unchanged resend would; the patch's own tags still guard against files that changed meanwhile. A
-  token belongs to its session, works once, and only the latest 64 are kept. Any other refusal gets no token, since the
-  patch itself must change. `grep` with `replace` hands out the same kind of token for the patch it previewed. Likewise
-  only an agent's first unseen-line refusal explains what can cause one and how to proceed; later ones keep the rows and
-  a one-line `Meant these? Resend unchanged; otherwise fix the numbers.`
+  agent's first such refusal with just `REAPPLY t0k3n5`. Unseen lines the refusal could not display whole (lines cut
+  past its width, more than 40 lines) must be read first, and it says so; a token sent before that is refused again,
+  with a new token. Any other refusal ends with `To send only the corrected sections, call edit with input: REAPPLY
+  t0k3n5 on the first line, then those [PATH#TAG] sections; ...`, later just `REAPPLY t0k3n5, then the corrected
+  sections`: sections under the `REAPPLY` line replace every stored section for their path, in its place, sections for
+  other paths join the patch, and the patch stays all or nothing. A line with color codes can never be read whole, so
+  an unseen one gets that kind of token too. Either way the stored patch goes through the full normal validation, as a
+  resend would; the patch's own tags still guard against files that changed meanwhile. A token belongs to its session,
+  works once, and only the latest 64 are kept; corrections that do not parse are refused before the token is spent.
+  `grep` with `replace` hands out the same kind of token for the patch it previewed. Likewise only an agent's first
+  unseen-line refusal explains what can cause one and how to proceed; later ones keep the rows and a one-line
+  `Meant these? Resend unchanged; otherwise fix the numbers.`
 - `SUB` replaces only text the patch quotes, so it is exempt from the seen-line rule and works on cut long lines.
   Several `SUB`s on one line apply to the original line and must not overlap. Its result counts as known content only
   when the whole original line was known. An old text that is not on line `N` but on line `N`±1 or ±2 applies there,
@@ -389,6 +396,12 @@ REM
   under 12 characters never count. A new row that is even more like the line it replaced, as in an ordinary rewrite,
   raises nothing. The warning ends with the hunks that undo the slip under the new tag: for a late start, `CUT` of the
   kept line plus a `PUT >N:` that puts back the line the range overwrote; for an early end, `CUT` of the kept line.
+- A replace that drops one edge line of its range still applies, with a warning, when the range likely ran one line too
+  long: its first or last old line, at least 12 characters, is like no new row of the patch, while every other line of
+  the range that is not blank is like one (as when `PUT 117.=119:` rewrites two lines and takes the call on line 119
+  with them). The warning names the line and ends with the hunk that puts it back under the new tag, `PUT >N:` after the
+  new rows or `PUT <N:` before them. A rewrite of the whole range, a deletion, or a line the patch moves to another hunk
+  raises nothing; a deliberate removal of an edge line beside lines that stay alike does, so the warning says "if".
 - An edit that leaves a file's brackets unbalanced, when they balanced before, still applies, with a warning that says
   which brackets are now extra and names each hunk whose new rows changed the count (`Brackets no longer balance: ...`).
   Brackets are counted outside strings, comments and regex literals, with `(`, `[` and `{` each kept apart; a file that
@@ -765,14 +778,16 @@ line shown, and `path#TAG` reads record it like an edit response.
   database. A client that tells neither, or a Claude Code session whose hooks an older setup registered, never gets
   markers, and its edits work as before.
 - **Stale tags.** When the file no longer matches the tag, the edit is rebased only if every anchored line maps to an
-  unchanged current line through one uniform offset with a neighbor that moved with it; rebased edits carry a warning.
-  Otherwise the edit is rejected with the current tag and the current content around the requested lines. A tag never
-  issued for the file tells nib nothing about what the agent saw, so it is rejected, naming the file it was issued for,
-  unless every hunk is safe without one: `SUB` and matching `-` rows check the text they replace against the current
-  file, and `PUT >$:` only appends (but not under a tag issued for another file, a likely mix-up). Such a section
-  applies with a warning never to invent tags, and lines the agent never read stay unseen. A `[PATH]` header without a
-  tag appends with no tag at all. A 4-hex tag can collide: if a retained version with that tag has different text than
-  the current file, the file is treated as changed.
+  unchanged current line with a neighbor that moved with it, and each hunk's lines moved by one offset of their own
+  (lines inserted inside a replaced range refuse it); rebased edits carry a warning. Otherwise the edit is rejected
+  with the current tag and the current content around the requested lines. So after an edit, an agent may keep using
+  an older output's numbers with that output's tag, as long as nib still holds that version (the latest 4 per file).
+  A tag never issued for the file tells nib nothing about what the agent saw, so it is rejected, naming the file it was
+  issued for, unless every hunk is safe without one: `SUB` and matching `-` rows check the text they replace against
+  the current file, and `PUT >$:` only appends (but not under a tag issued for another file, a likely mix-up). Such a
+  section applies with a warning never to invent tags, and lines the agent never read stay unseen. A `[PATH]` header
+  without a tag appends with no tag at all. A 4-hex tag can collide: if a retained version with that tag has different
+  text than the current file, the file is treated as changed.
 - **Not ported from oh-my-pi:** cut/paste registers, the syntax-tree check on rebases, the repeated no-op guard, and
   tree-sitter read summaries (nib's outline is indentation-based instead).
 

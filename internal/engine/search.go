@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/11ways/nib/internal/js"
+	"github.com/11ways/nib/internal/patch"
 	"github.com/11ways/nib/internal/snapshots"
 )
 
@@ -1011,7 +1012,11 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 			if changes == 1 {
 				s = ""
 			}
-			token := e.remember(ctx.Session, strings.Join(patches, "\n"), &replacePreview{shown: shownByPreview, left: max(0, changing-changes)})
+			sections, err := patch.Parse(strings.Join(patches, "\n"))
+			if err != nil {
+				return Result{}, err
+			}
+			token := e.remember(ctx.Session, sections, &replacePreview{shown: shownByPreview, left: max(0, changing-changes)})
 			notes = append(notes, fmt.Sprintf("To apply the %d replaced line%s shown (>N| rows), call edit with input: REAPPLY %s", changes, s, token))
 		} else if replacing {
 			notes = append(notes, "[no replacement to apply: the shown matches stay the same or are in files nib cannot edit]")

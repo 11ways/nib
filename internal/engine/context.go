@@ -98,10 +98,12 @@ type Outside struct{ message string }
 
 func (e *Outside) Error() string { return e.message }
 
-// Refusal is a refused edit; Retry means it failed only on lines it has now displayed, so the same patch succeeds when sent again.
+// Refusal is a refused edit; Retry means the same patch can succeed when sent again, at once or, with Unread, once the agent has read lines
+// it names but could not display.
 type Refusal struct {
 	message string
 	Retry   bool
+	Unread  bool
 }
 
 func (e *Refusal) Error() string { return e.message }

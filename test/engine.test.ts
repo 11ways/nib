@@ -448,6 +448,22 @@ describe("edit", () => {
     await expect(d.edit(u.tag, [{ start: 1, end: 3, content: "x", operation: "replace" }])).rejects.toThrow("could not be rebased safely")
   })
 
+  test("after its own edit, an agent may keep its earlier read's numbers with that read's tag, each hunk rebased by its own shift", async () => {
+    const f = await fixture(numbered(20))
+    const read = await f.read()
+    await f.patch(`[file.txt#${read.tag}]\nPUT >5:\n+new a\n+new b`)
+    const result = await f.patch(`[file.txt#${read.tag}]\nPUT 3.=3:\n+THREE\nSUB 15: line\n+LINE\nPUT >20:\n+end`)
+    const lines = (await readFile(f.filePath, "utf8")).split("\n")
+    expect([lines[2], lines[5], lines[6], lines[16], lines[22]]).toEqual(["THREE", "new a", "new b", "LINE 15", "end"])
+    expect(result.text).toContain("Recovered by remapping stale line numbers")
+    // A range an edit in between split would take in lines the agent never meant, so it is refused instead.
+    const g = await fixture(numbered(20))
+    const before = await g.read()
+    await g.patch(`[file.txt#${before.tag}]\nPUT >5:\n+new`)
+    await expect(g.patch(`[file.txt#${before.tag}]\nPUT 4.=7:\n+x`)).rejects.toThrow("could not be rebased safely")
+    expect(await readFile(g.filePath, "utf8")).toBe(numbered(20).replace("line 5\n", "line 5\nnew\n"))
+  })
+
   test("unknown tags, tags of other files and missing lines are rejected", async () => {
     const f = await fixture()
     await writeFile(path.join(f.directory, "other.txt"), "other\n")
@@ -543,7 +559,7 @@ describe("edit", () => {
     const s = await g.read(":1-1")
     const wide = () => g.edit(s.tag, [{ start: 2, end: 50, content: "x", operation: "replace" }])
     await expect(wide()).rejects.toThrow("Preview of the first 40 unseen line(s)")
-    await expect(wide()).rejects.toThrow("Read the remaining lines in full")
+    await expect(wide()).rejects.toThrow("Read those lines in full")
   })
 
   test("shifted lines below an edit are accepted only when the payload carries their current content", async () => {
@@ -1156,7 +1172,9 @@ describe("block edits", () => {
 
 const numbered = (count: number, prefix = "line") => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join("\n") + "\n"
 const refusal = (attempt: Promise<unknown>) => attempt.then(() => { throw new Error("expected a refusal") }, (error: Error) => error.message)
-const tokenOf = (message: string) => /REAPPLY ([a-z0-9]{6})$/.exec(message)?.[1]
+const tokenOf = (message: string) => /REAPPLY ([a-z0-9]{6})\b/.exec(message)?.[1]
+// A token for a patch that needs more than reads: it applies with corrected sections in place of the refused ones.
+const fixable = /REAPPLY [a-z0-9]{6}( on the first line, then those \[PATH#TAG\] sections|, then the corrected sections)/
 
 describe("refusals and reapply tokens", () => {
   const setup = async () => {
@@ -1176,7 +1194,7 @@ describe("refusals and reapply tokens", () => {
     expect(message).toStartWith(`[file.txt#${tag}]: Line 99 does not exist in file.txt (file has 20 lines)\n\n[file.txt#${tag}]: ~ check rows do not match, so these line numbers are off:\nline 2 does not start with "wrong"`)
     expect(message).toContain(`\n\n[file.txt#${tag}]: SUB refused:\nSUB 3: "nothere" does not occur on line 3`)
     expect(message).toContain("\n\nThis edit anchors to lines 15 of file.txt")
-    expect(tokenOf(message)).toBeUndefined()
+    expect(message).toMatch(fixable)
     expect(await readFile(f.filePath, "utf8")).toBe(numbered(20))
     await f.patch(`[file.txt#${tag}]\nPUT 2:\n~line 2\n+x\nSUB 3: line\n+LINE\nPUT 15:\n+z`)
     expect((await readFile(f.filePath, "utf8")).split("\n").slice(1, 3).concat((await readFile(f.filePath, "utf8")).split("\n")[14]!)).toEqual(["x", "LINE 3", "z"])
@@ -1244,7 +1262,7 @@ describe("refusals and reapply tokens", () => {
     expect(await readFile(g.filePath, "utf8")).toBe("one\nCHANGED\nthree\n")
   })
 
-  test("refusals for any other reason carry no token, even beside an unseen-line refusal", async () => {
+  test("refusals for any other reason carry a token that takes corrected sections, so only those are sent again", async () => {
     const f = await fixture(numbered(10))
     await writeFile(path.join(f.directory, "b.txt"), "b\n")
     const r = await f.read(":1-1")
@@ -1252,23 +1270,62 @@ describe("refusals and reapply tokens", () => {
     const wrong = other.tag === "0000" ? "0001" : "0000"
     const messages = [
       await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1.=1:\n+x\nCUT 1.=1`)),
-      await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1-2:\n+x`)),
       await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1.=1:\n~nope\n+x`)),
       await refusal(f.patch(`[file.txt#${r.tag}]\nSUB 1: nope\n+x`)),
       await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 5.=5:\n+x\n[b.txt#${wrong}]\nPUT 1.=1:\n+y`)),
     ]
-    for (const message of messages) expect(message).not.toContain("REAPPLY")
+    for (const message of messages) expect(message).toMatch(fixable)
     expect(messages[0]).toContain("Edits overlap")
-    expect(messages[2]).toContain("line 1 does not start with \"nope\"")
-    expect(messages[3]).toContain("SUB 1: \"nope\" does not occur on line 1")
-    expect(messages[4]).toStartWith("Nothing was written; 2 sections have problems.")
-    expect(messages[4]).toContain("This edit anchors to lines 5 of file.txt")
-    expect(messages[4]).toContain(`tag #${wrong} was not issued for this file`)
+    expect(messages[0]).toContain("To send only the corrected sections, call edit with input: REAPPLY ")
+    expect(messages[1]).toContain("line 1 does not start with \"nope\"")
+    expect(messages[1]).not.toContain("To send only")
+    expect(messages[2]).toContain("SUB 1: \"nope\" does not occur on line 1")
+    expect(messages[3]).toStartWith("Nothing was written; 2 sections have problems.")
+    expect(messages[3]).toContain("This edit anchors to lines 5 of file.txt")
+    expect(messages[3]).toContain(`tag #${wrong} was not issued for this file`)
+    // A patch that does not parse has nothing to keep.
+    expect(await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1-2:\n+x`))).not.toContain("REAPPLY")
+    // Only b.txt's section comes again; file.txt's, whose line 5 the refusal displayed, applies as first sent.
+    await f.patch(`REAPPLY ${tokenOf(messages[3]!)}\n[b.txt#${other.tag}]\nPUT 1.=1:\n+y`)
+    expect((await readFile(f.filePath, "utf8")).split("\n")[4]).toBe("x")
+    expect(await readFile(path.join(f.directory, "b.txt"), "utf8")).toBe("y\n")
     await writeFile(f.filePath, numbered(10).replace("line 1\n", "LINE ONE\n"))
     const stale = await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1.=1:\n+x`))
     expect(stale).toContain("is stale")
-    expect(stale).not.toContain("REAPPLY")
-    expect(await readFile(path.join(f.directory, "b.txt"), "utf8")).toBe("b\n")
+    expect(stale).toMatch(fixable)
+  })
+
+  test("corrected sections replace every stored section of their path, sections for new paths join, and a bad one leaves the token usable", async () => {
+    const f = await fixture(numbered(10))
+    await writeFile(path.join(f.directory, "b.txt"), "b\n")
+    const r = await f.read()
+    const b = await f.read("", { file: path.join(f.directory, "b.txt") })
+    const wrong = b.tag === "0000" ? "0001" : "0000"
+    const token = tokenOf(await refusal(f.patch(`[b.txt#${wrong}]\nPUT 1.=1:\n+y\n[file.txt#${r.tag}]\nPUT 2.=2:\n+TWO`)))!
+    // A correction that does not parse is refused before the token is spent.
+    expect(await refusal(f.patch(`REAPPLY ${token}\n[b.txt#${b.tag}]\nPUT 1-1:\n+y`))).toContain("Patch line 3:")
+    await f.patch(`REAPPLY ${token}\n[./b.txt#${b.tag}]\nPUT 1.=1:\n+bee\n*** Add File: c.txt\n+sea`)
+    expect(await readFile(path.join(f.directory, "b.txt"), "utf8")).toBe("bee\n")
+    expect((await readFile(f.filePath, "utf8")).split("\n")[1]).toBe("TWO")
+    expect(await readFile(path.join(f.directory, "c.txt"), "utf8")).toBe("sea\n")
+    expect(await refusal(f.patch(`REAPPLY ${token}`))).toContain("unknown, already used or expired")
+  })
+
+  test("an unseen line too long to display gets a token that applies the patch unchanged once the line was read whole", async () => {
+    const long = "word ".repeat(500) + "w"
+    const f = await fixture(`${long}\nshort\n`)
+    const r = await f.read(":2")
+    const message = await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1.=1:\n+x`))
+    expect(message).toContain("Read those lines in full (with maxLineLength for cut ones), or change a cut line in place with SUB N: OLD.")
+    expect(message).toEndWith(`To apply this patch unchanged once you have read those lines, call edit with input: REAPPLY ${tokenOf(message)}`)
+    // Sent before the read, it is refused again, with a new token, and nothing is written.
+    const again = await refusal(f.patch(`REAPPLY ${tokenOf(message)}`))
+    expect(again).toContain("Preview of the first 1 unseen line(s)")
+    expect(again).toMatch(/\n\nREAPPLY [a-z0-9]{6}$/)
+    expect(await readFile(f.filePath, "utf8")).toBe(`${long}\nshort\n`)
+    await f.read(":1", { maxLineLength: 40_000 })
+    await f.patch(`REAPPLY ${tokenOf(again)}`)
+    expect(await readFile(f.filePath, "utf8")).toBe("x\nshort\n")
   })
 
   test("an evicted token is refused with a hint to send the patch again", async () => {
@@ -1371,13 +1428,24 @@ describe("row maps and ~ checks", () => {
     expect(await lineOf(f, "brief.md", 6)).toBe("- items 6 and 7")
   })
 
+  test("rows an edit wrote count as seen however its response showed them, elided from a long run or cut past the echo's width", async () => {
+    const f = await fixture(numbered(5))
+    const r = await f.read()
+    const rows = Array.from({ length: 12 }, (_, index) => index === 3 ? `+new 4 ${"word ".repeat(80)}end` : `+new ${index + 1}`)
+    const edited = await f.patch(`[file.txt#${r.tag}]\nPUT >2:\n${rows.join("\n")}`)
+    expect(edited.text).not.toContain("\n9:new 7\n")
+    expect(edited.text).not.toContain("word end")
+    await f.patch(`[file.txt#${edited.tag}]\nPUT 6.=6:\n+FOUR\nPUT 9.=9:\n+SEVEN`)
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(5, 9)).toEqual(["FOUR", "new 5", "new 6", "SEVEN"])
+  })
+
   test("a ~ check on a written line still verifies its number; a wrong one shows the real rows", async () => {
     const f = await fixture()
     for (const name of ["b.md", "c.md"]) await f.engine.write(f.ctx, { path: name, content: brief })
     const wrong = await refusal(f.patch(`[b.md#${tag}]\nPUT 21.=21:\n~2. step\n+x`))
     expect(wrong).toContain(`[b.md#${tag}]: ~ check rows do not match, so these line numbers are off:\nline 21 does not start with "2. step"`)
     expect(wrong).toContain(" 20:\n*21:1. step\n 22:2. step")
-    expect(wrong).not.toContain("REAPPLY")
+    expect(wrong).toMatch(fixable)
     expect(await lineOf(f, "b.md", 21)).toBe("1. step")
     // An empty check means a blank line.
     await f.patch(`[c.md#${tag}]\nCUT 18.=18\n~`)
@@ -1437,7 +1505,7 @@ describe("SUB", () => {
     const missing = await refusal(f.patch(`[file.txt#${r.tag}]\nSUB 1: zzz\n+x`))
     expect(missing).toContain("SUB 1: \"zzz\" does not occur on line 1")
     expect(missing).toContain("*1:aaa b")
-    expect(missing).not.toContain("REAPPLY")
+    expect(missing).toMatch(fixable)
     expect(await refusal(f.patch(`[file.txt#${r.tag}]\nSUB 1: aa\n+x`))).toContain("occurs more than once on line 1")
     expect(await refusal(f.patch(`[file.txt#${r.tag}]\nSUB 1: aaa\n+x\nSUB 1: a b\n+y`))).toContain("two old texts overlap")
     expect(await refusal(f.patch(`[file.txt#${r.tag}]\nSUB 1: b\n+x\nPUT 1.=1:\n+y`))).toContain("Edits overlap")
@@ -1902,7 +1970,7 @@ describe("color codes", () => {
     expect(subbed.text).toContain("\n[line 2, ansi]|ERROR disk ok\n")
     const replaced = await refusal(f.patch(`[file.txt#${subbed.tag}]\nPUT 2.=2:\n+x`))
     expect(replaced).toContain("Preview of the first 1 unseen line(s)")
-    expect(replaced).not.toContain("REAPPLY")
+    expect(replaced).toMatch(fixable)
     expect((await f.engine.grep(f.ctx, { pattern: "ERROR" })).text).toContain("*[line 2, ansi]|ERROR disk ok")
   })
 })
@@ -2477,6 +2545,37 @@ describe("ranges one line off", () => {
     const s = await g.read()
     expect((await g.patch(`[file.txt#${s.tag}]\nPUT 2.=2:\n+repeated line of some length\n+an added line below it`)).text).not.toContain("Warnings:")
   })
+
+  const code = ["function save(record) {", "  const row = toRow(record)", "  validate(row, schema)", "  store.insert(row)", "  audit.log(row.id)", "}"].join("\n") + "\n"
+
+  test("a range one line too long, whose dropped edge line no new row resembles while they keep the others, warns with the hunk that puts it back", async () => {
+    const f = await fixture(code)
+    const r = await f.read()
+    // Meant 2.=3, but 2.=4 also takes the insert call.
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 2.=4:\n+  const row = toRow(record, now())\n+  validate(row, schemas)`)
+    const fix = "PUT >3:\n+  store.insert(row)"
+    expect(result.text).toEndWith(`Warnings:\nThe edit of lines 2-4 dropped line 4, "store.insert(row)": no new row resembles it, while they keep the range's other lines. If the range was meant to end at line 3, this hunk, with the new tag, puts it back:\n${fix}`)
+    await f.patch(`[file.txt#${result.tag}]\n${fix}`)
+    expect(await readFile(f.filePath, "utf8")).toBe(code.replace("toRow(record)", "toRow(record, now())").replace("schema)", "schemas)"))
+    // The mirror slip: a range that starts one line early.
+    const g = await fixture(code)
+    const s = await g.read()
+    const early = await g.patch(`[file.txt#${s.tag}]\nPUT 2.=4:\n+  validate(row, schemas)\n+  store.insert(row, tx)`)
+    expect(early.text).toEndWith(`Warnings:\nThe edit of lines 2-4 dropped line 2, "const row = toRow(record)": no new row resembles it, while they keep the range's other lines. If the range was meant to start at line 3, this hunk, with the new tag, puts it back:\nPUT <2:\n+  const row = toRow(record)`)
+  })
+
+  test("a rewrite of a whole range, a deletion, or a line moved to another hunk gets no dropped-line warning", async () => {
+    const quiet = [
+      "PUT 2.=4:\n+  db.save(toRow(record))",
+      "CUT 2.=4",
+      "PUT 2.=4:\n+  const row = toRow(record, now())\n+  validate(row, schemas)\nPUT >5:\n+  store.insert(row)",
+    ]
+    for (const body of quiet) {
+      const f = await fixture(code)
+      const result = await f.patch(`[file.txt#${(await f.read()).tag}]\n${body}`)
+      expect(result.text).not.toContain("Warnings:")
+    }
+  })
 })
 
 describe("bracket balance after an edit", () => {
@@ -2597,7 +2696,7 @@ describe("forgiving the forms models borrow", () => {
     expect(wrong).toContain('line 20 is not "l2O"')
     expect(wrong).toContain("*20:l20")
     expect(wrong).toContain("nib needs no - rows")
-    expect(wrong).not.toContain("REAPPLY")
+    expect(wrong).toMatch(fixable)
     expect(await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 20.=21:\n-l20\n+x`))).toContain("the - rows under lines 20-21 quote 1 line, but the hunk replaces 2")
     expect(await readFile(f.filePath, "utf8")).toBe(thirty)
   })

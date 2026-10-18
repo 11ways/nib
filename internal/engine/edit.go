@@ -74,7 +74,15 @@ func unseenError(store *snapshots.Store, session string, t *target, current snap
 	if long {
 		shown := unseen[:min(len(unseen), revealLines)]
 		f := contextRows(current.Lines, shown, 0, revealColumns)
-		return &Refusal{message: fmt.Sprintf("%s Preview of the first %d unseen line(s):\n%s\nRead the remaining lines in full before re-issuing the edit; change a cut or ansi line in place with SUB N: OLD.", header, len(shown), strings.Join(f.rows, "\n"))}
+		// Color codes keep a line from ever showing whole, so only a SUB, never a read, can make such a patch apply.
+		ansi := slices.ContainsFunc(unseen, func(line int) bool {
+			return line-1 < len(current.Lines) && visible(current.Lines[line-1]) != current.Lines[line-1]
+		})
+		next := "Read those lines in full (with maxLineLength for cut ones), or change a cut line in place with SUB N: OLD."
+		if ansi {
+			next = "Change a cut or ansi line in place with SUB N: OLD; color codes keep an ansi line from ever showing in full."
+		}
+		return &Refusal{message: fmt.Sprintf("%s Preview of the first %d unseen line(s):\n%s\n%s", header, len(shown), strings.Join(f.rows, "\n"), next), Retry: !ansi, Unread: true}
 	}
 	f := contextRows(current.Lines, unseen, revealContext, revealColumns)
 	store.Record(session, t.canonical, current, nonNil(f.shown), nil)
@@ -630,6 +638,60 @@ func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string
 		}
 		if below, ok := kept(at + length); ok && alike(below, last) >= alikeThreshold && alike(below, last) > alike(lineContent(source.lines[edit.End-1]), last) {
 			warnings = append(warnings, fmt.Sprintf("Lines %d and %d now nearly match: line %d is an edit's last new line and line %d was kept just below it. If the edit was meant to replace line %d, its range ended one line early; this hunk, with the new tag, deletes it:\nCUT %d", at+length, at+length+1, at+length, at+length+1, at+length+1, at+length+1))
+		}
+	}
+	return warnings
+}
+
+// swallowed warns about a replaced range one line too long: its first or last old line, long enough to judge, lives on in no new row of the
+// patch while the range's other lines do, so the range likely took in a line it never meant to change. Each warning carries the hunk that
+// puts the line back.
+func swallowed(source *text, edits []snapshots.LineEdit, result applied) []string {
+	var rows []string
+	for _, edit := range edits {
+		rows = append(rows, edit.Content...)
+	}
+	resembled := func(line string) bool {
+		return slices.ContainsFunc(rows, func(row string) bool { return js.Trim(row) == js.Trim(line) || alike(row, line) >= alikeThreshold })
+	}
+	var warnings []string
+	for index, edit := range edits {
+		if edit.Operation != snapshots.Replace || len(edit.Content) == 0 || edit.Quoted || edit.Opaque || edit.End-edit.Start+1 <= len(edit.Content) {
+			continue
+		}
+		var old []string
+		for line := edit.Start; line <= edit.End; line++ {
+			old = append(old, lineContent(source.lines[line-1]))
+		}
+		lost := func(i int) bool { return js.Len(js.Trim(old[i])) >= alikeMinChars && !resembled(old[i]) }
+		// The other lines live on when every one that is not blank resembles a new row, and there is at least one.
+		live := func(others []string) bool {
+			count := 0
+			for _, line := range others {
+				if js.Trim(line) == "" {
+					continue
+				}
+				if !resembled(line) {
+					return false
+				}
+				count++
+			}
+			return count > 0
+		}
+		at, length := result.runs[index].at, result.runs[index].length
+		short := func(line string) string {
+			line = js.Trim(line)
+			if js.Len(line) > 60 {
+				line = js.Slice(line, 0, 60) + "..."
+			}
+			return js.Quote(line)
+		}
+		last := len(old) - 1
+		switch {
+		case lost(last) && live(old[:last]):
+			warnings = append(warnings, fmt.Sprintf("The edit of lines %d-%d dropped line %d, %s: no new row resembles it, while they keep the range's other lines. If the range was meant to end at line %d, this hunk, with the new tag, puts it back:\nPUT >%d:\n+%s", edit.Start, edit.End, edit.End, short(old[last]), edit.End-1, at+length, old[last]))
+		case lost(0) && live(old[1:]):
+			warnings = append(warnings, fmt.Sprintf("The edit of lines %d-%d dropped line %d, %s: no new row resembles it, while they keep the range's other lines. If the range was meant to start at line %d, this hunk, with the new tag, puts it back:\nPUT <%d:\n+%s", edit.Start, edit.End, edit.Start, short(old[0]), edit.Start+1, at+1, old[0]))
 		}
 	}
 	return warnings
@@ -1397,7 +1459,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		if err != nil {
 			return nil, err
 		}
-		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, warnings: slices.Concat(warnings, offByOne(source, edits, result), unbalanced(h.target.canonical, source, edits, result), jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)))}, nil
+		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, warnings: slices.Concat(warnings, offByOne(source, edits, result), swallowed(source, edits, result), unbalanced(h.target.canonical, source, edits, result), jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)))}, nil
 	}
 	// A tagless section only appends, which depends on nothing but where the file ends.
 	if r.tag == nil {
@@ -1570,14 +1632,14 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		return nil, together(problems)
 	}
 	// Like oh-my-pi, edits without line anchors only depend on where the file ends, so any tag drift is tolerable.
-	var offset int
+	var moved bool
 	var remapped []snapshots.LineEdit
 	ok := false
 	switch {
 	case len(anchors) == 0 && r.move == "" && r.copy == "":
 		remapped, ok = snapshots.ResolveEdges(requested, len(live.Lines)), true
 	case len(anchors) > 0 && len(snapshots.Unverified(basis, requested)) == 0:
-		offset, remapped, ok = snapshots.RemapEdits(basis, live.Lines, requested)
+		moved, remapped, ok = snapshots.RemapEdits(basis, live.Lines, requested)
 	}
 	if !ok {
 		return nil, mismatchError(store, ctx.Session, t, live, tagValue, true, anchors, false)
@@ -1586,7 +1648,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 	switch {
 	case len(anchors) == 0:
 		note = tailDrift
-	case offset != 0:
+	case moved:
 		note = recoveryRemapped
 	case len(versions) > 0 && basis == versions[0]:
 		note = recoveryExternal
@@ -1921,6 +1983,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	}}
 }
 
+// reapplyPattern is the first line of a REAPPLY input; corrected sections may follow it.
 var reapplyPattern = regexp.MustCompile(`^REAPPLY` + jsSpace + `+(\S+)$`)
 
 // Engine holds the snapshot store, the stored patches of REAPPLY tokens and the trash what nib deletes goes to.
@@ -1933,8 +1996,8 @@ type Engine struct {
 }
 
 type storedPatch struct {
-	input   string
-	preview *replacePreview
+	sections []*patch.Section
+	preview  *replacePreview
 }
 
 // New makes an engine with an empty store.
@@ -1942,11 +2005,30 @@ func New() *Engine {
 	return &Engine{Store: snapshots.NewStore(), Trash: trash.New(), tokens: map[string]storedPatch{}}
 }
 
-// Patch applies a patch; REAPPLY TOKEN as the whole input applies the patch stored under that token, once.
+// Patch applies a patch. REAPPLY TOKEN as its first line applies the patch stored under that token, once; sections below it replace the
+// stored sections for their paths, and those for other paths join it.
 func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
-	reapply := reapplyPattern.FindStringSubmatch(js.Trim(input))
+	lines := strings.Split(input, "\n")
+	first := slices.IndexFunc(lines, func(line string) bool { return js.Trim(line) != "" })
+	var reapply []string
+	if first >= 0 {
+		reapply = reapplyPattern.FindStringSubmatch(js.Trim(lines[first]))
+	}
 	if reapply == nil {
-		return e.apply(ctx, input, nil)
+		sections, err := patch.Parse(input)
+		if err != nil {
+			return Result{}, err
+		}
+		return e.apply(ctx, sections, nil)
+	}
+	// The REAPPLY line stays as a blank one, so parse errors name the lines of the input as sent.
+	var fixes []*patch.Section
+	if rest := strings.Join(lines[first+1:], "\n"); js.Trim(rest) != "" {
+		parsed, err := patch.Parse(strings.Repeat("\n", first+1) + rest)
+		if err != nil {
+			return Result{}, err
+		}
+		fixes = parsed
 	}
 	key := ctx.Session + "\x00" + reapply[1]
 	e.mu.Lock()
@@ -1959,7 +2041,11 @@ func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
 	if !ok {
 		return Result{}, fmt.Errorf("Reapply token %s is unknown, already used or expired; send the full patch again", reapply[1])
 	}
-	result, err := e.apply(ctx, stored.input, stored.preview)
+	sections, preview := stored.sections, stored.preview
+	if len(fixes) > 0 {
+		sections, preview = corrected(ctx, stored, fixes)
+	}
+	result, err := e.apply(ctx, sections, preview)
 	var paused *Paused
 	if errors.As(err, &paused) {
 		// The call is sent again once the client answers, and must find its token still there.
@@ -1974,8 +2060,8 @@ func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
 	}
 	// Said here too, since after applying a token a model takes the job as done.
 	left := 0
-	if stored.preview != nil {
-		left = stored.preview.left
+	if preview != nil {
+		left = preview.left
 	}
 	if left == 0 {
 		return result, nil
@@ -1988,17 +2074,68 @@ func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
 	return result, nil
 }
 
+// corrected is a stored patch with fixes in place of its sections for the same paths, in their place, and the other fixes after them; a
+// grep replace's preview no longer vouches for a path whose sections were replaced.
+func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*patch.Section, *replacePreview) {
+	paths := func(section *patch.Section) []string {
+		resolved := ctx.resolve(section.Path)
+		if real, err := filepath.EvalSymlinks(resolved); err == nil && real != resolved {
+			return []string{resolved, real}
+		}
+		return []string{resolved}
+	}
+	byPath := map[string][]*patch.Section{}
+	var order []string
+	for _, fix := range fixes {
+		key := paths(fix)[0]
+		if _, ok := byPath[key]; !ok {
+			order = append(order, key)
+		}
+		byPath[key] = append(byPath[key], fix)
+	}
+	used := map[string]bool{}
+	var sections []*patch.Section
+	replaced := map[string]bool{}
+	for _, section := range stored.sections {
+		keys := paths(section)
+		key := keys[0]
+		if _, ok := byPath[key]; !ok {
+			sections = append(sections, section)
+			continue
+		}
+		for _, k := range keys {
+			replaced[k] = true
+		}
+		if !used[key] {
+			sections = append(sections, byPath[key]...)
+			used[key] = true
+		}
+	}
+	for _, key := range order {
+		if !used[key] {
+			sections = append(sections, byPath[key]...)
+		}
+	}
+	preview := stored.preview
+	if preview != nil && len(replaced) > 0 {
+		shown := map[string]map[int]bool{}
+		for path, lines := range preview.shown {
+			if !replaced[path] {
+				shown[path] = lines
+			}
+		}
+		preview = &replacePreview{shown: shown, left: preview.left}
+	}
+	return sections, preview
+}
+
 type indexedFailure struct {
 	index int
 	err   error
 }
 
 // apply validates every section before writing any, and refuses with all of their problems at once.
-func (e *Engine) apply(ctx *Context, input string, p *replacePreview) (Result, error) {
-	sections, err := patch.Parse(input)
-	if err != nil {
-		return Result{}, err
-	}
+func (e *Engine) apply(ctx *Context, sections []*patch.Section, p *replacePreview) (Result, error) {
 	var failures []indexedFailure
 	order := map[*request]int{}
 	var requests []*request
@@ -2038,7 +2175,7 @@ func (e *Engine) apply(ctx *Context, input string, p *replacePreview) (Result, e
 			items = append(items, item)
 		}
 		if len(failures) > 0 {
-			return Result{}, e.refusal(ctx.Session, input, failures, p)
+			return Result{}, e.refusal(ctx.Session, sections, failures, p)
 		}
 		var shown map[string]map[int]bool
 		if p != nil {
@@ -2052,35 +2189,42 @@ func (e *Engine) apply(ctx *Context, input string, p *replacePreview) (Result, e
 	}, failed)
 }
 
-// refusal is one error for every refused section, in patch order; when each refusal only displayed unseen lines, a token lets the agent apply
-// the patch unchanged.
-func (e *Engine) refusal(session, input string, failures []indexedFailure, p *replacePreview) error {
+// refusal is one error for every refused section, in patch order, ending in a token for the patch: when each refusal only needs lines read,
+// the token applies it unchanged, and otherwise with corrected sections in place of the refused ones.
+func (e *Engine) refusal(session string, sections []*patch.Section, failures []indexedFailure, p *replacePreview) error {
 	slices.SortStableFunc(failures, func(a, b indexedFailure) int { return a.index - b.index })
 	var parts []string
 	if len(failures) > 1 {
 		parts = append(parts, fmt.Sprintf("Nothing was written; %d sections have problems.", len(failures)))
 	}
-	retry := true
+	retry, unread := true, false
 	for _, f := range failures {
 		parts = append(parts, f.err.Error())
 		var r *Refusal
 		if !errors.As(f.err, &r) || !r.Retry {
 			retry = false
+		} else if r.Unread {
+			unread = true
 		}
 	}
-	if retry {
-		token := e.remember(session, input, p)
-		if e.Store.Teach(session, "reapply") {
-			parts = append(parts, "To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY "+token)
-		} else {
-			parts = append(parts, "REAPPLY "+token)
-		}
+	token := e.remember(session, sections, p)
+	switch {
+	case retry && unread && e.Store.Teach(session, "reapply-read"):
+		parts = append(parts, "To apply this patch unchanged once you have read those lines, call edit with input: REAPPLY "+token)
+	case retry && !unread && e.Store.Teach(session, "reapply"):
+		parts = append(parts, "To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY "+token)
+	case retry:
+		parts = append(parts, "REAPPLY "+token)
+	case e.Store.Teach(session, "reapply-fix"):
+		parts = append(parts, "To send only the corrected sections, call edit with input: REAPPLY "+token+" on the first line, then those [PATH#TAG] sections; each replaces its file's section in this patch, and the rest applies as sent.")
+	default:
+		parts = append(parts, "REAPPLY "+token+", then the corrected sections")
 	}
 	return errors.New(strings.Join(parts, "\n\n"))
 }
 
 // remember stores a patch under a new single-use token for REAPPLY, dropping the oldest past the token limit.
-func (e *Engine) remember(session, input string, p *replacePreview) string {
+func (e *Engine) remember(session string, sections []*patch.Section, p *replacePreview) string {
 	token := make([]byte, 6)
 	for i := range token {
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(tokenAlphabet))))
@@ -2089,7 +2233,7 @@ func (e *Engine) remember(session, input string, p *replacePreview) string {
 	key := session + "\x00" + string(token)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.tokens[key] = storedPatch{input, p}
+	e.tokens[key] = storedPatch{sections, p}
 	e.order = append(e.order, key)
 	for len(e.tokens) > tokens && len(e.order) > 0 {
 		delete(e.tokens, e.order[0])
