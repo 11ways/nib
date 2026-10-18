@@ -3,9 +3,10 @@ package server
 // instructionLimit is where clients cut server instructions and tool descriptions.
 const instructionLimit = 2048
 
-// shellInstructions replace toolInstructions when nibash is offered: the shell is nib's too, so shell views anchor edits.
+// shellInstructions replace toolInstructions when nibash is offered: the shell is nib's too, so shell views anchor edits; %s is the shell's
+// own commands.
 const shellInstructions = `Hashline file tools and nibash, nib's shell; use them instead of the built-in Read, Grep, Glob, Edit, Write and Bash (built-in Read stays for PDFs and notebooks).
-read and grep print a [PATH#TAG] header (TAG: 4-hex snapshot of the whole file) and LINE:TEXT rows; so do cat, head, tail, grep, rg, sed -n and wc in nibash when their output comes to you. edit addresses those line numbers, so never repeat old text.
+read and grep print a [PATH#TAG] header (TAG: 4-hex snapshot of the whole file) and LINE:TEXT rows; so do %s in nibash when their output comes to you. edit addresses those line numbers, so never repeat old text.
 Save calls and tokens: grep for a name instead of reading a whole file; read several files and ranges in one read; edit straight from grep rows; put every change, across files, into one edit call; after an edit or write, use the new tag and rows from its response instead of re-reading.`
 
 // namedHeader introduces the named directories at the end of the instructions.

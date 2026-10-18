@@ -20,6 +20,8 @@ type Source struct {
 	View *snapshots.View
 	// Size is the file's size when it was opened.
 	Size int64
+	// BOM is set when the file starts with a byte order mark, which View's first line leaves out but a program reading the file sees.
+	BOM  bool
 	path string
 }
 
@@ -67,6 +69,7 @@ func (e *Engine) OpenSource(ctx *Context, path string) (*Source, error) {
 		view := viewOf(decoded)
 		e.Store.Record(ctx.Session, t.canonical, view, []int{}, nil)
 		source.View = &view
+		source.BOM = decoded.bom != ""
 		return source, nil
 	})
 }
@@ -74,6 +77,16 @@ func (e *Engine) OpenSource(ctx *Context, path string) (*Source, error) {
 // Lines calls each with every line of the source, numbered from 1, until it returns false; a streamed file's lines are its raw text, invalid
 // UTF-8 replaced, without the line break.
 func (s *Source) Lines(each func(line int, text string) bool) error {
+	return s.lines(true, each)
+}
+
+// Raw is Lines with a streamed file's lines as the file holds them, invalid UTF-8 and a carriage return before the newline kept; a held
+// file's lines are valid UTF-8 already.
+func (s *Source) Raw(each func(line int, text string) bool) error {
+	return s.lines(false, each)
+}
+
+func (s *Source) lines(valid bool, each func(line int, text string) bool) error {
 	if s.View != nil {
 		// An empty file holds one empty line as a version, but no line to print.
 		if s.View.Key == "" {
@@ -100,8 +113,11 @@ func (s *Source) Lines(each func(line int, text string) bool) error {
 			}
 			return err
 		}
-		text = strings.TrimSuffix(strings.TrimSuffix(text, "\n"), "\r")
-		if !each(line, strings.ToValidUTF8(text, "�")) {
+		text = strings.TrimSuffix(text, "\n")
+		if valid {
+			text = strings.ToValidUTF8(strings.TrimSuffix(text, "\r"), "�")
+		}
+		if !each(line, text) {
 			return nil
 		}
 		if err != nil {

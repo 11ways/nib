@@ -128,9 +128,9 @@ func TestPipelinesOfNibCommandsKeepOriginAndReportFacts(t *testing.T) {
 
 func TestPlainOutputShapedLikeRowsIsSetApartFromAFilesRows(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
-	// cut makes grep's output a real program's: lines shaped like anchors, which must not read as more of a.txt's rows.
-	out := f.run("sed -n 4,5p a.txt; grep -n needle a.txt | cut -c1-20")
-	expect(t, out, fmt.Sprintf("[a.txt#%s]\n4:four needle\n5:five\n[plain program output follows, not anchors]\n2:two needle\n4:four needle", tagOf(t, out)))
+	// tr makes grep's output a real program's: lines shaped like anchors, which must not read as more of a.txt's rows.
+	out := f.run("sed -n 4,5p a.txt; grep -n needle a.txt | tr -d '\\r'")
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n4:four needle\n5:five\n[plain program output follows, not anchors]\n2:two needle\n4:four needle\n%s", tagOf(t, out), pipedText(pipe{"grep", "tr"})))
 	// Plain output not shaped like rows needs nothing between.
 	out = f.run("sed -n 5p a.txt; echo done")
 	expect(t, out, fmt.Sprintf("[a.txt#%s]\n5:five\ndone", tagOf(t, out)))
@@ -211,7 +211,7 @@ func TestStatusListsCallsInFlightAndJobsWithTheirOutput(t *testing.T) {
 func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	// Into a real program, into a file, inside $(...), with an option nibash lacks, or by path: plain bytes, as bash gives.
-	expect(t, f.run("cat a.txt | tr a-z A-Z | head -1"), "ONE")
+	expect(t, f.run("cat a.txt | tr a-z A-Z | head -1"), "ONE\n"+pipedText(pipe{"cat", "tr"}))
 	expect(t, f.run("echo $(head -1 a.txt)"), "one")
 	// A command that would be nib's own but for an option or pattern says why its output is plain, once and only when it printed.
 	system := "[head ran as the system program: nib's own does not implement this form of it, so its lines are plain output, not edit anchors]"
@@ -391,21 +391,30 @@ func TestSandboxConfinesShellAndPrograms(t *testing.T) {
 func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 	// Each command line, with the commands that run as nibash's own and how they read.
 	cases := map[string][]string{
-		"grep -n x a":           {"B:grep"},
-		"grep -P x a":           {"S:grep"},
-		"grep x a > out":        nil,
-		"grep x a | tr a b":     nil,
-		"grep x a | head -1":    {"B:grep", "L:head"},
-		"echo $(grep x a)":      nil,
-		"grep() { :; }; grep x": nil,
-		"/bin/grep x a":         nil,
-		"head -c 5 a":           {"S:head"},
-		"head -c 5 a | wc":      {"B:wc"},
-		"sed -n 1,5p a":         {"B:sed"},
-		"sed -i s/a/b/ a":       {"S:sed"},
-		"cat a |& head":         {"B:head"},
-		"cat a | head < b":      {"B:head"},
-		"tr a b < f | head -2":  {"B:head"},
+		"grep -n x a":             {"B:grep"},
+		"grep -P x a":             {"S:grep"},
+		"grep x a > out":          nil,
+		"grep x a | tr a b":       nil,
+		"grep x a | head -1":      {"B:grep", "L:head"},
+		"echo $(grep x a)":        nil,
+		"grep() { :; }; grep x":   nil,
+		"/bin/grep x a":           nil,
+		"head -c 5 a":             {"S:head"},
+		"head -c 5 a | wc":        {"B:wc"},
+		"sed -n 1,5p a":           {"B:sed"},
+		"sed -i s/a/b/ a":         {"S:sed"},
+		"cat a |& head":           {"B:head"},
+		"cat a | head < b":        {"B:head"},
+		"tr a b < f | head -2":    {"B:head"},
+		"cut -c1-5 a":             {"B:cut"},
+		"cut -f1 a":               {"S:cut"},
+		"sed -n 1p a | cut -c1-3": {"B:sed", "L:cut"},
+		"for f in a; do sed -n 1p $f; done | cut -c1": {"B+:sed", "W:cut"},
+		`sed -n "$r" a`:                {"B:sed"},
+		`sed -n "$r" a | cut -c1`:      {"B+:sed", "W:cut"},
+		"{ echo x; cat a; } | head -1": {"B+:cat", "W:head"},
+		"{ cat a; } > f | head -1":     {"B:head"},
+		"cat a | { head -1; }":         nil,
 	}
 	for command, want := range cases {
 		file, err := parse(command)

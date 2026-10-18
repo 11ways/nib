@@ -25,7 +25,7 @@ bun typecheck           # go vet and tsgo --noEmit
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files recursively with line counts, sizes and ages; filters by size and age, sorts by path, size or age. |
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
 | `write` | `path`, `content`, optional `tag` | Creates a file (with parents), or overwrites one when given its current tag, keeping a CRLF file's line endings and a BOM; answers with a row map of the new file. |
-| `nibash` | `command`, optional `description`, `expect` (offered with a decision model or a summarizer), `timeout`, `background` | A shell whose calls each start afresh in the project directory and run in parallel; its own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n` and `wc` print anchored rows, everything else runs as real programs, and output is shaped for the model. |
+| `nibash` | `command`, optional `description`, `expect` (offered with a decision model or a summarizer), `timeout`, `background` | A shell whose calls each start afresh in the project directory and run in parallel; its own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n`, `cut -c` and `wc` print anchored rows, everything else runs as real programs, and output is shaped for the model. |
 | `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists what nibash runs for the client, every agent of it: commands still in their call and jobs (running, or ended in the last 10 minutes), with how long each ran, its log and, with `tail`, its last output lines; as text and as structured content, which Claude Code's nib mod polls. `view` adds one more list for the mod's panes (`trash`, `seen`, `names`, `tokens`); `restore` puts one trashed path back through the trash code behind `trash restore`, refusing, as it does, a path where a file is now; `summaries` turns summaries of long output on or off for the session. |
 
 ### read
@@ -466,17 +466,34 @@ job, its whole output, from the start, in the job's log. Only the client cancell
 the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Standard input is empty, and
 `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and `TERM=dumb` keep programs from waiting on a terminal.
 
-- **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections) and `wc` run
-  as nib's own when their output goes to the model or into another of them and nibash implements their options. Before
-  running, nibash parses the command and decides this per command; a command written with a path (`/usr/bin/grep`),
-  shadowed by a function, given an option nibash lacks (`grep -P`, `head -c`, `sed -i`), redirected to a file, inside
-  `$(...)` or feeding a real program is the real program. One given an option or pattern nibash lacks whose output
-  reaches the model ends the call with a note once it printed, like
+- **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections), `cut -c`
+  (character selections) and `wc` run as nib's own when their output goes to the model or into another of them and
+  nibash implements their options. Before running, nibash parses the command and decides this per command; a command
+  written with a path (`/usr/bin/grep`), shadowed by a function, given an option nibash lacks (`grep -P`, `head -c`,
+  `sed -i`, `cut -f`), redirected to a file, inside `$(...)` or feeding a real program is the real program. Where only an
+  expansion gives what decides it (`sed -n "${r}p"`, `cut -c "$n"`), it is decided as the command runs, from the words
+  the expansion gave. One given an option or pattern nibash lacks whose output reaches the model ends the call with a
+  note once it printed, like
   `[grep ran as the system program: its pattern needs a feature nib's own cannot run exactly, so its lines are plain output, not edit anchors]`.
   Between nib commands, lines pass with their origin (file, line, version) over a channel, never as bytes, so no GNU
-  byte format is ever imitated where a program could read it. At the end, file lines print as `[PATH#TAG]` blocks of
-  `N:TEXT` rows, grep matches as `*N:`, and each row is checked against the file version the session holds, so an `N:`
-  row is always a real line and counts as displayed for `edit`.
+  byte format is ever imitated where a program could read it. A loop, block or subshell, or a command decided as it
+  runs, that writes into a nib command sends its nib commands' lines through the pipe in band: each line waits in the
+  call and the pipe carries a line naming it with a token only that call knows, so the rows keep their place among what
+  `echo` and real programs write there, and `for f in a b; do echo "== $f"; sed -n "$r" "$f"; done | cut -c1-200` still
+  prints anchored rows. At the end, file lines print as `[PATH#TAG]` blocks of `N:TEXT` rows, grep matches as `*N:`, and
+  each row is checked against the file version the session holds, so an `N:` row is always a real line and counts as
+  displayed for `edit`. The first time an agent pipes such rows into a real program whose output reaches it, the call
+  ends with one note, `[sed's rows went through awk as plain text, without line numbers; ...]`, naming `read`'s
+  `path:A-B,C-D` and `maxLineLength`.
+- **cut -c.** nib's `cut -c LIST` (`N`, `N-M`, `N-`, `-M`, comma lists, `--characters`) keeps a file's line it leaves
+  whole as its `N:` row, and prints one it shortens as a bracketed row naming what it kept,
+  `[line 40, chars 1-220 of 431]|...` (stretches joined by ` ... `), which is no anchor. It selects exactly what the
+  system `cut` would: before its first run in an environment it runs that `cut` once on a probe line, to learn whether it
+  counts bytes (the C locale, older coreutils) or characters with each invalid byte as one (coreutils 9 in a UTF-8
+  locale), and if the answer is neither, the system `cut` runs. A line where the selection would split a character, a
+  line with color codes, a BOM file's first line (the program reads the mark the row leaves out), program output and
+  grep's prefixed lines print the selected text as plain output, as the system `cut` would print it. Its other forms
+  (`-b`, `-f`, `-d`, `-s`, `--complement`, `--output-delimiter`) run the system `cut`.
 - **git, reshaped.** `git` is nib's own only where its output goes to the model, directly or through nib's own commands,
   and only for the forms it reads: `status` (short, porcelain v1, long), `add -v`/`-n`, `rm`, `ls-files`, and `diff`,
   `show` and `log` with a patch, `--stat`, `--name-only`, `--name-status` or `--numstat`. It runs the real git with the

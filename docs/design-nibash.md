@@ -116,8 +116,9 @@ model then judged to need every line and cut instead of summarizing.
 
 The tool description says plainly:
 - this is nibash, a bash interpreter (mvdan/sh, bash dialect);
-- `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` and `wc` are nib's own when their output goes to the
-  model or into another of them, and then print anchored rows;
+- `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n`, `cut -c` and `wc` are nib's own when their output goes
+  to the model or into another of them, and then print anchored rows (the list comes from `ownCommands`, which the
+  server instructions name too);
 - `git` is nib's own for the forms it reshapes (status, `add -v`, `rm`, `ls-files`, diffs and stats of `diff`, `show`
   and `log`) when its output goes to the model: it runs the real git and prints each folder of a path list once, and a
   diff's lines as rows of the files as they are now;
@@ -157,9 +158,13 @@ position) as **nib** or **real**.
 - No function of that name is defined in the command.
 - Every word whose options matter is literal. A word with an expansion (`$f`, `"$@"`) counts as an operand, as it does
   to the tool unless it expands to an option: then the system program runs, or, where the command is joined to another
-  nib command and cannot step aside, it reports why and fails.
-- Its standard output goes either to the terminal sink (no redirect, and the pipeline's last stage) or into a pipe whose
-  next stage is itself nib. A stage inside `$(...)`, with an output redirect, or before a real program is real.
+  nib command by a link and cannot step aside, it reports why and fails. Where the command line only fails because of an
+  expansion (sed's script in `sed -n "${r}p"`, cut's list), the decision waits for the command to run: it is nib's own if
+  the expanded words allow, else the system program runs with the usual note. Such a command never joins a link.
+- Its standard output goes to the terminal sink (no redirect, and the pipeline's last stage), into a pipe whose next
+  stage is itself nib, or, from inside a compound command (a loop, block, `if` or subshell) that is a pipeline's stage
+  before a nib command, into that pipe. A stage inside `$(...)`, with an output redirect, or before a real program is
+  real.
 
 Everything else is real. Because nib commands only ever write to the model or to another nib command, their byte form
 never reaches a file or a program, so GNU byte parity is never required.
@@ -182,14 +187,28 @@ channel and writes no bytes. The link is keyed by the pipe's `(dev, ino)`, which
   count for facts if asked (section 5.6), and ends.
 - **Cleanup:** the link is removed from the call's registry when both ends finish. The registry dies with the call, so a
   reused `(dev, ino)` from another call cannot meet stale entries.
-- **Input from a real program:** a nib reader whose input comes from one, a block like `{ cat a; echo x; }`, or a file
-  redirect reads bytes and makes plain records without origin. It treats a missing final newline as GNU does and
-  replaces invalid UTF-8 for display.
+- **Input from a real program:** a nib reader whose input comes from one, or a file redirect, reads bytes and makes plain
+  records without origin. It treats a missing final newline as GNU does and replaces invalid UTF-8 for display, keeping
+  the bytes as read for `cut`.
 - **Origin:** a nib command reading a file holds it as a snapshot through the engine (2 MiB text limit). A file it
   cannot hold (too big, binary, still changing) gives plain records.
 
+**Rows in band:** where the writer side of a nib reader's pipe is a compound command, or a command decided as it runs,
+several commands may write to the pipe: `echo`, real programs and nib commands alike. A link cannot keep their order, so
+the reader reads the pipe's bytes, and each nib writer there puts each record in the call's registry and writes one
+line naming it, `ESC nib-row:TOKEN:ID`, with a random token per call; the reader turns such a line back into the record
+and every other line into a plain record. No program can name a row, since only the call knows the token. A reader of
+rows in band cannot step aside for the system program, which would read those lines, so it fails as a linked one does.
+The classifier marks such writers with `+` after their reader mode and such readers with the mode `W`.
+
 **Filters keep origin:** `cat`, `head`, `tail`, `grep` (without `-c`, `-l`, `-o`), `rg` (likewise) and `sed -n` line
-selections. **Aggregates make plain values:** `wc`, `grep -c`, `grep -l`.
+selections; `cut -c` keeps it for a line it leaves whole, and for a file's line it shortens keeps the stretches it kept.
+**Aggregates make plain values:** `wc`, `grep -c`, `grep -l`.
+
+**Rows piped into a real program:** a command that would be nib's own and print rows, writing into a real program
+whose output reaches the model, is real, so the model gets plain text. The classifier lists such pairs, and the first
+call of an agent with one ends with a note naming the command and the program and pointing at `read`'s
+`path:A-B,C-D` and `maxLineLength`; the store's lesson key `rows-piped` keeps it to once per agent.
 
 ### 5.4 nib commands [m7]
 
@@ -202,9 +221,21 @@ The first wave is small, chosen by measured use and anchor value:
 | `grep`, `egrep`, `fgrep` | `-n -r -R -E -F -G -v -i -w -x -l -c -h -H -s -q -m N -A N -B N -C N --include= --exclude= --exclude-dir= --color=never` and their bundled forms; basic regex (`\|`, `\(`, `\)`, `\{`, `\}`, `\+`, `\?`) translated to ripgrep's syntax |
 | `rg` | `-n -i -S -F -w -l -c -v -g -t -T -A -B -C --hidden --no-ignore -u -m` |
 | `sed` | `-n` with `Np`, `N,Mp`, `N,$p`, and several joined with `;` or given as repeated `-e` |
+| `cut` | `-c LIST` and `--characters=LIST` (`N`, `N-M`, `N-`, `-M`, joined by commas), files and stdin |
 | `wc` | `-l`, `-c`, `-w`, files and stdin |
 
 Any other option makes the command real.
+
+**cut -c counts as the system cut does.** GNU cut counted bytes for `-c` until coreutils 9 learned characters in a
+UTF-8 locale, and distributions patch it differently, so nib asks: before a `cut -c` runs as nib's own, the `cut` on the
+command's `PATH` (in bwrap under the sandbox) cuts characters 2-6 of a probe line holding a two-byte character, an
+invalid byte, a truncated sequence and a four-byte character, in the command's environment, and the answer, bytes or
+characters with each invalid byte as one, is kept per program and `LC_ALL`/`LC_CTYPE`/`LANG`. Any other answer runs the
+system `cut`. A file's line it keeps whole stays its record; one it shortens keeps its origin with the stretches kept,
+as UTF-16 offsets, when the line is the file's own text without color codes and every stretch falls between
+characters, and prints as `[line N, chars A-B, C-D of L]|TEXT ... TEXT`, never an anchor. Otherwise the selected
+bytes go on as plain text: a split character, a line with color codes, the first line of a BOM file (the program reads
+the mark the view leaves out), a streamed file (cut reads its raw bytes) and grep's prefixed lines.
 
 **Searching:**
 - `grep -r` and `rg` search through `rg --json`. `grep -r` gets GNU's file selection: `--no-ignore --hidden`, `.git`

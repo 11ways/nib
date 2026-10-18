@@ -130,14 +130,39 @@ func stretches(content string, leading, spans []span, reach, columns int) *windo
 	return &windowed{label: charsLabel(labels, length), text: strings.Join(texts, " ... ")}
 }
 
-// charsLabel names the character stretches of a line a cut row shows, as "chars 1-40, 62-147 of 408".
+// charsLabel names the character stretches of a line a cut row shows, as "chars 1-40, 62-147 of 408", or "no chars of 408" for none.
 func charsLabel(stretches []string, length int) string {
+	if len(stretches) == 0 {
+		return fmt.Sprintf("no chars of %d", length)
+	}
 	return fmt.Sprintf("chars %s of %d", strings.Join(stretches, ", "), length)
 }
 
 // cutRow is the one form of a bracketed row that is never an anchor: the line's number spelled out, what was done to it, and the text shown.
 func cutRow(line int, label, text string) string {
 	return fmt.Sprintf("[line %d, %s]|%s", line, label, text)
+}
+
+// Stretch is a stretch of a line, Start to End in UTF-16 units with End exclusive.
+type Stretch struct{ Start, End int }
+
+// KeptRow is how a line prints when a command kept only stretches of it, at most limit characters of them: a cut row naming the stretches,
+// never an anchor; shown is the text it shows of them.
+func KeptRow(line int, content string, kept []Stretch, limit int) (text, shown string) {
+	length := js.Len(content)
+	var labels, texts []string
+	room := limit
+	for _, s := range kept {
+		end := min(s.End, length, s.Start+room)
+		if end <= s.Start {
+			continue
+		}
+		labels = append(labels, fmt.Sprintf("%d-%d", s.Start+1, end))
+		texts = append(texts, js.Slice(content, s.Start, end))
+		room -= end - s.Start
+	}
+	shown = strings.Join(texts, " ... ")
+	return cutRow(line, charsLabel(labels, length), shown), shown
 }
 
 type row struct {

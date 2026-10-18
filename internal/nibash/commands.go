@@ -46,24 +46,58 @@ type plan interface {
 // that runs the real program and only reshapes its output, which has no rows to edit from; into another nib command its lines go as the
 // program printed them. prepare refuses with errForeign for a form it never handles, which then runs as the system program without a note.
 type command struct {
+	name string
+	// form is how the tool description names it, as "sed -n" for the one form of sed nib runs; empty for its name.
+	form    string
 	prepare func(name string, args []string) (plan, error)
 	renders bool
+	// rows marks a command that prints a file's lines as rows, which a real program after it gets as plain text without their numbers.
+	rows bool
+	// alias marks another name of the command before it, which the server instructions leave out.
+	alias bool
 }
 
-// commands are nibash's own commands.
-var commands = map[string]command{
-	"cat":   {prepare: prepareCat},
-	"head":  {prepare: prepareHead},
-	"tail":  {prepare: prepareTail},
-	"grep":  {prepare: prepareGrep},
-	"egrep": {prepare: prepareGrep},
-	"fgrep": {prepare: prepareGrep},
-	"rg":    {prepare: prepareRg},
-	"sed":   {prepare: prepareSed},
-	"wc":    {prepare: prepareWc},
-	"git":   {prepare: prepareGit, renders: true},
-	"find":  {prepare: prepareFind, renders: true},
-	"ls":    {prepare: prepareLs, renders: true},
+// ownCommands are nibash's own commands, in the order the tool description and the server instructions name them.
+var ownCommands = []command{
+	{name: "cat", prepare: prepareCat, rows: true},
+	{name: "head", prepare: prepareHead, rows: true},
+	{name: "tail", prepare: prepareTail, rows: true},
+	{name: "grep", prepare: prepareGrep, rows: true},
+	{name: "egrep", prepare: prepareGrep, rows: true, alias: true},
+	{name: "fgrep", prepare: prepareGrep, rows: true, alias: true},
+	{name: "rg", prepare: prepareRg, rows: true},
+	{name: "sed", form: "sed -n", prepare: prepareSed, rows: true},
+	{name: "cut", form: "cut -c", prepare: prepareCut, rows: true},
+	{name: "wc", prepare: prepareWc},
+	{name: "git", prepare: prepareGit, renders: true},
+	{name: "find", prepare: prepareFind, renders: true},
+	{name: "ls", prepare: prepareLs, renders: true},
+}
+
+// commands are nibash's own commands by name.
+var commands = func() map[string]command {
+	byName := map[string]command{}
+	for _, c := range ownCommands {
+		byName[c.name] = c
+	}
+	return byName
+}()
+
+// ownNames lists the commands that pass file lines on, as "cat, head, ... and wc", the way the tool description names them; aliases adds the
+// other names of a command.
+func ownNames(aliases bool) string {
+	var forms []string
+	for _, c := range ownCommands {
+		if c.renders || c.alias && !aliases {
+			continue
+		}
+		form := c.form
+		if form == "" {
+			form = c.name
+		}
+		forms = append(forms, form)
+	}
+	return strings.Join(forms[:len(forms)-1], ", ") + " and " + forms[len(forms)-1]
 }
 
 // fail prints a GNU-style error for a command.

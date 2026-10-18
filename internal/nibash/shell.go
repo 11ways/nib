@@ -1,6 +1,5 @@
-// Package nibash is nib's shell: a bash interpreter (mvdan.cc/sh) whose calls each start afresh and whose own cat, head, tail, grep, rg,
-// sed -n and wc pass file lines on with their origin, so what reaches the model can carry edit anchors, while every other command is a real
-// program.
+// Package nibash is nib's shell: a bash interpreter (mvdan.cc/sh) whose calls each start afresh and whose own commands (ownCommands) pass
+// file lines on with their origin, so what reaches the model can carry edit anchors, while every other command is a real program.
 package nibash
 
 import (
@@ -32,9 +31,10 @@ const (
 	maxTimeout     = 600 * time.Second
 )
 
-// description is the nibash tool's description, with %s for how long output is cut; a test holds every variant under 2048 characters.
+// description is the nibash tool's description, with %s for nib's own commands and for how long output is cut; a test holds every variant
+// under 2048 characters.
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Each call starts afresh in the project directory (no cd, variable or function carries over) and in parallel. Programs are real processes, stdin empty.
-cat, head, tail, grep, egrep, fgrep, rg, sed -n and wc are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows you can edit from, a log's as plain text. Otherwise the system program runs, with a note if it printed (not as /usr/bin/grep); type and command -v name it.
+%s are nib's own when their output reaches you or another of them and they know each option: file lines then print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), %s, with the whole kept in a log you can read. Changed files list their new tags.
 Unlike bash: deletes go to the trash; a program does not start in a deleted directory; a command past its timeout goes on as a job like cmd &; $! is a job's spec (%%N) for kill, wait and jobs, and the next call reports its end. ~name/ paths expand only unquoted; hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
@@ -116,7 +116,12 @@ func (s *Shell) Description() string {
 	if s.summarizer != nil {
 		cut += fmt.Sprintf(", or past %d lines or %d KB to a <summary> of it and the log lines that summary points at", summaryLines, summaryBytes/1024)
 	}
-	return fmt.Sprintf(description, cut)
+	return fmt.Sprintf(description, ownNames(true), cut)
+}
+
+// Commands names nib's own commands for the server instructions.
+func (s *Shell) Commands() string {
+	return ownNames(false)
 }
 
 // Expects says whether a model reads a call's expectation: a decision model or a summarizer.
@@ -232,6 +237,10 @@ type call struct {
 	system []string
 	// trashed are the absolute paths the call's deleting commands moved to the trash, in order.
 	trashed []string
+	// rows carries the rows nib's own writers send in band through a pipe a nib command reads as bytes.
+	rows *rowBand
+	// piped are the row commands whose output went through a real program to the model, which an agent is told of once.
+	piped []pipe
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version.
@@ -358,7 +367,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		}
 		return engine.Result{Text: strings.Join(append(reports, fmt.Sprintf("[job %%%d started; output: %s]", j.id, j.log)), "\n")}, nil
 	}
-	jobs := classify(file, 0)
+	jobs, piped := classify(file, 0)
 	bodies := heredocs(file)
 	before := map[string]held{}
 	for _, path := range s.engine.Held(tools) {
@@ -370,7 +379,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
 	callTools := *tools
-	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}}
+	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped}
 	sess.track(c, request)
 	defer func() { sess.untrack(c) }()
 	devnull, err := os.Open(os.DevNull)
@@ -467,6 +476,9 @@ func (c *call) result(reports []string, text string, tail []string, before map[s
 	c.mu.Lock()
 	parts = append(parts, c.system...)
 	c.mu.Unlock()
+	if note := c.pipedNote(); note != "" {
+		parts = append(parts, note)
+	}
 	if note := c.trashNote(); note != "" {
 		parts = append(parts, note)
 	}

@@ -2,6 +2,8 @@ package nibash
 
 import (
 	"errors"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -12,13 +14,18 @@ import (
 // command line could shadow. No real program name can start with ESC.
 const marker = "\x1bnib:"
 
-// Reader modes in a marker: a nib command reading another nib command's records, or plain bytes; or a command that would be nib's own but
-// for an option or pattern it lacks, which runs the system program and says so, as its output reaches the model.
+// Reader modes in a marker: a nib command reading another nib command's records, plain bytes, or bytes among which nib writers send their
+// rows in band; or a command that would be nib's own but for an option or pattern it lacks, which runs the system program and says so, as
+// its output reaches the model.
 const (
 	fromLink  = "L"
 	fromBytes = "B"
+	fromBand  = "W"
 	asSystem  = "S"
 )
+
+// bandFlag follows the reader mode in a marker for a command whose rows go in band to a nib reader of its pipe's bytes.
+const bandFlag = "+"
 
 // internal commands nibash adds for builtins mvdan does not run for real processes, and for starting a job.
 const (
@@ -39,9 +46,31 @@ type destination int
 
 const (
 	toTerminal destination = iota
+	// toNib is a pipe a single nib command reads records from.
 	toNib
+	// toBand is a pipe a nib command reads as bytes, which a compound command, or a command whose form only running it decides, writes; nib's
+	// own writers send their rows through it in band.
+	toBand
 	toOther
 )
+
+// verdict is how a command runs.
+type verdict int
+
+const (
+	// program runs the program, with no note.
+	program verdict = iota
+	// own runs as nib's own.
+	own
+	// later is nib's own if the words its expansions give allow it, which only running it tells; else the system program runs, with a note
+	// when its output reaches the model.
+	later
+	// system runs the system program for a form nib's own lacks, with a note as its output reaches the model.
+	system
+)
+
+// pipe is a command printing rows that would be nib's own, whose output went into a real program before reaching the model.
+type pipe struct{ command, program string }
 
 // classifier marks the commands nibash runs itself and rewrites background statements into jobs.
 type classifier struct {
@@ -49,11 +78,13 @@ type classifier struct {
 	// jobs holds the statements & started, by the key their job-start command carries.
 	jobs map[int]*syntax.Stmt
 	next int
+	// piped are the row commands whose output reached the model through a real program, in the order the command line names them.
+	piped []pipe
 }
 
 // classify rewrites file in place: nib commands get a marker name, `X &` becomes `NIBASH_JOB=$(job k)` with X kept in jobs, and $! reads
-// NIBASH_JOB. Functions the command defines shadow nib commands.
-func classify(file *syntax.File, firstJob int) map[int]*syntax.Stmt {
+// NIBASH_JOB. Functions the command defines shadow nib commands. piped lists the row commands whose rows went through a real program.
+func classify(file *syntax.File, firstJob int) (jobs map[int]*syntax.Stmt, piped []pipe) {
 	c := &classifier{functions: map[string]bool{}, jobs: map[int]*syntax.Stmt{}, next: firstJob}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if f, ok := node.(*syntax.FuncDecl); ok {
@@ -68,7 +99,7 @@ func classify(file *syntax.File, firstJob int) map[int]*syntax.Stmt {
 		}
 		return true
 	})
-	return c.jobs
+	return c.jobs, c.piped
 }
 
 func (c *classifier) stmts(list []*syntax.Stmt, out destination) {
@@ -106,7 +137,7 @@ func (c *classifier) stmt(s *syntax.Stmt, out destination) {
 	}
 	switch cmd := s.Cmd.(type) {
 	case *syntax.CallExpr:
-		c.call(cmd, out, false)
+		c.call(cmd, out)
 	case *syntax.BinaryCmd:
 		switch cmd.Op {
 		case syntax.Pipe, syntax.PipeAll:
@@ -180,39 +211,117 @@ func stages(cmd *syntax.BinaryCmd) ([]*syntax.Stmt, []bool) {
 	return list, all
 }
 
-// pipeline classifies right to left: a stage writes to a nib reader only when the next stage is a single nib command.
+// pipeline classifies right to left. A stage writes to a nib reader only when the next stage is a single nib command: by a link when the stage
+// is one too, else through the pipe with its nib writers' rows in band.
 func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 	list, all := stages(cmd)
-	nib := make([]bool, len(list))
+	verdicts := make([]verdict, len(list))
+	outs := make([]destination, len(list))
 	for i := len(list) - 1; i >= 0; i-- {
 		stageOut := out
 		if i < len(list)-1 {
 			stageOut = toOther
-			if nib[i+1] && !all[i] && !redirectsInput(list[i+1]) {
-				stageOut = toNib
+			if verdicts[i+1] == own && !all[i] && !redirectsInput(list[i+1]) {
+				stageOut = toBand
 			}
 		}
 		s := list[i]
-		if call, ok := s.Cmd.(*syntax.CallExpr); ok && !s.Background && !redirectsOutput(s) {
-			var system bool
-			nib[i], system = c.check(call, stageOut)
-			if system {
-				rename(call, asSystem)
+		call, isCall := s.Cmd.(*syntax.CallExpr)
+		if !isCall || s.Background || redirectsOutput(s) {
+			if stageOut != toBand || redirectsOutput(s) {
+				stageOut = toOther
 			}
+			outs[i] = stageOut
+			c.stmt(s, stageOut)
 			continue
 		}
-		c.stmt(s, toOther)
+		verdicts[i] = c.check(call, stageOut)
+		switch {
+		case stageOut == toBand && verdicts[i] == own:
+			stageOut = toNib
+		case stageOut == toBand && verdicts[i] != later:
+			stageOut = toOther
+		}
+		outs[i] = stageOut
+		if verdicts[i] == system {
+			rename(call, asSystem)
+		}
 	}
 	for i, s := range list {
-		if !nib[i] {
+		if verdicts[i] != own && verdicts[i] != later {
 			continue
 		}
 		mode := fromBytes
-		if i > 0 && nib[i-1] && !all[i-1] && !redirectsInput(s) {
-			mode = fromLink
+		if i > 0 && !all[i-1] && !redirectsInput(s) {
+			switch outs[i-1] {
+			case toNib:
+				mode = fromLink
+			case toBand:
+				mode = fromBand
+			}
+		}
+		if outs[i] == toBand {
+			mode += bandFlag
 		}
 		rename(s.Cmd.(*syntax.CallExpr), mode)
 	}
+	c.notePiped(list, verdicts, out)
+}
+
+// notePiped records each row command that would be nib's own whose output goes into a real program, when what that program prints reaches
+// the model.
+func (c *classifier) notePiped(list []*syntax.Stmt, verdicts []verdict, out destination) {
+	reaches := out == toTerminal || out == toBand
+	for i := len(list) - 1; i > 0; i-- {
+		reaches = reaches && !redirectsOutput(list[i])
+		if !reaches || verdicts[i] == own || verdicts[i] == later {
+			continue
+		}
+		next, ok := list[i].Cmd.(*syntax.CallExpr)
+		if !ok || len(next.Args) == 0 {
+			continue
+		}
+		name, ok := wordLiteral(next.Args[0])
+		if _, marked, isMarked := parseMarker(name); isMarked {
+			name = marked
+		}
+		if !ok || name == "" {
+			continue
+		}
+		if writer := c.rowWriter(list[i-1]); writer != "" {
+			found := pipe{writer, filepath.Base(name)}
+			if !slices.Contains(c.piped, found) {
+				c.piped = append(c.piped, found)
+			}
+		}
+	}
+}
+
+// rowWriter names the first command in s printing rows that would be nib's own if its output reached the model; "" for none.
+func (c *classifier) rowWriter(s *syntax.Stmt) string {
+	found := ""
+	syntax.Walk(s, func(node syntax.Node) bool {
+		if found != "" {
+			return false
+		}
+		switch n := node.(type) {
+		case *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
+			return false
+		case *syntax.Stmt:
+			return !redirectsOutput(n)
+		case *syntax.CallExpr:
+			if len(n.Args) > 0 {
+				if name, ok := wordLiteral(n.Args[0]); ok && commands[name].rows {
+					if v := c.check(n, toTerminal); v == own || v == later {
+						found = name
+					}
+				}
+			}
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func redirectsInput(s *syntax.Stmt) bool {
@@ -228,28 +337,32 @@ func redirectsInput(s *syntax.Stmt) bool {
 }
 
 // call classifies a command outside a pipeline.
-func (c *classifier) call(call *syntax.CallExpr, out destination, _ bool) {
-	switch nib, system := c.check(call, out); {
-	case nib:
-		rename(call, fromBytes)
+func (c *classifier) call(call *syntax.CallExpr, out destination) {
+	switch c.check(call, out) {
+	case own, later:
+		mode := fromBytes
+		if out == toBand {
+			mode += bandFlag
+		}
+		rename(call, mode)
 	case system:
 		rename(call, asSystem)
 	}
 }
 
-// check reports whether a command runs as nib's own: a literal nib name no function shadows, every word literal, options it implements, and
-// output that goes to the model or to another nib command. system is true for such a command whose output goes to the model but whose
-// options or pattern nib's own does not implement.
-func (c *classifier) check(call *syntax.CallExpr, out destination) (nib, system bool) {
+// check says how a command runs: as nib's own when it is a literal nib name no function shadows, with options it implements, and its output
+// goes to the model or to another nib command; later when only the words its expansions give decide that; system when its output goes to the
+// model but nib's own does not implement its options or pattern.
+func (c *classifier) check(call *syntax.CallExpr, out destination) verdict {
 	if out == toOther || len(call.Args) == 0 {
-		return false, false
+		return program
 	}
 	words := make([]string, len(call.Args))
 	for i, word := range call.Args {
 		value, ok := wordLiteral(word)
 		if !ok {
 			if i == 0 {
-				return false, false
+				return program
 			}
 			// An expansion is an operand here, as it is to the tool at run time unless it expands to an option, which the command then
 			// reports instead of running as the system program.
@@ -260,15 +373,21 @@ func (c *classifier) check(call *syntax.CallExpr, out destination) (nib, system 
 	name := words[0]
 	cmd, ok := commands[name]
 	if !ok || c.functions[name] || len(call.Args[0].Parts) != 1 {
-		return false, false
+		return program
 	}
 	if _, isLit := call.Args[0].Parts[0].(*syntax.Lit); !isLit {
-		return false, false
+		return program
 	}
 	if _, err := cmd.prepare(name, words[1:]); err != nil {
-		return false, out == toTerminal && !errors.Is(err, errForeign)
+		switch {
+		case errors.Is(err, errUnsupported) && slices.Contains(words[1:], expansion):
+			return later
+		case out == toTerminal && !errors.Is(err, errForeign):
+			return system
+		}
+		return program
 	}
-	return true, false
+	return own
 }
 
 func rename(call *syntax.CallExpr, mode string) {

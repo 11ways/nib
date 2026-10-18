@@ -96,11 +96,18 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 	return args, nil
 }
 
-// ranAsSystem notes once per call that a nib command ran as the system program, whose output reached the model as plain text.
+// ranAsSystem notes once per call that a nib command ran as the system program, whose output reached the model as plain text; a form nib's
+// own never handles gets no note.
 func (c *call) ranAsSystem(name string, err error) {
+	if errors.Is(err, errForeign) {
+		return
+	}
 	why := "nib's own does not implement this form of it"
-	if errors.Is(err, errUntranslatable) {
+	switch {
+	case errors.Is(err, errUntranslatable):
 		why = "its pattern needs a feature nib's own cannot run exactly"
+	case errors.Is(err, errUncounted):
+		why = "nib could not tell how it counts characters"
 	}
 	so := "its lines are plain output, not edit anchors"
 	if commands[name].renders {
@@ -114,22 +121,47 @@ func (c *call) ranAsSystem(name string, err error) {
 	}
 }
 
-// runNib runs one of nibash's own commands with the input and output its classification set up.
-func (c *call) runNib(ctx context.Context, mode, name string, args []string) error {
+// pipedNote tells an agent once that rows it piped into a real program reached it as plain text.
+func (c *call) pipedNote() string {
+	if len(c.piped) == 0 || !c.engine.Store.Teach(c.tools.Session, "rows-piped") {
+		return ""
+	}
+	return pipedText(c.piped[0])
+}
+
+// pipedText is what pipedNote says of p.
+func pipedText(p pipe) string {
+	return fmt.Sprintf("[%s's rows went through %s as plain text, without line numbers; only nib's own commands keep them, and read takes path:A-B,C-D and maxLineLength]", p.command, p.program)
+}
+
+// standIn is a plan that checks, once it knows the shell's environment, that it does what the system program would; an error makes the
+// system program run instead, as for an option nib's own lacks.
+type standIn interface {
+	standIn(c *call, hc interp.HandlerContext) error
+}
+
+// runNib runs one of nibash's own commands with the input and output its classification set up; a mode ending in bandFlag sends its rows in
+// band to a nib reader of its pipe's bytes.
+func (c *call) runNib(ctx context.Context, mode string, name string, args []string) error {
+	mode, band := strings.CutSuffix(mode, bandFlag)
 	hc := interp.HandlerCtx(ctx)
 	args = append([]string{name}, args[1:]...)
 	prepare := commands[name].prepare
 	p, err := prepare(name, args[1:])
+	if s, ok := p.(standIn); err == nil && ok {
+		err = s.standIn(c, hc)
+	}
 	if err != nil {
 		// An option the command line or an expansion gave it that nib's own lacks. With no other nib command reading or writing its records,
 		// the system program runs, as it would have, and says so when its output reaches the model; joined to one, it cannot stand in, so the
-		// command says why.
-		if out, isFile := hc.Stdout.(*os.File); mode != fromLink && !(isFile && c.links.get(out) != nil) {
+		// command says why. Bytes a nib reader takes in band are such a program's to write.
+		out, isFile := hc.Stdout.(*os.File)
+		if mode != fromLink && mode != fromBand && (band || !(isFile && c.links.get(out) != nil)) {
 			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err) })
 		}
 		fmt.Fprintf(hc.Stderr, "%s: an option nibash does not implement reached it through an expansion, inside a pipeline of nib's own commands; write the option literally, or the command as /usr/bin/%s\n", name, name)
 		// The stages it was joined to must still see it end, or they would wait for it.
-		if out, isFile := hc.Stdout.(*os.File); isFile {
+		if isFile && !band {
 			if l := c.links.get(out); l != nil {
 				close(l.records)
 			}
@@ -150,6 +182,9 @@ func (c *call) runNib(ctx context.Context, mode, name string, args []string) err
 		} else {
 			inv.in.reader = bufio.NewReaderSize(file, 1<<16)
 			inv.in.file = file
+			if mode == fromBand {
+				inv.in.rows = c.band()
+			}
 		}
 	}
 	inv.out = &output{ctx: ctx}
@@ -157,7 +192,10 @@ func (c *call) runNib(ctx context.Context, mode, name string, args []string) err
 	case *sink:
 		inv.out.sink = out
 	case *os.File:
-		if l := c.links.get(out); l != nil {
+		if band {
+			inv.out.rows = c.band()
+			inv.out.writer = out
+		} else if l := c.links.get(out); l != nil {
 			inv.out.link = l
 			inv.outLink = l
 		} else {
@@ -165,6 +203,9 @@ func (c *call) runNib(ctx context.Context, mode, name string, args []string) err
 		}
 	default:
 		inv.out.writer = hc.Stdout
+		if band {
+			inv.out.rows = c.band()
+		}
 	}
 	defer inv.out.close()
 	defer func() {
@@ -177,6 +218,16 @@ func (c *call) runNib(ctx context.Context, mode, name string, args []string) err
 		return interp.ExitStatus(status)
 	}
 	return nil
+}
+
+// band is the call's in-band carrier of rows, made when a command first needs it.
+func (c *call) band() *rowBand {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rows == nil {
+		c.rows = newRowBand()
+	}
+	return c.rows
 }
 
 // environ is the variables a child process gets: the shell's exported ones.

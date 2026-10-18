@@ -486,6 +486,7 @@ func (f *fakeShell) SetSummaries(on bool) {
 }
 
 func (f *fakeShell) Description() string { return "fake" }
+func (f *fakeShell) Commands() string    { return "cat and wc" }
 func (f *fakeShell) Expects() bool       { return false }
 
 // Status lists one command per key a call ran under, so a test sees which keys a client owns.

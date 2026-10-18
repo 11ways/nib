@@ -162,15 +162,17 @@ func (s *sink) addTail(t *tailed) {
 
 // item is one rendered unit before budgeting: an anchored row of a file, or a plain line. first and last are the log lines it stands for.
 type item struct {
-	source      *engine.Source
-	line        int
-	text        string
-	anchor      bool
-	marker      string
-	gap         bool
-	plain       bool
-	display     bool
-	listed      *listedLine
+	source  *engine.Source
+	line    int
+	text    string
+	anchor  bool
+	marker  string
+	gap     bool
+	plain   bool
+	display bool
+	listed  *listedLine
+	// kept are the stretches of the line a command like cut kept, nil for the whole line.
+	kept        []engine.Stretch
 	first, last int
 }
 
@@ -386,7 +388,7 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 			items = append(items, item{source: r.origin.source, text: engine.PlainText(r.text), display: true, first: at, last: at})
 			continue
 		}
-		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, first: at, last: at})
+		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, kept: r.kept, first: at, last: at})
 	}
 	flushPlain()
 	return s.layout(e, ctx, items), raw.String(), echoed
@@ -461,6 +463,15 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		}
 		previous = it.line
 		content, latest := lineOf(e, ctx, source, it.line)
+		if it.kept != nil {
+			// Part of the line is no anchor, whatever version it shows.
+			text, shown := engine.KeptRow(it.line, content, it.kept, rowLimit)
+			if !latest {
+				text = fmt.Sprintf("%d|%s", it.line, shown)
+			}
+			rows = append(rows, row{text: it.marker + text, header: headerAt, first: it.first, last: it.first})
+			continue
+		}
 		if latest {
 			text, anchor := engine.Row(it.line, content, rowLimit)
 			rows = append(rows, row{text: it.marker + text, header: headerAt, source: source, line: it.line, anchor: anchor, match: it.marker == "*" || it.marker == "+", first: it.first, last: it.first})

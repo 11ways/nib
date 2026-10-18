@@ -3,11 +3,15 @@ package nibash
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/engine"
 )
@@ -28,6 +32,10 @@ type record struct {
 	display bool
 	// listed is the path the line names, when the program that printed it read one there.
 	listed *listedLine
+	// raw is the line as read from bytes when it was not valid UTF-8, which text shows with U+FFFD in its place.
+	raw string
+	// kept are the stretches of origin's line a command like cut kept, nil when text shows it whole.
+	kept []engine.Stretch
 }
 
 type origin struct {
@@ -91,11 +99,13 @@ func (l *links) get(file *os.File) *link {
 	return found
 }
 
-// output is where a nib command's lines go: the terminal sink, a link to the next nib stage, or plain bytes.
+// output is where a nib command's lines go: the terminal sink, a link to the next nib stage, a pipe whose nib reader takes rows in band
+// (rows), or plain bytes.
 type output struct {
 	ctx      context.Context
 	sink     *sink
 	link     *link
+	rows     *rowBand
 	writer   io.Writer
 	stopped  bool
 	sent     int
@@ -120,6 +130,11 @@ func (o *output) emit(r record) bool {
 			o.stopped = true
 			return false
 		}
+	case o.rows != nil:
+		if _, err := io.WriteString(o.writer, o.rows.put(r)+"\n"); err != nil {
+			o.stopped = true
+			return false
+		}
 	default:
 		if _, err := io.WriteString(o.writer, r.text+"\n"); err != nil {
 			o.stopped = true
@@ -137,11 +152,13 @@ func (o *output) close() {
 	}
 }
 
-// input is where a nib command reads standard input from: a link's records, or bytes split into plain records.
+// input is where a nib command reads standard input from: a link's records, or bytes split into plain records, among which rows a nib writer
+// sent in band (rows) come back as its records.
 type input struct {
 	link   *link
 	reader *bufio.Reader
 	file   *os.File
+	rows   *rowBand
 	// all keeps every line read from bytes, for tail's log of program output it dropped.
 	all *strings.Builder
 }
@@ -159,11 +176,65 @@ func (in *input) next() (record, bool) {
 	if text == "" && err != nil {
 		return record{}, false
 	}
-	if in.all != nil {
-		in.all.WriteString(text)
-	}
 	text = strings.TrimSuffix(text, "\n")
-	return record{text: strings.ToValidUTF8(text, "\ufffd")}, true
+	if in.rows != nil {
+		if r, ok := in.rows.take(text); ok {
+			if in.all != nil {
+				in.all.WriteString(r.text + "\n")
+			}
+			return r, true
+		}
+	}
+	if in.all != nil {
+		in.all.WriteString(text + "\n")
+	}
+	r := record{text: text}
+	if !utf8.ValidString(text) {
+		r.text, r.raw = strings.ToValidUTF8(text, "�"), text
+	}
+	return r, true
+}
+
+// rowBand carries records through a real pipe: a nib writer whose reader is a nib command that reads the pipe as bytes, because a compound
+// command or other programs write to it too, puts each record here and writes a line naming it, so the rows keep their place among the other
+// lines. The token is the call's own, so no program's output can name a row.
+type rowBand struct {
+	prefix string
+	mu     sync.Mutex
+	next   int
+	held   map[int]record
+}
+
+func newRowBand() *rowBand {
+	token := make([]byte, 12)
+	_, _ = rand.Read(token)
+	return &rowBand{prefix: "\x1bnib-row:" + hex.EncodeToString(token) + ":", held: map[int]record{}}
+}
+
+// put keeps a record and returns the line that names it.
+func (b *rowBand) put(r record) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.next++
+	b.held[b.next] = r
+	return b.prefix + strconv.Itoa(b.next)
+}
+
+// take is the record a line names, which it gives once.
+func (b *rowBand) take(line string) (record, bool) {
+	rest, ok := strings.CutPrefix(line, b.prefix)
+	if !ok {
+		return record{}, false
+	}
+	id, err := strconv.Atoi(rest)
+	if err != nil {
+		return record{}, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, ok := b.held[id]
+	delete(b.held, id)
+	return r, ok
 }
 
 // stop says the command reads no more: a link's writer stops sending, and a pipe's writer gets SIGPIPE as under bash once the shell closes it.
