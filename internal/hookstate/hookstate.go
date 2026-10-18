@@ -283,31 +283,40 @@ func Latest(moments []time.Time, limit time.Time) time.Time {
 	return latest
 }
 
-// Drops are what the hook knew of a tool call's agent, one file per tool_use id: the latest moment its context was dropped, or "none". A
-// call with no file is from an agent whose drops nib cannot tell, as the session's hooks do not report them.
+// Drops are what the hook knew of a tool call's agent, one file per tool_use id: the latest moment its context was dropped, or "none", then a
+// line "session ID" with the Claude Code session the call belongs to. A call with no file is from an agent whose drops nib cannot tell, as
+// the session's hooks do not report them.
 type Drops struct{ folder }
 
 // OpenDrops are the per-call drop records under state, a folder from Directory.
 func OpenDrops(state string) Drops { return Drops{folder{filepath.Join(state, "drops")}} }
 
-// Note files the latest moment the context of the agent making toolUse was dropped, zero for never.
-func (d Drops) Note(toolUse string, dropped, now time.Time) error {
+// Note files the latest moment the context of the agent making toolUse was dropped, zero for never, with its session when that is an id.
+func (d Drops) Note(toolUse string, dropped time.Time, session string, now time.Time) error {
 	text := "none"
 	if !dropped.IsZero() {
 		text = strconv.FormatInt(dropped.UnixNano(), 10)
 	}
+	if identifier.MatchString(session) {
+		text += "\nsession " + session
+	}
 	return d.put(toolUse, text, now)
 }
 
-// Take is the drop record filed for toolUse, removing it: known is false when there is none, dropped zero when the context never was.
-func (d Drops) Take(toolUse string) (dropped time.Time, known bool) {
-	text, ok := d.get(toolUse, 32, true)
+// Take is the drop record filed for toolUse, removing it: known is false when there is none, dropped zero when the context never was, and
+// session "" when the record names none.
+func (d Drops) Take(toolUse string) (dropped time.Time, known bool, session string) {
+	text, ok := d.get(toolUse, 32+len("\nsession ")+128, true)
 	if !ok {
-		return time.Time{}, false
+		return time.Time{}, false, ""
 	}
-	if text == "none" {
-		return time.Time{}, true
+	first, rest, _ := strings.Cut(text, "\n")
+	if id, ok := strings.CutPrefix(rest, "session "); ok && identifier.MatchString(id) {
+		session = id
 	}
-	dropped = moment(text, "")
-	return dropped, !dropped.IsZero()
+	if first == "none" {
+		return time.Time{}, true, session
+	}
+	dropped = moment(first, "")
+	return dropped, !dropped.IsZero(), session
 }

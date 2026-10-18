@@ -203,22 +203,29 @@ func TestContextsKeepTheNewestMomentsAndDropsAreTakenOnce(t *testing.T) {
 		t.Fatalf("none before 50: %v", got)
 	}
 	drops := OpenDrops(state)
-	if err := drops.Note("toolu_a", time.Unix(0, 1234), now); err != nil {
+	if err := drops.Note("toolu_a", time.Unix(0, 1234), "6d0b-session", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := drops.Note("toolu_b", time.Time{}, now); err != nil {
+	if err := drops.Note("toolu_b", time.Time{}, "", now); err != nil {
 		t.Fatal(err)
 	}
-	if got, known := drops.Take("toolu_a"); !known || !got.Equal(time.Unix(0, 1234)) {
-		t.Fatalf("a: %v %v", got, known)
+	if got, known, session := drops.Take("toolu_a"); !known || !got.Equal(time.Unix(0, 1234)) || session != "6d0b-session" {
+		t.Fatalf("a: %v %v %q", got, known, session)
 	}
-	if got, known := drops.Take("toolu_b"); !known || !got.IsZero() {
-		t.Fatalf("b: %v %v", got, known)
+	if got, known, session := drops.Take("toolu_b"); !known || !got.IsZero() || session != "" {
+		t.Fatalf("b: %v %v %q", got, known, session)
 	}
-	if _, known := drops.Take("toolu_a"); known {
+	if _, known, _ := drops.Take("toolu_a"); known {
 		t.Fatal("a drop record is taken once")
 	}
-	if err := drops.Note("../x", time.Time{}, now); err == nil {
+	if err := drops.Note("../x", time.Time{}, "", now); err == nil {
 		t.Fatal("only Claude Code ids name records")
+	}
+	// A session that is no id is left out, never written into the record.
+	if err := drops.Note("toolu_c", time.Time{}, "../x\nsession y", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, known, session := drops.Take("toolu_c"); !known || session != "" {
+		t.Fatalf("c: %v %q", known, session)
 	}
 }

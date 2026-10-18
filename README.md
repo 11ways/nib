@@ -895,6 +895,12 @@ line shown, and `path#TAG` reads record it like an edit response.
   characters, unique in the file), a port of oh-my-pi's shifted-anchor rescue. A file with no snapshot (for example
   after a restart) is not restricted. Every line of a file that `write` or `*** Add File:` wrote whole counts as seen,
   since the agent wrote it; the response's row map only helps it find lines.
+- **Across restarts.** Where nib can tell when an agent's context drops (nib's hook for Claude Code, OpenCode's
+  database), what each agent saw is saved in `~/.local/state/nib/seen/` (`$XDG_STATE_HOME`): one private file per
+  Claude Code session, subagent or OpenCode session, holding each file's newest version as a hash of its text, never the
+  text, with the lines seen and known in it and when. A server started later, for a resumed session say, restores them
+  for a file whose text still hashes the same, leaving out what a drop since took; a changed file needs reading again.
+  Files untouched for 7 days are removed.
 - **Known lines and checks.** nib also remembers lines whose whole content the agent knows without having seen their
   current number: every row it inserted and seen lines that an edit moved. A `~TEXT` check confirms a line's number. An
   insert may anchor on any line a check confirms; a replace or cut may span known lines when each end that was not
@@ -1364,7 +1370,7 @@ bun bench/run.ts --recheck    # check stored runs again whose check changed, the
 | `internal/engine/` | Reads (selectors, outlines, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging and atomic publication, writes, row maps, refusals and reapply tokens, workspace checks |
 | `internal/nibash/` | The shell: classification of nib's own commands, record links, the commands, the terminal sink and rendering, real programs, jobs, the sandbox |
 | `internal/names/` | Named directories: `nib.json`, JVM source roots, the names agents define at runtime and who inherits them, expansion and display |
-| `internal/snapshots/` | The snapshot store with seen and known lines, what an agent still holds of a version, dropping what an agent saw before its context was dropped, line remapping and shifted-line rescue |
+| `internal/snapshots/` | The snapshot store with seen and known lines, what an agent still holds of a version, dropping what an agent saw before its context was dropped, line remapping and shifted-line rescue, and what agents saw kept across restarts |
 | `internal/patch/`, `internal/diff/`, `internal/tag/`, `internal/js/` | Patch parser; jsdiff's array diff; the oh-my-pi file tag; JavaScript string semantics the output rules were defined with |
 | `internal/setup/`, `internal/hook/`, `internal/hookstate/` | `nib setup`; the Claude Code hook for the built-in `Read` and nib's own tools, which finds a subagent's parent and spawn moment, and for the session starts and compactions that drop an agent's context; the hook's private state folder, the agent and drop records it hands the server, the spawn moments it found and the moments each agent's context was dropped |
 | `internal/opencode/` | Read-only lookups in OpenCode 2's database: which session a session was forked or spawned from, and when, and when it was last compacted |

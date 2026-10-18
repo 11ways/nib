@@ -982,17 +982,84 @@ func TestInstructionsSayHowToNameADirectoryWhenTheShellIsOffered(t *testing.T) {
 	}
 }
 
-// drops stands in for the hook's drop records: every call is known, with the latest drop set so far.
+// drops stands in for the hook's drop records: every call is known, with the latest drop set so far and the session.
 type drops struct {
 	mu      sync.Mutex
 	dropped time.Time
 	known   bool
+	session string
 }
 
-func (d *drops) take(string) (time.Time, bool) {
+func (d *drops) take(string) (time.Time, bool, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.dropped, d.known
+	return d.dropped, d.known, d.session
+}
+
+// What an agent saw outlives the server where its drops are known: a restarted server lets it edit lines it read before, keeps another
+// session's lines apart, refuses a file changed meanwhile, and leaves out what a drop since took.
+func TestWhatAnAgentSawOutlivesARestart(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	state := t.TempDir()
+	path := filepath.Join(directory, "a.txt")
+	other := filepath.Join(directory, "b.txt")
+	file(t, path, numbered(20))
+	file(t, other, numbered(20))
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	d := &drops{known: true, session: "6d0b-1"}
+	serve := func() *client {
+		e := engine.New()
+		e.Store.Keep(filepath.Join(state, "seen"))
+		return connect(t, Options{Directory: directory, Agent: r.take, Dropped: d.take, Engine: e}, []string{directory}, nil, false)
+	}
+	c := serve()
+	c.call(t, r.as("", readCall(path+":1-10")))
+	c.call(t, r.as("", readCall(other+":1-10")))
+	c.server.Close()
+	file(t, other, "changed\n"+numbered(20))
+	saved, err := os.ReadDir(filepath.Join(state, "seen"))
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("one file per session: %v %v", saved, err)
+	}
+	for _, name := range []string{filepath.Join(state, "seen"), filepath.Join(state, "seen", saved[0].Name())} {
+		info, err := os.Stat(name)
+		if want := map[bool]os.FileMode{true: 0o700, false: 0o600}[info != nil && info.IsDir()]; err != nil || info.Mode().Perm() != want {
+			t.Fatalf("%s must be private: %v %v", name, info, err)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(state, "seen", saved[0].Name())); strings.Contains(string(data), "line 1 of the file") {
+		t.Fatalf("the saved file must hold no file text: %s", data)
+	}
+	// The restarted server: a read of another part makes a version that restricts edits, and the lines read before still anchor.
+	c = serve()
+	tag := tagPatternText.FindStringSubmatch(text(c.call(t, r.as("", readCall(path+":15")))))[1]
+	if edited := c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 5:\n+FIVE", path, tag)))); edited.IsError {
+		t.Fatalf("a line read before the restart must anchor: %s", text(edited))
+	}
+	tag = tagPatternText.FindStringSubmatch(text(c.call(t, r.as("", readCall(other+":15")))))[1]
+	if refused := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 5:\n+FIVE", other, tag))))); !strings.Contains(refused, "never displayed") {
+		t.Fatalf("a file changed meanwhile must need reading again: %s", refused)
+	}
+	c.server.Close()
+	// Another Claude Code session in the same folder inherits nothing.
+	d.mu.Lock()
+	d.session = "6d0b-2"
+	d.mu.Unlock()
+	c = serve()
+	tag = tagPatternText.FindStringSubmatch(text(c.call(t, r.as("", readCall(path+":15")))))[1]
+	if refused := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 3:\n+THREE", path, tag))))); !strings.Contains(refused, "never displayed") {
+		t.Fatalf("another session must not inherit lines: %s", refused)
+	}
+	c.server.Close()
+	// Back in the first session, a compaction since the lines were saved takes them.
+	d.mu.Lock()
+	d.session, d.dropped = "6d0b-1", time.Now()
+	d.mu.Unlock()
+	c = serve()
+	tag = tagPatternText.FindStringSubmatch(text(c.call(t, r.as("", readCall(path+":15")))))[1]
+	if refused := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 3:\n+THREE", path, tag))))); !strings.Contains(refused, "never displayed") {
+		t.Fatalf("lines seen before a drop must not come back: %s", refused)
+	}
 }
 
 func numbered(n int) string {

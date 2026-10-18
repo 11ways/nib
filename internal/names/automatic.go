@@ -353,6 +353,16 @@ func fromScheme(entry Entry) bool {
 // LearnedFile is where the names agents got while serving base are kept for the next session: nib's folder in the user's state home, one
 // file per server directory; "" without a home to put it in.
 func LearnedFile(base string) string {
+	state := StateHome()
+	if state == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(base))
+	return filepath.Join(state, "names", hex.EncodeToString(sum[:8])+".json")
+}
+
+// StateHome is nib's folder in the user's state home, where what one server learns is kept for the next; "" without a home to put it in.
+func StateHome() string {
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		home, err := os.UserHomeDir()
@@ -361,8 +371,7 @@ func LearnedFile(base string) string {
 		}
 		state = filepath.Join(home, ".local", "state")
 	}
-	sum := sha256.Sum256([]byte(base))
-	return filepath.Join(state, "nib", "names", hex.EncodeToString(sum[:8])+".json")
+	return filepath.Join(state, "nib")
 }
 
 // learnedNames is a learned file: the server directory it is for, and its names, least recently used first.

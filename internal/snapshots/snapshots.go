@@ -107,6 +107,8 @@ type Store struct {
 	// Now is the wall clock lines are stamped with when they become seen or known; it must be comparable with other processes' clocks, as a
 	// fork's moment comes from its harness. Set it before first use.
 	Now func() time.Time
+	// durable keeps what sessions with a lasting key saw across restarts; nil keeps nothing.
+	durable *durable
 }
 
 // NewStore makes a store with nib's default limits.
@@ -155,6 +157,10 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 			version.Seen, version.seenAt = inherited.seen, inherited.seenAt
 			version.Known, version.knownAt = inherited.known, inherited.knownAt
 		}
+		// The first version of a file since the server started takes up what the agent saw of it before a restart.
+		if seen != nil && len(h.versions) == 0 {
+			s.restore(session, path, version)
+		}
 	}
 	if seen != nil {
 		version.Seen, version.seenAt = stamp(version.Seen, version.seenAt, seen, now)
@@ -173,6 +179,7 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	s.histories[key] = s.order.PushBack(h)
 	s.units += h.units
 	s.evict()
+	s.changed(session)
 	return version
 }
 
@@ -309,6 +316,7 @@ func (s *Store) Forget(session string, moment time.Time) bool {
 			delete(s.taught, key)
 		}
 	}
+	s.changed(session)
 	return true
 }
 

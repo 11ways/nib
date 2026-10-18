@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/hook"
 	"github.com/11ways/nib/internal/hookstate"
+	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/nibash"
 	"github.com/11ways/nib/internal/opencode"
 	"github.com/11ways/nib/internal/server"
@@ -22,6 +24,9 @@ import (
 // cut), and summarize leads a cut with a checked summary (nil: none).
 func newServer(options server.Options, choose decider.Decider, summarize decider.Summarizer) *server.Server {
 	options.Engine = engine.New()
+	if state := names.StateHome(); state != "" {
+		options.Engine.Store.Keep(filepath.Join(state, "seen"))
+	}
 	options.Agent = hookstate.OpenAgents(hookstate.Directory()).Take
 	options.Dropped = hookstate.OpenDrops(hookstate.Directory()).Take
 	options.Origin = func(session string) (opencode.Origin, bool) {

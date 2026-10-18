@@ -323,30 +323,30 @@ func TestContextDropsAreNotedAndFiledWithEveryNibCall(t *testing.T) {
 	drops := hookstate.OpenDrops(state)
 	// Before a session start was noted, nib cannot tell when the session's contexts drop: no drop record at all.
 	call("toolu_before", "")
-	if _, known := drops.Take("toolu_before"); known {
+	if _, known, _ := drops.Take("toolu_before"); known {
 		t.Fatal("a session whose start the hook never saw has no drop record")
 	}
 	before := time.Now()
 	run(map[string]any{"session_id": "6d0b", "hook_event_name": "SessionStart", "source": "startup"})
 	call("toolu_main", "")
-	started, known := drops.Take("toolu_main")
-	if !known || started.Before(before) {
-		t.Fatalf("the main agent's call carries its session start: %v %v", started, known)
+	started, known, session := drops.Take("toolu_main")
+	if !known || started.Before(before) || session != "6d0b" {
+		t.Fatalf("the main agent's call carries its session start and its session: %v %v %q", started, known, session)
 	}
 	call("toolu_sub", "a1d576263ade979e4")
-	if dropped, known := drops.Take("toolu_sub"); !known || !dropped.IsZero() {
+	if dropped, known, _ := drops.Take("toolu_sub"); !known || !dropped.IsZero() {
 		t.Fatalf("a subagent never compacted has no drop: %v %v", dropped, known)
 	}
 	run(map[string]any{"session_id": "6d0b", "hook_event_name": "PostCompact", "trigger": "auto", "agent_id": "a1d576263ade979e4"})
 	call("toolu_sub", "a1d576263ade979e4")
-	if dropped, known := drops.Take("toolu_sub"); !known || !dropped.After(started) {
+	if dropped, known, _ := drops.Take("toolu_sub"); !known || !dropped.After(started) {
 		t.Fatalf("the subagent's compaction is filed with its call: %v %v", dropped, known)
 	}
 	call("toolu_main", "")
-	if dropped, _ := drops.Take("toolu_main"); !dropped.Equal(started) {
+	if dropped, _, _ := drops.Take("toolu_main"); !dropped.Equal(started) {
 		t.Fatalf("a subagent's compaction is not the main agent's: %v", dropped)
 	}
-	if _, known := drops.Take("toolu_main"); known {
+	if _, known, _ := drops.Take("toolu_main"); known {
 		t.Fatal("a drop record is taken once")
 	}
 }

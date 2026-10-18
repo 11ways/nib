@@ -359,7 +359,7 @@ func Run(stdin []byte, state string) string {
 			_ = hookstate.OpenAgents(state).Record(input.ToolUseID, agent, now)
 		}
 		if dropped, known := droppedAt(input.SessionID, agent, state); known {
-			_ = hookstate.OpenDrops(state).Note(input.ToolUseID, dropped, now)
+			_ = hookstate.OpenDrops(state).Note(input.ToolUseID, dropped, input.SessionID, now)
 		}
 		return ""
 	}

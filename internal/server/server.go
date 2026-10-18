@@ -48,8 +48,9 @@ type Options struct {
 	// sees from it; nil, or ok false, starts every session on its own.
 	Origin func(session string) (origin opencode.Origin, ok bool)
 	// Dropped is what nib's hook filed for a Claude Code call: the latest moment the calling agent's context was compacted or cleared, zero
-	// for never; known is false when the hook could not tell. Nil, or not known, never shows held markers.
-	Dropped func(toolUse string) (dropped time.Time, known bool)
+	// for never, and the Claude Code session it belongs to; known is false when the hook could not tell. Nil, or not known, never shows held
+	// markers and keeps nothing an agent saw past the server.
+	Dropped func(toolUse string) (dropped time.Time, known bool, session string)
 	// Compacted is the latest moment OpenCode compacted a session, zero for never; ok is false when it cannot be told. Nil never shows held
 	// markers to OpenCode sessions.
 	Compacted func(session string) (compacted time.Time, ok bool)
@@ -169,6 +170,8 @@ const (
 	claudeAgent = "agent:"
 	// openCodeSession names an OpenCode session, a subagent's child session included, by the session id OpenCode sends in _meta.
 	openCodeSession = "opencode:"
+	// claudeSession names a Claude Code session's main agent across server restarts, by the session id nib's hook files with each call.
+	claudeSession = "claude:"
 )
 
 // openCodeID is the shape nib accepts of an OpenCode session id; a call with anything else counts as the main agent's.
@@ -284,7 +287,7 @@ func New(options Options) *Server {
 	return s
 }
 
-// Close ends every session's shells.
+// Close ends every session's shells and writes what agents saw that is kept past the server.
 func (s *Server) Close() {
 	s.mu.Lock()
 	keys := slices.Collect(maps.Keys(s.sessions))
@@ -292,6 +295,7 @@ func (s *Server) Close() {
 	for _, key := range keys {
 		s.forget(key)
 	}
+	s.engine.Store.Flush()
 }
 
 // forget ends a client's shells, its subagents' too, and drops its state.
@@ -379,7 +383,10 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 	if !resumed {
 		var from *origin
 		c.agent, from, c.worktree = s.identify(request)
-		known, dropped := s.dropped(request, c.agent)
+		known, dropped, lasting := s.dropped(request, c.agent)
+		if lasting != "" {
+			s.engine.Store.Persist(s.engineSession(c.agent), lasting)
+		}
 		s.seeding.Lock()
 		s.start(c.key, c.agent, from, originDepth)
 		// After the start, so a fork drops what its parent had been shown before a compaction it inherited too. A subagent is greeted again,
@@ -452,21 +459,33 @@ func (s *Server) identify(request *mcp.CallToolRequest) (agent string, from *ori
 }
 
 // dropped is the latest moment the context of the agent making a first round was compacted or cleared, zero for never; known is false when
-// nib cannot tell, from its hook for a Claude Code agent or from OpenCode's database for an OpenCode session.
-func (s *Server) dropped(request *mcp.CallToolRequest, agent string) (known bool, dropped time.Time) {
+// nib cannot tell, from its hook for a Claude Code agent or from OpenCode's database for an OpenCode session. lasting names the agent across
+// server restarts where nib can tell its drops, as what it saw may only outlive the server where a later drop can take it again: an OpenCode
+// session and a Claude Code subagent by their own ids, the main agent by its Claude Code session's.
+func (s *Server) dropped(request *mcp.CallToolRequest, agent string) (known bool, dropped time.Time, lasting string) {
 	if session, ok := strings.CutPrefix(agent, openCodeSession); ok {
 		if s.options.Compacted == nil {
-			return false, time.Time{}
+			return false, time.Time{}, ""
 		}
 		compacted, ok := s.options.Compacted(session)
-		return ok, compacted
+		if !ok {
+			return false, compacted, ""
+		}
+		return true, compacted, agent
 	}
 	toolUse, _ := request.Params.Meta["claudecode/toolUseId"].(string)
 	if s.options.Dropped == nil || toolUse == "" {
-		return false, time.Time{}
+		return false, time.Time{}, ""
 	}
-	dropped, known = s.options.Dropped(toolUse)
-	return known, dropped
+	dropped, known, session := s.options.Dropped(toolUse)
+	switch {
+	case !known:
+	case agent != "":
+		lasting = agent
+	case session != "":
+		lasting = claudeSession + session
+	}
+	return known, dropped, lasting
 }
 
 // repeated is true when request is the same call, tool and arguments, as the agent's latest, and notes it as the latest.
