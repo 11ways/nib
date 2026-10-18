@@ -175,9 +175,14 @@ export const register: Register = on => {
     return started
   })
 
+  // /nibash again, or Escape while the pane holds the keys, closes it.
   on('command.run', { command: PANE }, async $ => {
+    if ((await $.ui.panes()).some(pane => pane.id === PANE)) {
+      await $.ui.close({ id: PANE })
+      return {}
+    }
     watch($)
-    await $.ui.open({ id: PANE, title: 'nibash' })
+    await $.ui.open({ id: PANE, title: 'nibash', focus: true, closeOnEscape: true })
     return {}
   })
 

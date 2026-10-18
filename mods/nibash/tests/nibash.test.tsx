@@ -109,3 +109,15 @@ test('the pane shows each command and job with its last output lines', async ($,
     expect(await pane.find({ text: new RegExp(line) })).toBeDefined()
   }
 })
+
+test('/nibash opens the pane and a second /nibash closes it again', async ($, on) => {
+  on('mcp.call', async () => ({ value: { content: [], isError: false, structuredContent: { commands: [], jobs: [] } } }))
+  let up = false
+  on('ui.panes', async () => ({ value: up ? [{ id: 'nibash', title: 'nibash', isShown: true, isFocused: true, isPlaced: true }] : [] }))
+  on('ui.open', async () => { up = true; return { value: { isPlaced: true } } })
+  on('ui.close', async () => { up = false; return { value: undefined } })
+  await $.command.run({ command: 'nibash' })
+  expect(up).toBe(true)
+  await $.command.run({ command: 'nibash' })
+  expect(up).toBe(false)
+})
