@@ -89,7 +89,7 @@ func TestRmSaysAndDoesWhatCoreutilsRmDoesWithItsFilesInTheTrash(t *testing.T) {
 		f := newFixture(t, nil)
 		rmScene(t, f.directory)
 		got := notes.ReplaceAllString(f.run(command+" 2>&1; echo \"status=$?\""), "")
-		if strings.TrimRight(got, "\n") != strings.TrimRight(string(want), "\n") {
+		if strings.TrimRight(got, "\n") != strings.TrimRight(string(want), "\n") && !sameLines(got, string(want)) {
 			t.Errorf("%s:\ngot:\n%s\nwant:\n%s", command, got, want)
 		}
 		if g, w := tree(t, f.directory), tree(t, real); g != w {
@@ -260,4 +260,15 @@ func TestRmRefusesPathsOutsideTheSandbox(t *testing.T) {
 	if got := trashed(t); len(got) != 1 {
 		t.Fatalf("trash holds %v", got)
 	}
+}
+
+// sameLines says whether two outputs hold the same lines in any order, which is how a verbose rm of a tree may differ: it names what it removes
+// in the order the directory lists them, and two directories made alike on one filesystem do not always list alike.
+func sameLines(a, b string) bool {
+	lines := func(text string) []string {
+		l := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		slices.Sort(l)
+		return l
+	}
+	return slices.Equal(lines(a), lines(b))
 }
