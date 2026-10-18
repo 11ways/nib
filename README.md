@@ -560,7 +560,10 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
   when the command changed them: `[changed by this command: a.txt#9C10 (was #3F2A), notes.md#1B2C (new)]`. A file whose
-  content is exactly a here-document of the command counts as known, like a `write`, so a checked edit needs no read.
+  content is exactly a here-document of the command counts as known, like a `write`, so a checked edit needs no read. A
+  held file something else was already changing as the command began (it differed from the version the session holds,
+  another running call or job of the session names it, or it was found so before and changed in the last 10 s) is left
+  out unless the command redirected to it, as a log a build writes is: its change need not be the command's.
 - **Jobs.** `background: true` runs the whole command as a job and returns its id and log at once. `cmd &` starts a job
   too, and `$!` is its spec (`%3`) for `kill`, `wait` and `jobs`, which nibash implements for real processes; jobs
   outlive the call that starts them, and a later call reaches them by their spec. Finished jobs are reported at the top

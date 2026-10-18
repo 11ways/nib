@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/11ways/nib/internal/snapshots"
 )
@@ -203,6 +204,27 @@ func (e *Engine) Snapshot(ctx *Context, canonical string, every bool) (snapshots
 	}
 	e.Store.Record(ctx.Session, canonical, view, []int{}, known)
 	return view, true
+}
+
+// Drifted says whether a file now differs from the newest version the session holds of it, as when a program the agent does not run writes
+// it; it reads the file only when it was modified after the session first held that version.
+func (e *Engine) Drifted(ctx *Context, canonical string, facts Facts) bool {
+	latest := e.Latest(ctx, canonical)
+	if latest == nil || !time.Unix(facts.MTime.Unix()).After(latest.At()) {
+		return false
+	}
+	file, err := os.OpenFile(canonical, os.O_RDONLY|nonblock, 0)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	// A file being written as it is read, or grown past what nib holds, is not that version either.
+	current, err := snapshot(file, TextLimit)
+	if err != nil {
+		return true
+	}
+	decoded, err := decodeText(current.bytes)
+	return err != nil || viewOf(decoded).Key != latest.Key
 }
 
 // Held are the paths this session holds versions of.

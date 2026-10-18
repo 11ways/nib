@@ -132,6 +132,26 @@ type session struct {
 	mu    sync.Mutex
 	// active are the calls still running in their request, for Status; a call that goes on as a job leaves them.
 	active map[*call]running
+	// busy are the held files a call's start found changing without the agent, which count as changing until they rest for busyFor.
+	busy map[string]bool
+}
+
+// busyFor is how long after its last change a file once found changing without the agent still counts as changing, as a log a build
+// writes in bursts does.
+const busyFor = 10 * time.Second
+
+// changing says whether path is changing without the agent: found so now, or found so at an earlier call's start and modified less than
+// busyFor ago; it remembers the answer for the next call.
+func (sess *session) changing(path string, now bool, modified time.Time) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	now = now || sess.busy[path] && time.Since(modified) < busyFor
+	if now {
+		sess.busy[path] = true
+	} else {
+		delete(sess.busy, path)
+	}
+	return now
 }
 
 // running is what Status tells of a call in flight.
@@ -146,7 +166,7 @@ func (s *Shell) session(key any) *session {
 	if found := s.sessions[key]; found != nil {
 		return found
 	}
-	sess := &session{jobs: newJobTable(), shell: s, active: map[*call]running{}}
+	sess := &session{jobs: newJobTable(), shell: s, active: map[*call]running{}, busy: map[string]bool{}}
 	s.sessions[key] = sess
 	return sess
 }
@@ -165,6 +185,22 @@ func (sess *session) untrack(c *call) (running, bool) {
 	was, ok := sess.active[c]
 	delete(sess.active, c)
 	return was, ok
+}
+
+// runningCommands are the command lines of the session's calls still in their request and of its running jobs.
+func (sess *session) runningCommands() []string {
+	var commands []string
+	sess.mu.Lock()
+	for _, r := range sess.active {
+		commands = append(commands, r.command)
+	}
+	sess.mu.Unlock()
+	for _, j := range sess.jobs.all() {
+		if j.running() {
+			commands = append(commands, j.command)
+		}
+	}
+	return commands
 }
 
 // Close kills a session's jobs and forgets it.
@@ -238,10 +274,12 @@ type call struct {
 	piped []pipe
 }
 
-// held is a file the session held a version of before a call: its facts then, and the tag of that version.
+// held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
+// else was changing as the call began: it already differed from that version, or another running command or job of the session names it.
 type held struct {
-	facts engine.Facts
-	tag   string
+	facts   engine.Facts
+	tag     string
+	foreign bool
 }
 
 type callKey struct{}
@@ -365,10 +403,15 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	jobs, piped := classify(file, 0)
 	bodies := heredocs(file)
 	before := map[string]held{}
+	others := sess.runningCommands()
 	for _, path := range s.engine.Held(tools) {
 		if facts, ok := engine.Stat(path); ok {
 			if latest := s.engine.Latest(tools, path); latest != nil {
-				before[path] = held{facts, latest.Tag}
+				base := filepath.Base(path)
+				foreign := slices.ContainsFunc(others, func(command string) bool { return strings.Contains(command, base) }) ||
+					s.engine.Drifted(tools, path, facts)
+				foreign = sess.changing(path, foreign, time.Unix(facts.MTime.Unix()))
+				before[path] = held{facts, latest.Tag, foreign}
 			}
 		}
 	}
@@ -495,7 +538,8 @@ func (c *call) adopt(j *job) {
 }
 
 // changed lists the files the command created or changed: those the session held versions of, and those it wrote through a redirect.
-// A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
+// A held file something else was already changing is left out unless the command redirected to it, since its change need not be the
+// command's. A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
 func (c *call) changed(before map[string]held, bodies []string) string {
 	type candidate struct {
 		created bool
@@ -503,7 +547,7 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 	}
 	paths := map[string]candidate{}
 	for path, h := range before {
-		if now, ok := engine.Stat(path); !ok || now != h.facts {
+		if now, ok := engine.Stat(path); !h.foreign && (!ok || now != h.facts) {
 			paths[path] = candidate{was: h.tag}
 		}
 	}

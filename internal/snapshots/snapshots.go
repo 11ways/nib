@@ -34,6 +34,9 @@ type Version struct {
 	seenAt, knownAt map[int]int64
 }
 
+// At is when the store first held the version.
+func (v *Version) At() time.Time { return time.Unix(0, v.at) }
+
 // Operation is how a LineEdit changes its lines.
 type Operation int
 

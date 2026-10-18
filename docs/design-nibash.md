@@ -323,6 +323,12 @@ When the command finishes or its time runs out, the sink is rendered once:
     `[changed by this command: ~orm/A.java#9C10 (was #3F2A), notes.md#1B2C (new)]`.
   - A file whose new content equals a here-document or here-string body in the command is recorded with every line
     known, as after `write`, since the model typed it.
+  - A held file something else is changing is left out unless a redirect of the command wrote it, so a log a build
+    appends to is not called changed by a `sleep; tail` beside it. At the start, a held file counts as changing when it
+    already differs from the newest version the session holds (read only when its modification time is later than when
+    the session first held that version), when another running call or job of the session names it, or when an earlier
+    call found it changing and it was modified less than 10 s ago. What nib cannot tell is a command that rewrites such
+    a file without a redirect: its change is left out too.
 
 ### 5.7 Background work [B2]
 
