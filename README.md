@@ -26,7 +26,7 @@ bun typecheck           # go vet and tsgo --noEmit
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
 | `write` | `path`, `content`, optional `tag` | Creates a file (with parents), or overwrites one when given its current tag, keeping a CRLF file's line endings and a BOM; answers with a row map of the new file. |
 | `nibash` | `command`, optional `description`, `expect` (offered with a decision model or a summarizer), `timeout`, `background` | A shell whose calls each start afresh in the project directory and run in parallel; its own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n` and `wc` print anchored rows, everything else runs as real programs, and output is shaped for the model. |
-| `nibash_status` | optional `tail` | Lists what nibash runs for the client, every agent of it: commands still in their call and jobs (running, or ended in the last 10 minutes), with how long each ran, its log and, with `tail`, its last output lines; as text and as structured content, which Claude Code's nib mod polls. |
+| `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists what nibash runs for the client, every agent of it: commands still in their call and jobs (running, or ended in the last 10 minutes), with how long each ran, its log and, with `tail`, its last output lines; as text and as structured content, which Claude Code's nib mod polls. `view` adds one more list for the mod's panes (`trash`, `seen`, `names`, `tokens`); `restore` puts one trashed path back through the trash code behind `trash restore`, refusing, as it does, a path where a file is now; `summaries` turns summaries of long output on or off for the session. |
 
 ### read
 
@@ -1005,6 +1005,12 @@ server's `nibash_status` once a second (with `tail: 12`), stopping once nothing 
 runs, so subagents' commands and jobs show too. Claude Code passes a tool's structured content on as the JSON of its one
 text block, which the mod reads. The poll needs `mcp__nib__nibash_status` allowed, which `nib setup` adds; without it
 Claude Code would ask about every poll.
+
+Besides `/nibash`, one slash command per list opens a pane of its own, which Escape or the same command again closes.
+Such a pane asks `nibash_status` for its list (`view`) every two seconds while it is open, and the lists only read what
+nib already holds. `/trash` lists what this server moved to the trash, whichever agent moved it, as `trash list` does,
+with a `restore` button per entry: it asks nib to put the path back through the code behind `trash restore`, which
+refuses a path where a file is now and never replaces it, and the pane shows nib's answer.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

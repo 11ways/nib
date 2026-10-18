@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { elapsed, parse, rows, structuredText } from '../hooks/register'
+import { elapsed, parse, parseRestored, parseTrash, rows, structuredText } from '../hooks/register'
 
 const go = { agent: 'main', command: 'go test ./...', description: 'Run all Go tests', started: 1_000, tail: ['ok  internal/engine'] }
 const bench = { id: 1, agent: 'agent:a1', command: 'bun bench/run.ts', started: 0, running: true, log: '/run/nib/job-1.log', tail: ['run 1 of 3', 'run 2 of 3'] }
@@ -120,4 +120,48 @@ test('/nibash opens the pane and a second /nibash closes it again', async ($, on
   expect(up).toBe(true)
   await $.command.run({ command: 'nibash' })
   expect(up).toBe(false)
+})
+
+describe('the trash pane', () => {
+  const gone = { path: '/work/gone.txt', shown: 'gone.txt', when: 1_000 }
+
+  test('nib answers are read in nib shape only', () => {
+    expect(parseTrash({ trash: { entries: [gone, { ...gone, dir: true }] } })).toEqual([{ ...gone, dir: undefined }, { ...gone, dir: true }])
+    expect(parseTrash({ trash: { entries: [] } })).toEqual([])
+    expect(parseTrash({ trash: { entries: [{ ...gone, when: 'noon' }] } })).toBeUndefined()
+    expect(parseTrash({ commands: [], jobs: [] })).toBeUndefined()
+    expect(parseRestored({ restore: { path: '/a', done: true, message: 'restored a' } })).toEqual({ done: true, message: 'restored a' })
+    expect(parseRestored({ restore: { done: 'yes', message: 'x' } })).toBeUndefined()
+  })
+
+  test('/trash lists what nib trashed, and a button puts one back through nib', async ($, on) => {
+    mock.clock(on, { now: 43_000 })
+    const calls: Record<string, unknown>[] = []
+    let listed = [gone, { ...gone, path: '/work/old', shown: 'old', dir: true }]
+    on('mcp.call', async (_, e) => {
+      const args = e.args
+      calls.push(args)
+      if (typeof args.restore === 'string') {
+        listed = listed.filter(entry => entry.path !== args.restore)
+        return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [], restore: { path: args.restore, done: true, message: 'restored gone.txt' }, trash: { entries: listed } } } }
+      }
+      return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [], trash: { entries: listed } } } }
+    })
+    let up = false
+    const toasts: string[] = []
+    on('ui.toast', async (_, e) => { toasts.push(e.text); return { value: undefined } })
+    on('ui.panes', async () => ({ value: up ? [{ id: 'trash', title: 'trash', isShown: true, isFocused: true, isPlaced: true }] : [] }))
+    on('ui.open', async () => { up = true; return { value: { isPlaced: true } } })
+    await $.command.run({ command: 'trash' })
+    const pane = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'Pane', requestId: 'trash', props: { title: 'trash', isFocused: false } as never })
+    expect(await pane.find({ text: /gone\.txt/ })).toBeDefined()
+    expect(await pane.find({ text: /\(directory\)/ })).toBeDefined()
+    expect(calls[0]).toEqual({ view: 'trash' })
+    await pane.press({ key: 'restore:/work/gone.txt' })
+    expect(calls.at(-1)).toEqual({ view: 'trash', restore: '/work/gone.txt' })
+    expect(await pane.find({ text: /restored gone\.txt/ })).toBeDefined()
+    expect(await pane.find({ key: 'restore:/work/gone.txt' })).toBeUndefined()
+    expect(await pane.find({ key: 'restore:/work/old' })).toBeDefined()
+    expect(toasts).toEqual(['restored gone.txt'])
+  })
 })

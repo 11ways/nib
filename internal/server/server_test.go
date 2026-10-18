@@ -561,6 +561,57 @@ func TestEachAgentHasJobsEndedWithTheConnection(t *testing.T) {
 	}
 }
 
+func TestStatusListsTheTrashAndRestoresFromIt(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	directory := resolvedPath(t, t.TempDir())
+	e := engine.New()
+	gone, kept := filepath.Join(directory, "gone.txt"), filepath.Join(directory, "kept.txt")
+	file(t, gone, "one\n")
+	file(t, kept, "two\n")
+	for _, path := range []string{gone, kept} {
+		if _, err := e.Trash.Put(path, path, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := connect(t, Options{Directory: directory, Shell: &fakeShell{}, Engine: e}, []string{directory}, nil, false)
+	entries := func(result *mcp.CallToolResult) []any {
+		trash, _ := result.StructuredContent.(map[string]any)["trash"].(map[string]any)
+		listed, _ := trash["entries"].([]any)
+		return listed
+	}
+	listed := entries(c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "trash"}}))
+	if len(listed) != 2 || listed[0].(map[string]any)["path"] != gone || listed[0].(map[string]any)["shown"] != "gone.txt" {
+		t.Fatalf("trash view: %#v", listed)
+	}
+	if plain := entries(c.call(t, &mcp.CallToolParams{Name: "nibash_status"})); plain != nil {
+		t.Fatalf("a status without a view lists no trash, got %#v", plain)
+	}
+	// Restoring puts the file back through the trash code, and the view no longer lists it.
+	restored := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": gone, "view": "trash"}})
+	got, _ := restored.StructuredContent.(map[string]any)["restore"].(map[string]any)
+	if got["done"] != true || got["message"] != "restored gone.txt" || len(entries(restored)) != 1 {
+		t.Fatalf("restore: %#v", restored.StructuredContent)
+	}
+	if data, err := os.ReadFile(gone); err != nil || string(data) != "one\n" {
+		t.Fatalf("restored file: %q %v", data, err)
+	}
+	// A file now at the path is refused, never replaced, and so is a path this server did not trash.
+	file(t, kept, "newer\n")
+	for path, want := range map[string]string{kept: "cannot restore kept.txt: a file is there now", filepath.Join(directory, "never.txt"): "this session did not move it to the trash", "relative.txt": "is not an absolute path"} {
+		refused := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": path}})
+		got, _ := refused.StructuredContent.(map[string]any)["restore"].(map[string]any)
+		if got["done"] != false || !strings.Contains(fmt.Sprint(got["message"]), want) {
+			t.Fatalf("restore of %s: %#v", path, refused.StructuredContent)
+		}
+	}
+	if data, _ := os.ReadFile(kept); string(data) != "newer\n" {
+		t.Fatalf("a refused restore must leave the file alone, got %q", data)
+	}
+	if bad := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "elsewhere"}}); !bad.IsError || !strings.Contains(text(bad), "view is one of trash") {
+		t.Fatalf("an unknown view must be refused, got %q", text(bad))
+	}
+}
+
 func TestAForkWithNoMomentStartsWithACopyOfWhatItsParentSawAtItsFirstCall(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	path := filepath.Join(directory, "a.txt")

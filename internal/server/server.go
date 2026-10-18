@@ -78,6 +78,9 @@ type Shell interface {
 type ShellStatus struct {
 	Commands []RunningCommand `json:"commands"`
 	Jobs     []ShellJob       `json:"jobs"`
+	// Restore answers the restore asked for, and the views the lists asked for; the rest is left out.
+	Restore *Restored  `json:"restore,omitempty"`
+	Trash   *TrashView `json:"trash,omitempty"`
 }
 
 // RunningCommand is a nibash call still running; times are Unix milliseconds.
@@ -1130,7 +1133,7 @@ func (s *Server) write(ctx *engine.Context, args arguments, notes *[]string, _ *
 
 // nibashStatus lists what nibash runs for the calling client, every agent of it included: in text, and as a ShellStatus for a client's own
 // display (Claude Code's nib mod polls it).
-func (s *Server) nibashStatus(_ *engine.Context, args arguments, _ *[]string, c *call) (engine.Result, error) {
+func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {
 	tail, err := args.number("tail", 0)
 	if err != nil {
 		return engine.Result{}, err
@@ -1138,6 +1141,17 @@ func (s *Server) nibashStatus(_ *engine.Context, args arguments, _ *[]string, c 
 	lines := 0
 	if tail != nil {
 		lines = *tail
+	}
+	view, _, err := args.text("view")
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if view != "" && !slices.Contains(views, view) {
+		return engine.Result{}, fmt.Errorf("view is one of %s", strings.Join(views, ", "))
+	}
+	restore, _, err := args.text("restore")
+	if err != nil {
+		return engine.Result{}, err
 	}
 	status := s.options.Shell.Status(func(key any) (string, bool) {
 		k, ok := key.(shellKey)
@@ -1149,14 +1163,17 @@ func (s *Server) nibashStatus(_ *engine.Context, args arguments, _ *[]string, c 
 		}
 		return k.agent, true
 	}, lines)
+	if restore != "" {
+		status.Restore = s.restore(ctx, restore)
+	}
+	if view == "trash" {
+		status.Trash = s.trashView(ctx)
+	}
 	return engine.Result{Text: statusText(status, time.Now()), Structured: status}, nil
 }
 
 // statusText is a status as the model reads it: one row per command and job, its output lines after it behind "| ", which no anchor starts with.
 func statusText(status ShellStatus, now time.Time) string {
-	if len(status.Commands) == 0 && len(status.Jobs) == 0 {
-		return "Nothing running, and no job ended in the last 10 minutes."
-	}
 	var lines []string
 	tail := func(rows []string) {
 		for _, row := range rows {
@@ -1178,6 +1195,10 @@ func statusText(status ShellStatus, now time.Time) string {
 		}
 		lines = append(lines, fmt.Sprintf("job %%%d [%s] %s: %s; output: %s", job.ID, job.Agent, state, job.Command, job.Log))
 		tail(job.Tail)
+	}
+	lines = append(lines, viewLines(status)...)
+	if len(lines) == 0 {
+		return "Nothing running, and no job ended in the last 10 minutes."
 	}
 	return strings.Join(lines, "\n")
 }

@@ -80,8 +80,9 @@ describe("MCP server", () => {
     expect(nibash.description).toStartWith("Run a command in nibash, nib's shell")
     expect(client.getInstructions()).toContain("so do cat, head, tail, grep, rg, sed -n and wc in nibash")
     const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
-    // The shell adds about 1.8K characters to the five file tools, its status tool included; the cap leaves room to grow, but every character costs every session.
-    expect(size).toBeLessThanOrEqual(10000)
+    // The shell adds about 1.8K characters to the five file tools, its status tool included, and that tool's three arguments for the
+    // mod's panes another 0.3K; the cap leaves little room to grow, and every character costs every session.
+    expect(size).toBeLessThanOrEqual(10300)
   })
 
   test("nibash's file views anchor edits through MCP, and its program output is plain", async () => {

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, Status } from '../types'
+import type { Command, Job, Status, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -14,9 +14,19 @@ const BAND_ROWS = 3
 
 const status = atom({ plugin: 'nibash', key: 'status' } as const, null)
 const server = atom({ plugin: 'nibash', key: 'server' } as const, 'nib')
+const views = atom({ plugin: 'nibash', key: 'views' } as const, {} as Views)
 
 /** A nibash call of any nib server, as Claude Code names it: mcp__<server>__nibash. */
 const NIBASH = /^mcp__(.+)__nibash$/
+
+/** The panes that show one list of nib's, each opened by the slash command of its name; the list is nibash_status's view of that name. */
+const VIEWS = {
+  trash: 'Show what this session moved to the trash, and put one back',
+} as const
+type ViewName = keyof typeof VIEWS
+const VIEW_NAMES = Object.keys(VIEWS) as ViewName[]
+/** How often the lists of open view panes are asked again. */
+const VIEW_MS = 2000
 
 /** A duration as m:ss, or h:mm:ss from an hour on. */
 export function elapsed(ms: number): string {
@@ -58,6 +68,34 @@ export function parse(content: unknown, at: number): Status | undefined {
   const jobs = v.jobs.map(job)
   if (commands.some(c => c === undefined) || jobs.some(j => j === undefined)) return undefined
   return { commands: commands as Command[], jobs: jobs as Job[], at }
+}
+
+/** The trash a nibash_status answer lists; undefined when it lists none or not in nib's shape. */
+export function parseTrash(content: unknown): TrashEntry[] | undefined {
+  const trash = (content as { trash?: { entries?: unknown } } | null)?.trash
+  if (typeof trash !== 'object' || trash === null || !Array.isArray(trash.entries)) return undefined
+  const entries: TrashEntry[] = []
+  for (const value of trash.entries) {
+    const v = value as Record<string, unknown> | null
+    if (typeof v !== 'object' || v === null || typeof v.path !== 'string' || typeof v.shown !== 'string' || !isNumber(v.when)) return undefined
+    if (v.dir !== undefined && typeof v.dir !== 'boolean') return undefined
+    entries.push({ path: v.path, shown: v.shown, when: v.when, dir: v.dir as boolean | undefined })
+  }
+  return entries
+}
+
+/** What nib said of a restore it was asked for: the line to show; undefined when the answer holds none. */
+export function parseRestored(content: unknown): { done: boolean; message: string } | undefined {
+  const restore = (content as { restore?: Record<string, unknown> } | null)?.restore
+  if (typeof restore !== 'object' || restore === null || typeof restore.done !== 'boolean' || typeof restore.message !== 'string') return undefined
+  return { done: restore.done, message: restore.message }
+}
+
+/** A moment as the time of day. */
+export function clock(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 /** One row of the band or the pane: a running command or a job. */
@@ -165,10 +203,64 @@ function watch($: EngineInterface): void {
   void poll($)
 }
 
+let viewTimer: Timer | undefined
+let viewAsking = false
+
+/** Asks nib for a list, and for a restore when given; the structured answer, undefined when nib gave none in its shape. */
+async function ask($: EngineInterface, view: ViewName, extra: Record<string, unknown> = {}): Promise<unknown> {
+  const answer = await $.mcp.call(await read($, server), 'nibash_status', { view, ...extra })
+  return answer.isError ? undefined : (answer.structuredContent ?? structuredText(answer.content))
+}
+
+/** Asks nib again for the list of every open view pane, and lets the timer go once none is open. */
+async function refresh($: EngineInterface): Promise<void> {
+  if (viewAsking) return
+  viewAsking = true
+  try {
+    const open = (await $.ui.panes()).map(pane => pane.id).filter((id): id is ViewName => (VIEW_NAMES as string[]).includes(id))
+    if (open.length === 0) {
+      viewTimer?.cancel()
+      viewTimer = undefined
+      return
+    }
+    for (const name of open) {
+      const content = await ask($, name)
+      if (name === 'trash') {
+        const trash = parseTrash(content)
+        if (trash !== undefined) await update($, views, v => ({ ...v, trash }))
+      }
+    }
+  } catch {
+    // nib did not answer: the pane keeps what it has.
+  } finally {
+    viewAsking = false
+  }
+}
+
+/** Asks now, and every VIEW_MS while a view pane is open. */
+function watchViews($: EngineInterface): void {
+  viewTimer ??= $.clock.every(VIEW_MS, () => void refresh($))
+  void refresh($)
+}
+
+/** Puts a trashed path back through nib's own trash code, and says what nib answered. */
+async function restore($: EngineInterface, path: string): Promise<void> {
+  try {
+    const content = await ask($, 'trash', { restore: path })
+    const trash = parseTrash(content)
+    const done = parseRestored(content)
+    await update($, views, v => ({ ...v, trash: trash ?? v.trash, note: done?.message }))
+    if (done !== undefined) $.ui.toast(done.message)
+  } catch {
+    $.ui.toast('nib did not answer the restore')
+  }
+}
+
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Show the nibash commands and jobs nib runs, with their output' })
+    for (const name of VIEW_NAMES) await $.command.register({ name, description: VIEWS[name] })
     const started = await next(e)
     // After a reload jobs may still run; one look finds them.
     watch($)
@@ -185,6 +277,19 @@ export const register: Register = on => {
     await $.ui.open({ id: PANE, title: 'nibash', focus: true, closeOnEscape: true })
     return {}
   })
+
+  // Each list is a pane of its own, opened and closed by its slash command as /nibash is.
+  for (const name of VIEW_NAMES) {
+    on('command.run', { command: name }, async $ => {
+      if ((await $.ui.panes()).some(pane => pane.id === name)) {
+        await $.ui.close({ id: name })
+        return {}
+      }
+      await $.ui.open({ id: name, title: name, focus: true, closeOnEscape: true })
+      watchViews($)
+      return {}
+    })
+  }
 
   on('tool.call', async ($, e, next) => {
     const match = NIBASH.exec(e.tool)
@@ -255,6 +360,28 @@ export const register: Register = on => {
                 {line}
               </Text>
             ))}
+          </Box>
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'trash' }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const v = await read($, views)
+    const entries = v.trash ?? []
+    return (
+      <Box flexDirection="column">
+        {v.note ? <Text>{v.note}</Text> : null}
+        {entries.length === 0 ? <Text dimColor>Nothing this session moved to the trash is still there.</Text> : null}
+        {entries.map(entry => (
+          <Box key={`entry:${entry.path}`} flexDirection="row">
+            <Button key={`restore:${entry.path}`} label="restore" onPress={() => void restore($, entry.path)} />
+            <Text wrap="truncate-end">
+              {' '}
+              <Text dimColor>{clock(entry.when)}</Text> {entry.shown}
+              {entry.dir ? <Text dimColor> (directory)</Text> : null}
+            </Text>
           </Box>
         ))}
       </Box>
