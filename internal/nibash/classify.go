@@ -236,11 +236,15 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 			continue
 		}
 		verdicts[i] = c.check(call, stageOut)
-		switch {
-		case stageOut == toBand && verdicts[i] == own:
-			stageOut = toNib
-		case stageOut == toBand && verdicts[i] != later:
-			stageOut = toOther
+		// A stage whose next stage in this pipeline reads it is joined by a link or plain bytes; the last stage writes where the pipeline does,
+		// in band when that is a compound command's pipe into a nib reader, which every command inside it shares.
+		if i < len(list)-1 {
+			switch {
+			case stageOut == toBand && verdicts[i] == own:
+				stageOut = toNib
+			case stageOut == toBand && verdicts[i] != later:
+				stageOut = toOther
+			}
 		}
 		outs[i] = stageOut
 		if verdicts[i] == system {
