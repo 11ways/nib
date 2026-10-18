@@ -137,6 +137,8 @@ type session struct {
 	active map[*call]running
 	// busy are the held files a call's start found changing without the agent, which count as changing until they rest for busyFor.
 	busy map[string]bool
+	// unchecked are the rule files and reasons the agent was told its vague rules went unchecked for.
+	unchecked map[string]bool
 	// marks are how far the agent read each file with skim, by canonical path.
 	marks map[string]logMark
 }
@@ -385,6 +387,10 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	if err != nil {
 		return engine.Result{Text: fmt.Sprintf("nibash: %v\n[exit 2]", err)}, nil
 	}
+	check := s.checkRules(ctx, sess, file, request, tools, view)
+	if check.refusal != "" {
+		return engine.Result{Text: check.refusal + "\n[exit 126]"}, nil
+	}
 	var refused func(string) bool
 	if tools.Sandbox {
 		refused = func(path string) bool {
@@ -393,7 +399,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		}
 	}
 	observePaths(file, view, refused)
-	reports := sess.jobs.finished()
+	reports := append(sess.jobs.finished(), check.notes...)
 	runner, err := sess.newRunner(tools.Directory, view)
 	if err != nil {
 		return engine.Result{}, err

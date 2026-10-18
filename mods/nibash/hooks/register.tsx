@@ -271,7 +271,7 @@ export function rows(s: Status, ended: boolean | number, waiting: readonly strin
   for (const m of s.models ?? []) {
     out.push({
       key: `m:${m.kind}:${m.model}:${m.started}`,
-      label: m.kind === 'summary' || m.kind === 'shape' ? m.kind : 'decider',
+      label: ['summary', 'shape', 'rules'].includes(m.kind) ? m.kind : 'decider',
       time: elapsed(s.at - m.started),
       title: m.model,
       tail: [],

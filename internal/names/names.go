@@ -37,7 +37,10 @@ var valid = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // skipped are folders the automatic walk never enters: build output and package caches.
 var skipped = map[string]bool{"node_modules": true, "build": true, "target": true, "dist": true, "out": true, "bin": true}
 
-// Config is nib.json.
+// ConfigFile is the name of the file nib reads a directory's settings from: its named directories here, nibash's command rules too.
+const ConfigFile = "nib.json"
+
+// Config is nib.json's named directories.
 type Config struct {
 	Directories     map[string]string `json:"directories"`
 	AutoDirectories *bool             `json:"autoDirectories"`
@@ -58,9 +61,9 @@ func Load(directory string) (*Table, []string) {
 	table := &Table{Base: base}
 	var notes []string
 	config := Config{}
-	if data, err := os.ReadFile(filepath.Join(directory, "nib.json")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(directory, ConfigFile)); err == nil {
 		if err := json.Unmarshal(data, &config); err != nil {
-			notes = append(notes, fmt.Sprintf("nib.json is not valid JSON (%v); its named directories were skipped", err))
+			notes = append(notes, fmt.Sprintf(ConfigFile+" is not valid JSON (%v); its named directories were skipped", err))
 			config = Config{}
 		}
 	}

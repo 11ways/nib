@@ -134,7 +134,7 @@ func (o *openRouter) decideWith(ctx context.Context, in Input, model string, hit
 	outcomes := make([]outcome, len(batches))
 	var wait sync.WaitGroup
 	for i, b := range batches {
-		wait.Go(func() { outcomes[i] = o.ask(ctx, in, model, b) })
+		wait.Go(func() { outcomes[i] = o.ask(ctx, model, o.body(in, model, b), b.ids()) })
 	}
 	wait.Wait()
 	choice := Choice{Who: model + " and keywords", Model: true}
@@ -442,19 +442,20 @@ func (b batch) ids() []string {
 	return ids
 }
 
-// ask answers one batch from the cache, else from OpenRouter with one retry for answers that may change on their own.
-func (o *openRouter) ask(ctx context.Context, in Input, model string, b batch) outcome {
-	body, err := json.Marshal(o.body(in, model, b))
+// ask answers one request from the cache, else from OpenRouter with one retry for answers that may change on their own; ids are the
+// questions request asks.
+func (o *openRouter) ask(ctx context.Context, model string, request any, ids []string) outcome {
+	body, err := json.Marshal(request)
 	if err != nil {
 		return outcome{failure: "invalid request"}
 	}
 	key := cacheKey(o.config, body)
-	if answers, ok := o.cache.get(key, b.ids()); ok {
+	if answers, ok := o.cache.get(key, ids); ok {
 		return outcome{answers: answers, usage: Usage{Cached: 1}}
 	}
 	var usage Usage
 	for attempt := 0; ; attempt++ {
-		answered, retryAfter, failure := o.post(ctx, model, body, b.ids(), &usage)
+		answered, retryAfter, failure := o.post(ctx, model, body, ids, &usage)
 		if failure == "" {
 			o.cache.put(key, entry{Version: questionsVersion, Answers: answered.answers, Model: answered.model, InputTokens: answered.tokens, Cost: answered.cost})
 			return outcome{answers: answered.answers, usage: usage}

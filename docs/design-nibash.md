@@ -369,6 +369,27 @@ With `NIB_SANDBOX=1`:
 
 AGENTS.md's sandbox rule gains this paragraph: system directories are readable by real programs.
 
+### 5.9 Command rules
+
+A repository forbids commands in its `nib.json` (`rules`; `names.ConfigFile` is the one place the file is named). An entry
+is exact (`program`, a name or list matched by base name, with an optional `args` regular expression over the arguments
+joined by spaces, and a required `why`) or vague (`rule`, text, with an optional `why`); anything else makes the file's
+rules unreadable, which refuses every call under it, naming the file. `rules.go` checks a parsed call before anything
+runs, background calls included:
+- **What it finds:** every `CallExpr` the AST holds, behind wrappers (`env`, `timeout`, `nice`, `xargs`, `sudo` and
+  others, skipping their options and an option's value), and the scripts of `sh -c` and `eval` whose words are literal.
+  A word known before running (literals, quotes, `~` and `~name/`) is its value; any other keeps its source text, so an
+  `args` pattern cannot match an expansion, which the vague rules can still catch.
+- **Where:** the nearest `nib.json` holding rules at or above the call's directory and at or above each directory a
+  literal `cd` names; a `cd` only roughly says where later commands run, so every found file's rules apply to the whole
+  call. Under the sandbox only files inside the roots count.
+- **Exact rules** refuse at once. **Vague rules** go to the decision model as one `noul` question per rule
+  (`decider.RuleJudge`, the same models, endpoint, cache and observers as the decider; the band shows a `rules` card),
+  with the whole command, its description and its directory; a rule counts as broken from `PickThreshold`. With no
+  decision model, or when every model fails, the command runs with a note, once per agent, file and reason.
+- **A refusal** prints one `[nothing ran: ...]` line per broken rule and `[exit 126]`; nothing starts, no job is made and
+  the finished jobs' reports wait for the next call.
+
 ## 6. Named directories
 
 - **Syntax:** `~name/rest`.

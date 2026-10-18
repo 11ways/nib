@@ -49,6 +49,11 @@ describe('reading nibash_status', () => {
     expect(rows(status, false, ['go test ./...']).map(row => row.time)).toEqual(['0:41'])
     expect(rows(status, false, ['go vet ./...'])).toHaveLength(2)
   })
+
+  test('a model call is labelled by its kind: a rules check, a summary, a shaped log, else the decider', () => {
+    const models = ['rules', 'summary', 'shape', 'decider'].map(kind => ({ kind, model: 'm', started: 40_000 }))
+    expect(rows({ commands: [], jobs: [], models, at: 43_000 }, false).map(row => row.label)).toEqual(['rules', 'summary', 'shape', 'decider'])
+  })
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {

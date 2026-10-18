@@ -764,10 +764,39 @@ same way.
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
 exit status, the lines of a file `skim` reads and the rows between the kept start and end of each output long
 enough to be cut. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in
-it; setting the variable is consent to that. File rows of nib's own commands, the log path, the working directory and
-anything the command did not print are never sent. Every request asks for zero data retention and no data collection
+it; setting the variable is consent to that. A command checked against [vague rules](#command-rules) sends the command
+as written, its `description`, its directory and those rules. Otherwise file rows of nib's own commands, the log path,
+the working directory and anything the command did not print are never sent. Every request asks for zero data retention
+and no data collection
 (`provider: {"zdr": true, "data_collection": "deny"}`); OpenRouter's own prompt logging is an account setting nib cannot
 override, so check it in the [privacy settings](https://openrouter.ai/settings/privacy).
+
+#### Command rules
+
+A repository can forbid commands in its `nib.json`, for agents that should use a project's own tools instead of running
+builds and tests through nibash:
+
+```json
+{"rules": [
+  {"program": "zenit-dev", "args": "^(build|test)( |$)", "why": "builds and tests go through the zd_build / zd_test tools"},
+  {"program": ["gradlew", "gradle"], "why": "Gradle runs through zenit-dev's MCP tools"},
+  {"rule": "Do not run full test suites or long builds directly.", "why": "Use the zenit-dev MCP tools."}
+]}
+```
+
+Before a call runs, nibash finds every command it may run: in pipelines, lists, loops, subshells and `$(...)`, behind
+`env`, `timeout`, `nice`, `xargs` and similar wrappers, and inside `bash -c` and `eval` strings it can read. A program
+matches by its base name, so `~/tools/zenit-dev` is `zenit-dev`; `args`, a regular expression, is matched against its
+arguments joined by spaces, a word nibash cannot know before running (`$cmd`) standing as written. An exact rule
+(`program`) refuses a matching call always. A vague rule (`rule`) is judged by the decision model
+(`NIB_DECIDER=openrouter`) against the whole command and its `description`; its answers are cached, so the same command
+asks once. A refused call runs nothing, background calls included, and prints one line per broken rule,
+`[nothing ran: zenit-dev build is against a rule in /path/nib.json: builds and tests go through the zd_build / zd_test tools]`,
+then `[exit 126]`; the agent cannot override it. Without a decision model, or when it fails, a vague rule is not
+checked: the command runs, and the agent is told so once per file and reason. The rules that apply are those of the
+nearest `nib.json` holding rules at or above the call's directory and at or above every directory the call `cd`s into by
+a literal path; they apply to the whole call. Under `NIB_SANDBOX=1` only a `nib.json` inside the roots counts. A
+`nib.json` whose rules cannot be read refuses every call under it, naming the file and the error.
 
 ### Named directories
 
