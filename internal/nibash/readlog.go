@@ -120,7 +120,7 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 	}
 	echoed := false
 	for _, w := range windows {
-		texts, echo := shapeWindow(ctx, lines[w[0]-1-base:w[1]-base], w[0]-1, file.Display, d)
+		texts, echo := shapeLines(ctx, lines[w[0]-1-base:w[1]-base], d, saved{path: file.Display, lines: w[1] - w[0] + 1, holds: w[1] - w[0] + 1, file: true, base: w[0] - 1})
 		out = append(out, texts...)
 		echoed = echoed || echo
 	}
@@ -137,9 +137,9 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 	return strings.Join(out, "\n"), nil
 }
 
-// shapeWindow is lines, the file's lines from base+1 on, as rows numbered from 1 that shape reads as a log of their own, while every note
-// and cut row names the file's line numbers.
-func shapeWindow(ctx context.Context, lines []string, base int, display string, d decision) ([]string, bool) {
+// shapeLines is lines as rows numbered from 1 that shape reads as the log of their own, while every note and cut row numbers them from
+// log.base on, as the file does.
+func shapeLines(ctx context.Context, lines []string, d decision, log saved) ([]string, bool) {
 	if len(lines) == 0 {
 		return nil, false
 	}
@@ -152,12 +152,10 @@ func shapeWindow(ctx context.Context, lines []string, base int, display string, 
 	items, echoed := plainItems(plain, at, make([]*listedLine, len(lines)))
 	rows := make([]row, len(items))
 	for i, it := range items {
-		rows[i] = plainRowAt(it.text, base+it.first, it.first, it.last, nil)
+		rows[i] = plainRowAt(it.text, log.base+it.first, it.first, it.last, nil)
 	}
 	raw := strings.Join(lines, "\n")
-	rows, footer := fit(ctx, rows, raw, d, func() saved {
-		return saved{path: display, lines: len(lines), holds: len(lines), file: true, base: base}
-	})
+	rows, footer := fit(ctx, rows, raw, d, func() saved { return log })
 	texts := make([]string, 0, len(rows)+len(footer))
 	for _, r := range rows {
 		texts = append(texts, r.text)

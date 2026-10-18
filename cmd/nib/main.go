@@ -28,6 +28,8 @@ const usage = `nib: hashline file tools and a shell for coding agents
   nib setup            register nib in this folder (.mcp.json, .claude/settings.local.json, opencode.json); --user for every project, --dry-run to preview,
                        --provider NAME=PROGRAM to host a provider (NAME= stops hosting it), --decider KIND[:MODEL,...], --summary LIST and --opencode PROGRAM for every nib
   nib hook             Claude Code PreToolUse hook: refuses the built-in Read for files nib reads better, and tells nib's server which subagent calls it
+  nib shape --log PATH --purpose TEXT [--exit N] [--command TEXT]
+                       print what nibash would show of a program whose whole output is the log at PATH, for tools that keep their own logs
   nib --version        print the version`
 
 // Keep the release name stable even when Go stamps an untagged checkout with a pseudo-version.
@@ -70,6 +72,8 @@ func main() {
 			os.Exit(runHook())
 		case "setup":
 			os.Exit(runSetup(os.Args[2:]))
+		case "shape":
+			os.Exit(runShape(os.Args[2:]))
 		case "--version", "-v":
 			fmt.Println("nib " + version())
 			return
@@ -93,13 +97,7 @@ func main() {
 	for _, note := range notes {
 		fmt.Fprintln(os.Stderr, "nib: "+note)
 	}
-	// A decider choice nib setup remembered applies unless this server's environment makes one of its own.
-	home, _ := os.UserHomeDir()
-	saved, err := setup.RememberedDecider(home, os.Getenv)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "nib: the decider choice nib setup remembered is not used:", err)
-	}
-	choice, err := decider.Parse(decider.Layered(os.Getenv, saved))
+	choice, err := deciderChoice()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nib:", err)
 		os.Exit(1)
@@ -129,6 +127,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "nib:", err)
 		os.Exit(1)
 	}
+}
+
+// deciderChoice is the decider and summarizers this environment chooses: a choice nib setup remembered applies unless the environment makes one
+// of its own.
+func deciderChoice() (decider.Config, error) {
+	home, _ := os.UserHomeDir()
+	saved, err := setup.RememberedDecider(home, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nib: the decider choice nib setup remembered is not used:", err)
+	}
+	return decider.Parse(decider.Layered(os.Getenv, saved))
 }
 
 // serverFlags reads the server's flags: --provider NAME=PROGRAM or --provider=NAME=PROGRAM, each name once.

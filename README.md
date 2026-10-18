@@ -738,6 +738,20 @@ start with is not remembered, and the key never is: nib finds it
 as above. Since claude-capture and zenit-workspace's bootstrap run `nib setup` anyway, the choice made once on a machine
 holds for every Claude Code profile and every OpenCode session there.
 
+**Logs other tools keep.** A build or test wrapper that saves its program's output can hand the agent what nibash would
+have shown of it, so the agent needs no second call to find the cause:
+
+```sh
+nib shape --log PATH --purpose TEXT [--exit N] [--command TEXT]
+```
+
+prints to stdout what nibash shows at the model's end of a program run as `--command` (default `cat PATH`), with the
+call's description `--purpose`, that ended with status `--exit` (default 0) and whose whole output is the file: short
+output whole, long output cut by the same deciders, or a `<summary>` and the lines it points at, with the same
+configuration as the server. Its notes name `PATH` as the whole output, no copy is made, and no `[exit N]` line is
+printed, since the wrapper states its own verdict. Rows are plain, never anchors. Bad arguments and an unreadable log
+exit 2 with one line on stderr; a decider choice nib would refuse to start with exits 1.
+
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
 exit status, the lines of a file `skim` reads and the rows between the kept start and end of each output long
 enough to be cut. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in
@@ -1297,7 +1311,7 @@ bun bench/run.ts --recheck    # check stored runs again whose check changed, the
 
 | File | Responsibility |
 | --- | --- |
-| `cmd/nib/` | Entrypoint: the stdio server, `nib setup`, `nib hook`, `nib --version` |
+| `cmd/nib/` | Entrypoint: the stdio server, `nib setup`, `nib hook`, `nib shape`, `nib --version` |
 | `internal/server/` | MCP tools, model-facing descriptions and schemas, argument recovery and notes, roots and elicitation |
 | `internal/engine/` | Reads (selectors, outlines, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging and atomic publication, writes, row maps, refusals and reapply tokens, workspace checks |
 | `internal/nibash/` | The shell: classification of nib's own commands, record links, the commands, the terminal sink and rendering, real programs, jobs, the sandbox |

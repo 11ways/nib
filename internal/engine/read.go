@@ -254,13 +254,13 @@ type PlainLine struct {
 
 var digits = regexp.MustCompile(`\d+`)
 
-// echoLesson explains the markers of a recurring block, once per agent.
-const echoLesson = "[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]"
+// EchoLesson explains the markers of a recurring block, once per agent.
+const EchoLesson = "[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]"
 
-// EchoNote is echoLesson the first time an agent sees those markers, else nothing.
+// EchoNote is EchoLesson the first time an agent sees those markers, else nothing.
 func (e *Engine) EchoNote(ctx *Context) []string {
 	if e.Store.Teach(ctx.Session, "echo") {
-		return []string{echoLesson}
+		return []string{EchoLesson}
 	}
 	return nil
 }

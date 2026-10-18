@@ -511,3 +511,14 @@ offset, so the window is what was added, numbered after the lines already read; 
 line, answers with one line. A smaller file or another start reads whole again and says so. A selector neither uses nor
 moves the mark. The shell session is per agent, so a subagent's reads never move its parent's mark, and closing it
 forgets the marks.
+
+## 19. nib shape: logs other tools keep
+
+A tool that runs builds or tests for agents and keeps their output in its own log (zenit-dev's MCP tools are the first)
+can give the agent what nibash would have shown, with no second call: `nib shape --log PATH --purpose TEXT [--exit N]
+[--command TEXT]` prints `nibash.ShapeLog` of the file. It is the same path as one `skim` window, `shapeLines`, with
+a `saved` that is nibash's own rather than skim's: notes say `nibash`, the whole output is `PATH` itself (no copy), and
+numbers start at 1. The decision gets `--command` (default `cat PATH`), `--purpose` as the call's description and
+`--exit`, so the models read what they would for the run itself. No `[exit N]` line is printed, since the tool states its
+own verdict; with no agent known, a recurring block's markers are always explained. The decider and summarizers come
+from the same environment and remembered choice the server reads (`deciderChoice` in `cmd/nib`).

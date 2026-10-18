@@ -29,7 +29,7 @@ claude plugin validate mods/nibash && claude plugin test mods/nibash   # the Cla
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib --version` |
+| `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib shape` (a saved log shaped as nibash shows long output), `nib --version` |
 | `internal/server/` | MCP tool registration, model-facing descriptions and lean schemas, argument recovery with notes, roots and elicitation |
 | `internal/engine/` | reads (selectors, outlines, skip rules, budget, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging (checks, SUB, blocks, MV, CP), refusals and reapply tokens, row maps, what counts as repeated output (`Repeats`), atomic publication, writes, workspace checks, the API nibash's commands read files through, files `skim` reads, and that tool's name (`engine.Skim`, its one declaration: a rename is that edit plus the docs) |
 | `internal/syntax/` | tree-sitter parsing: the grammars by file extension (the one home of that mapping), each language's declaration rules, what a file declares (`path:Name` reads), where a block ends (`PUT N*:`), and the decoded-grammar cache limits |
@@ -52,7 +52,7 @@ claude plugin validate mods/nibash && claude plugin test mods/nibash   # the Cla
 ## Rules
 
 - Every behavior change needs a test. Tests use temporary directories; never touch real user files.
-- A decider only chooses among real rows of plain output, never nib's own file rows; a file `skim` reads is such output too, its lines plain rows that are never anchors; every gap names the log lines it leaves out, and the closing note says who chose. A summary is the one text of a model's the agent sees: one `<summary>` element, beside nib's own counts and a way to read the full log, and the rows it points at are real log lines inside what the model was given. Output leaves the machine only with `NIB_DECIDER=openrouter` or `NIB_DECIDER_SUMMARY`; the decision model under `NIB_SANDBOX=1` needs `NIB_DECIDER_SANDBOX=1` as well, and any other combination stops nib at startup.
+- A decider only chooses among real rows of plain output, never nib's own file rows; a file `skim` reads and a log given to `nib shape` are such output too, their lines plain rows that are never anchors; every gap names the log lines it leaves out, and the closing note says who chose. A summary is the one text of a model's the agent sees: one `<summary>` element, beside nib's own counts and a way to read the full log, and the rows it points at are real log lines inside what the model was given. Output leaves the machine only with `NIB_DECIDER=openrouter` or `NIB_DECIDER_SUMMARY`; the decision model under `NIB_SANDBOX=1` needs `NIB_DECIDER_SANDBOX=1` as well, and any other combination stops nib at startup.
 - The file tag must stay identical to oh-my-pi's `file_hash` (4 uppercase hex: xxHash32 of BOM-free text with trailing spaces, tabs and CRs stripped per line, masked to 16 bits). A test pins known vectors.
 - Tool descriptions and the server `instructions` must stay under 2048 characters (clients truncate them); a test checks this, and the size of all definitions together.
 - Writes must stay atomic (stage, then rename or exclusive link), preserve BOM, line endings, final newline, mode and ownership, and refuse hardlinked targets.
