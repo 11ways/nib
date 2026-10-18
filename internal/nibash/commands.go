@@ -339,17 +339,8 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 		inv.out.emit(r)
 	}
 	if inv.in.all != nil && total > len(kept) && !p.from {
-		path := inv.call.logs.save(inv.in.all.String()).path
-		where := ""
-		if path != "" {
-			where = " in " + path
-		}
-		earlier := total - len(kept)
-		s := "s"
-		if earlier == 1 {
-			s = ""
-		}
-		inv.out.sink.fact(func() string { return fmt.Sprintf("[%s earlier line%s%s]", thousands(earlier), s, where) })
+		raw := inv.in.all.String()
+		inv.out.sink.addTail(&tailed{raw: raw, log: inv.call.logs.save(raw), total: total, shown: len(kept)})
 	}
 }
 

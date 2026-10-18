@@ -277,6 +277,8 @@ When the command finishes or its time runs out, the sink is rendered once:
     the renderer adds `[20 of 312 matches shown, from 4 of 17 files]` ("at least" when cut short).
   - A real program before `head` is closed at once, as in bash, and the fact covers only what `head` received.
   - `tail` of a program's output keeps all of it in a log and says what it left out: `[4,762 earlier lines in LOG]`.
+    With a decision model or a summarizer, the lines it left out may first be checked by the decider and the ones the
+    call needs added after the tail's own output (`docs/design-decider.md`, section 17).
 - **Exit status:** a nonzero exit status ends the output with `[exit 1]`.
 - **Files changed by the command** [missing]:
   - Before the call, nibash notes size and mtime of every file the session's store holds. Every file a redirect opens

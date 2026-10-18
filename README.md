@@ -527,7 +527,8 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
 - **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`); `head` after a nib
   grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s
   after `head` stops reading); `tail` of a program's output keeps all of it in a log and names it with the lines left
-  out (`[4,762 earlier lines in <log>]`).
+  out (`[4,762 earlier lines in <log>]`); with a decision model or a summarizer, those lines may be checked first
+  ([below](#long-output-and-deciders)).
 - **Output.** Color codes go, a `\r` progress line keeps its final text, invalid UTF-8 shows as U+FFFD and binary output
   only as its size. Plain output shaped like rows (`N:` or `N~`, as `grep -n` through a real program prints) that
   follows a file's rows is set apart by a line of nib's own, `[plain program output follows, not anchors]`. Plain output
@@ -614,6 +615,21 @@ cut find cases of the research set (`research/decider-eval/` on the research bra
 `anthropic/claude-haiku-5.5` on the excerpt (`@reasoning=default`) covered every needed line in 18, in 1.4 and 3.1 s,
 and `claude-p:haiku` in 17, in about 5 s; the offline check (`go test ./internal/nibash -run Captures -v`) measures
 `deepseek/deepseek-v4.1-flash-1017` with reasoning off.
+
+**Tails.** `cmd | tail -N` at the model's end hands only N lines to the cut, far under any limit, so a failure printed
+before them would cost the agent another call. With a decision model or a summarizer configured, when the lines a
+`tail` of a real program's output left out are past the summary limits (150 lines, 12 KB, lower when they repeat) and
+the call has a description or failed, the decider reads those lines, deduplicated, with the call's description, as it
+would read a long output's middle. The tail's own output stays as it is. When the decider picks nothing (the usual case)
+the note is the plain `[N earlier lines in LOG]`; when it picks some, the note becomes
+`[N earlier lines in LOG; MODEL and keywords chose these of them for your description:]`, followed by those log lines
+with 3 lines around each, best first, up to 30 rows and 8 KB (a passage that does not fit whole shows its start), and
+gaps named as above. Picks over 30 rows, with a summarizer, become a `<summary>` of the whole output and the lines
+it points at that the tail left out, under `[...; a summary of the whole output, then the lines it points at that the
+tail left out:]`. A decision model that fails adds `not checked, since the decision model failed (...)` to the note.
+The keyword decider alone never checks a tail, nor does nib check `head` (the program before it is closed at once, as
+in bash, so what follows was never printed) or a `tail` of a file or of nib's own commands. The exit status a program
+before the pipe returned is not known to nib (the pipeline's is `tail`'s), so only the call's own status counts.
 
 **What the models read.** The decision model and the summary model read an output deduplicated: each line that occurs
 more than once and each block that recurs is defined once, as `@L1 = TEXT` or `@B1 =` and its lines, and every

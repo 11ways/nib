@@ -441,3 +441,30 @@ does not track them) or by content (100 lines or more shrinking 2 times or more)
 Ratios of nib's tracked files top out at 1.42 (`internal/patch/testdata/corpus.json`); the recorded logs run from 1.0
 (git logs, listings) to 14 (build-log), gradle-browser 2.94, the Go test logs 1.9 to 2.4, so content alone catches the
 test and build logs, and the name rule the rest.
+
+## 17. Tails
+
+An agent that pipes a long run into `tail -N` hands the cut only N rows, so neither the decider nor the summarizer ever
+saw such output, and a cause printed before the tail cost another call. nibash's `tail` of a real program's output at
+the model's end already kept everything it read in a log; it now hands the sink a `tailed` (the log's text, its saved
+path, how many lines it read and showed), whose note is a fact, and `sink.render` calls `tailed.check` before the facts
+are written.
+
+`check` acts only with a decision model or a summarizer (the keyword decider alone would add keyword hits to output
+the agent filtered on purpose), only when the lines the tail left out are past `summaryDue`'s limits, and only when the
+call has a description, failed or timed out, as for a summary. It asks `choose`, the function `shape` uses for a long
+output's middle, about the lines the tail left out (the decision model reads the whole log's deduplicated entries that
+cover them), so the candidates are those lines and the tail plays the part of the kept end. Picks rated
+`PickThreshold` or more go in `novelFirst` order, a pick mostly like the tail's own lines waiting, each widened by
+`pickContext` lines. No pick leaves the plain note. Up to `tailAdded` (30) rows and `tailAddedBytes` (8 KB) of picks
+follow the tail's output under one header naming the left-out lines, the log, who chose and for what; gaps between
+them are named as everywhere, those before the first and after the last are left to the header. Past 30 rows with a
+summarizer, the summarizer reads the whole log (all entries, or past `excerptLines` the excerpt of the picks, the last
+100 entries, the tail included) and `summaryPassages` shows the passages it points at that the tail left out; one it
+points at in the tail is not shown twice. A failed summary falls to the capped rows with `no summary`; a failed model
+to the plain note with the failure. A judgement that every line counts says so instead of adding rows.
+
+Two halves of the first idea were dropped. `head` is not checked: the program before it is closed once `head` has its
+lines, as in bash, so the rest was never printed, and reading on would change what the command does. And the exit
+status of the program before the pipe is not a trigger: the interpreter keeps only the pipeline's status, `tail`'s,
+and matching a real program to the pipe a `tail` reads is not reliable, so the call's own status is what counts.

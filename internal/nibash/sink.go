@@ -68,6 +68,8 @@ type sink struct {
 	entries  []entry
 	facts    []func() string
 	detached *rawLog
+	// tails are the tails of program output at the model's end that left lines out, which render may check.
+	tails []*tailed
 }
 
 type entry struct {
@@ -150,6 +152,14 @@ func (s *sink) fact(f func() string) {
 	s.facts = append(s.facts, f)
 }
 
+// addTail adds a tail that left lines of program output out: its note is a fact, which render checks first.
+func (s *sink) addTail(t *tailed) {
+	s.mu.Lock()
+	s.tails = append(s.tails, t)
+	s.mu.Unlock()
+	s.fact(t.note)
+}
+
 // item is one rendered unit before budgeting: an anchored row of a file, or a plain line. first and last are the log lines it stands for.
 type item struct {
 	source      *engine.Source
@@ -198,7 +208,7 @@ type decision struct {
 // the budget cuts it or a row is too long to show whole.
 func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory, d decision) string {
 	s.mu.Lock()
-	facts := s.facts
+	facts, tails := s.facts, s.tails
 	s.mu.Unlock()
 	rows, raw, echoed := s.collect(e, ctx)
 	rows, footer := fit(ctx.Ctx, rows, raw, logs, d)
@@ -227,6 +237,9 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		texts = append(texts, e.EchoNote(ctx)...)
 	}
 	out := strings.Join(texts, "\n")
+	for _, t := range tails {
+		t.check(ctx.Ctx, d)
+	}
 	var extra []string
 	for _, f := range facts {
 		if text := f(); text != "" {
@@ -256,10 +269,15 @@ func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d deci
 	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
+	return rows, []string{cutFooter(log)}
+}
+
+// cutFooter explains plain rows cut at rowLimit, numbered with their line in the log.
+func cutFooter(log saved) string {
 	if log.path == "" {
-		return rows, []string{"[cut rows: N is the row's line in the whole output, which could not be saved]"}
+		return "[cut rows: N is the row's line in the whole output, which could not be saved]"
 	}
-	return rows, []string{fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)}
+	return fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)
 }
 
 // summaryDue says whether output gets a summary: past summaryLines or summaryBytes, or past lower limits the more it shrinks under dedupe.
@@ -418,12 +436,7 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 				rows = append(rows, row{text: plainFollows, header: -1})
 			}
 			current = nil
-			text, capped := it.text, false
-			if js.Len(text) > rowLimit {
-				text, _ = engine.Row(it.first, text, rowLimit)
-				capped = true
-			}
-			rows = append(rows, row{text: text, header: -1, plain: true, capped: capped, listed: it.listed, first: it.first, last: it.last})
+			rows = append(rows, plainRow(it.text, it.first, it.last, it.listed))
 			continue
 		}
 		source := it.source
@@ -460,6 +473,17 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		rows = append(rows, row{text: fmt.Sprintf("%s%d|%s", it.marker, it.line, shown), header: headerAt, first: it.first, last: it.first})
 	}
 	return heldRows(e, ctx, rows)
+}
+
+// plainRow is a row of program output standing for log lines first to last; one too long to show whole is cut in read's bracketed form,
+// numbered with its log line, so it never looks like an anchor.
+func plainRow(text string, first, last int, listed *listedLine) row {
+	capped := false
+	if js.Len(text) > rowLimit {
+		text, _ = engine.Row(first, text, rowLimit)
+		capped = true
+	}
+	return row{text: text, header: -1, plain: true, capped: capped, listed: listed, first: first, last: last}
 }
 
 // heldRows puts each run of anchored rows the agent already holds as one held marker that stands for their log lines.

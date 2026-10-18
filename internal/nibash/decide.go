@@ -39,24 +39,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		entries, legend = dedupe(lines)
 	}
 	decide := func() decider.Choice {
-		middle := rows[decidedHead : len(rows)-decidedTail]
-		in := decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut}
-		first, last := logLines(middle)
-		if !model || first == 0 {
-			for _, r := range middle {
-				in.Rows = append(in.Rows, r.text)
-			}
-			return d.decider.Decide(ctx, in)
-		}
-		var mid []decider.Entry
-		for _, e := range entries {
-			if e.Last >= first && e.First <= last {
-				mid = append(mid, e)
-				in.Rows = append(in.Rows, e.Text)
-			}
-		}
-		in.Legend = legend
-		return onRows(d.decider.Decide(ctx, in), mid, middle)
+		return choose(ctx, rows[decidedHead:len(rows)-decidedTail], entries, legend, d, model)
 	}
 	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
 	cut := func(choice *decider.Choice, notes ...string) []row {
@@ -106,10 +89,40 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
 		return cut(&choice)
 	}
-	if s, ok := ask(excerpt(rows, choice, entries)); ok {
+	if s, ok := ask(excerpt(middleOf(rows), choice, entries)); ok {
 		return summarized(rows, s, log)
 	}
 	return cut(&choice, "no summary")
+}
+
+// middleOf is the rows a decider chooses among, between the start and end kept anyway; none when output is too short to have been decided.
+func middleOf(rows []row) []row {
+	if len(rows) <= headRows+tailRows {
+		return nil
+	}
+	return rows[decidedHead : len(rows)-decidedTail]
+}
+
+// choose asks the decider which of middle, rows of plain output, the call needs; a decision model reads them as entries, the deduplicated
+// log lines they stand for, and its answer is turned back into ranges of middle.
+func choose(ctx context.Context, middle []row, entries []decider.Entry, legend decider.Legend, d decision, model bool) decider.Choice {
+	in := decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut}
+	first, last := logLines(middle)
+	if !model || first == 0 {
+		for _, r := range middle {
+			in.Rows = append(in.Rows, r.text)
+		}
+		return d.decider.Decide(ctx, in)
+	}
+	var mid []decider.Entry
+	for _, e := range entries {
+		if e.Last >= first && e.First <= last {
+			mid = append(mid, e)
+			in.Rows = append(in.Rows, e.Text)
+		}
+	}
+	in.Legend = legend
+	return onRows(d.decider.Decide(ctx, in), mid, middle)
 }
 
 // onRows turns a choice made over the deduplicated entries of the middle rows into one over the rows: each range covers the rows its entries'
@@ -145,8 +158,8 @@ func onRows(choice decider.Choice, entries []decider.Entry, middle []row) decide
 }
 
 // excerpt is the entries a summarizer reads: the first excerptHead and last excerptTail entries, and those of the passages a decider
-// picked, widened by excerptContext lines, in novelFirst order while they fit excerptLines entries.
-func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decider.Entry {
+// picked among middle, widened by excerptContext lines, in novelFirst order while they fit excerptLines entries.
+func excerpt(middle []row, choice decider.Choice, entries []decider.Entry) []decider.Entry {
 	lines := 0
 	if len(entries) > 0 {
 		lines = entries[len(entries)-1].Last
@@ -167,7 +180,7 @@ func excerpt(rows []row, choice decider.Choice, entries []decider.Entry) []decid
 	}
 	// widened is the entries a pick stands for with excerptContext lines around it; none for a pick outside the log.
 	widened := func(p decider.Pick) []int {
-		first, last := logLines(rows[decidedHead+p.Start : decidedHead+p.End])
+		first, last := logLines(middle[p.Start:p.End])
 		if first == 0 {
 			return nil
 		}
@@ -270,10 +283,16 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// summarized shows a checked summary in place of a decider's cut: the summary as a <summary> element, then every passage it points at,
-// each widened by summaryContext lines and given a share of summaryRows; a passage longer than its share shows its start and end, with
-// the read of what it leaves out in between.
+// summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note.
 func summarized(rows []row, s decider.Summary, log saved) []row {
+	out, shown := summaryPassages(rows, s, log)
+	return append(out, row{text: closing(shown, log, nil), header: -1})
+}
+
+// summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
+// a share of summaryRows; a passage longer than its share shows its start and end, with the read of what it leaves out in between. shown
+// counts the passages' rows.
+func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
 	for _, r := range s.Ranges {
@@ -291,7 +310,6 @@ func summarized(rows []row, s decider.Summary, log saved) []row {
 	shares := shared(passages, summaryRows, summaryShare)
 	keep := make([]bool, len(rows))
 	notes := map[int]string{}
-	shown := 0
 	for k, add := range passages {
 		share := shares[k]
 		if share >= len(add) {
@@ -314,8 +332,8 @@ func summarized(rows []row, s decider.Summary, log saved) []row {
 			notes[add[head]] = note + "]"
 		}
 	}
-	out := append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes)...)
-	return append(out, row{text: closing(shown, log, nil), header: -1})
+	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes)...)
+	return out, shown
 }
 
 // shared splits budget rows among passages of the given sizes: one that fits an even split of what is left keeps all its rows, and the rest
