@@ -26,7 +26,7 @@ const usage = `nib: hashline file tools and a shell for coding agents
   nib --provider NAME=PROGRAM
                        also offer the tools of PROGRAM (run as PROGRAM nib-provider) as NAME_TOOL; repeatable
   nib setup            register nib in this folder (.mcp.json, .claude/settings.local.json, opencode.json); --user for every project, --dry-run to preview,
-                       --provider NAME=PROGRAM to host a provider (NAME= stops hosting it), --decider KIND[:MODEL,...] and --summary LIST for every nib
+                       --provider NAME=PROGRAM to host a provider (NAME= stops hosting it), --decider KIND[:MODEL,...], --summary LIST and --opencode PROGRAM for every nib
   nib hook             Claude Code PreToolUse hook: refuses the built-in Read for files nib reads better, and tells nib's server which subagent calls it
   nib --version        print the version`
 

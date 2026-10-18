@@ -16,15 +16,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
 )
 
 const (
 	DefaultSummaryURL     = "https://openrouter.ai/api/v1/chat/completions"
 	DefaultSummaryTimeout = 30 * time.Second
-	// claudePrefix marks an entry run by Claude Code's own `claude -p`, on the user's login.
-	claudePrefix = "claude-p:"
+	// openCodeAgent is the one agent an OpenCode run is given: the summary prompt, every permission denied, so it has no tools.
+	openCodeAgent = "nib-summary"
 	// summaryRowChars cuts each numbered row a summarizer reads.
 	summaryRowChars = 300
 	// maxRanges and maxRangeLines bound what an answer may point at; longer ranges are dropped, not shortened.
@@ -37,17 +37,52 @@ const (
 // The values an entry's reasoning option takes; "off" is the default, "default" sends none and leaves it to the model.
 var reasonings = []string{"off", "default", "minimal", "low", "medium", "high"}
 
-// SummaryEntry is one summarizer of NIB_DECIDER_SUMMARY: an OpenRouter chat model, or `claude-p:MODEL`, with its options.
+// program is a summarizer run as a program on the user's own login, named by an entry's prefix NAME:; an entry without one is an OpenRouter
+// chat model.
+type program struct {
+	name string
+	// form is how an error names such an entry.
+	form string
+	// slash says the model is PROVIDER/MODEL.
+	slash bool
+	// onPath is the program parsing needs on PATH; "" when it is looked for only when it runs.
+	onPath string
+	run    func(s *summaries, ctx context.Context, e SummaryEntry, prompt, text string, usage *Usage) (string, string)
+}
+
+// programs are every program an entry may name; the only list of them.
+var programs = []program{
+	{name: "claude-p", form: "claude-p:MODEL", onPath: "claude", run: (*summaries).claude},
+	{name: "opencode", form: "opencode:PROVIDER/MODEL", slash: true, run: (*summaries).opencode},
+}
+
+// SummaryEntry is one summarizer of NIB_DECIDER_SUMMARY: an OpenRouter chat model, or a program's, with its options.
 type SummaryEntry struct {
 	// Spec is the entry as written, which notes name it by.
-	Spec      string
-	Claude    bool
+	Spec string
+	// Program is the name of the program that runs it, "" for an OpenRouter model.
+	Program   string
 	Model     string
 	Reasoning string
 }
 
-// parseSummary reads a comma separated list of entries, each MODEL or claude-p:MODEL, an OpenRouter one optionally followed by @reasoning=VALUE.
+// program is the program that runs e, nil for an OpenRouter model.
+func (e SummaryEntry) program() *program {
+	for i := range programs {
+		if programs[i].name == e.Program {
+			return &programs[i]
+		}
+	}
+	return nil
+}
+
+// parseSummary reads a comma separated list of entries, each MODEL or a program's NAME:MODEL, an OpenRouter one optionally followed by
+// @reasoning=VALUE.
 func parseSummary(list string) ([]SummaryEntry, error) {
+	forms := []string{"an OpenRouter model id (vendor/model)"}
+	for _, p := range programs {
+		forms = append(forms, p.form)
+	}
 	var entries []SummaryEntry
 	for _, spec := range strings.Split(list, ",") {
 		spec = strings.TrimSpace(spec)
@@ -56,23 +91,26 @@ func parseSummary(list string) ([]SummaryEntry, error) {
 		}
 		parts := strings.Split(spec, "@")
 		e := SummaryEntry{Spec: spec, Model: parts[0], Reasoning: "off"}
-		if after, ok := strings.CutPrefix(e.Model, claudePrefix); ok {
-			e.Claude, e.Model = true, after
+		for _, p := range programs {
+			if after, ok := strings.CutPrefix(e.Model, p.name+":"); ok {
+				e.Program, e.Model = p.name, after
+			}
 		}
-		if e.Model == "" || strings.ContainsAny(e.Model, " \t") || !e.Claude && !strings.Contains(e.Model, "/") {
-			return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q is neither an OpenRouter model id (vendor/model) nor claude-p:MODEL", spec)
+		p := e.program()
+		if e.Model == "" || strings.ContainsAny(e.Model, " \t") || (p == nil || p.slash) && !strings.Contains(e.Model, "/") {
+			return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q is none of %s", spec, strings.Join(forms, ", "))
 		}
 		for _, option := range parts[1:] {
 			name, value, _ := strings.Cut(option, "=")
-			if name != "reasoning" || !slices.Contains(reasonings, value) || e.Claude {
+			if name != "reasoning" || !slices.Contains(reasonings, value) || p != nil {
 				return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q has option %q; the one option is @reasoning=%s, for OpenRouter models", spec, option,
 					strings.Join(reasonings, "|"))
 			}
 			e.Reasoning = value
 		}
-		if e.Claude {
-			if _, err := exec.LookPath("claude"); err != nil {
-				return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q needs the claude program on PATH", spec)
+		if p != nil && p.onPath != "" {
+			if _, err := exec.LookPath(p.onPath); err != nil {
+				return nil, fmt.Errorf("NIB_DECIDER_SUMMARY entry %q needs the %s program on PATH", spec, p.onPath)
 			}
 		}
 		entries = append(entries, e)
@@ -139,6 +177,8 @@ type summaries struct {
 	config Config
 	client *http.Client
 	cache  *cache
+	// opencodes are the OpenCode programs found to be OpenCode 2, so each is asked its version once.
+	opencodes sync.Map
 }
 
 // answer is a summarizer's reply as JSON, read leniently since models write numbers as strings at times.
@@ -182,8 +222,8 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 	} else {
 		var failure string
 		end := s.begin("summary", e.Spec)
-		if e.Claude {
-			reply, failure = s.claude(ctx, e, prompt, text, &usage)
+		if p := e.program(); p != nil {
+			reply, failure = p.run(s, ctx, e, prompt, text, &usage)
 		} else {
 			reply, failure = s.chat(ctx, e, prompt, text, &usage)
 		}
@@ -462,14 +502,10 @@ func (s *summaries) claude(ctx context.Context, e SummaryEntry, prompt, text str
 		"--no-session-persistence", "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands")
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(text)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	// A program of its own that still holds claude's output open cannot keep the call waiting past the kill.
-	cmd.WaitDelay = time.Second
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	usage.Requests++
-	if err := cmd.Run(); err != nil {
+	if err := runGroup(cmd); err != nil {
 		if ctx.Err() != nil {
 			return "", s.ended(ctx, "")
 		}

@@ -644,9 +644,18 @@ contradicts the call's `expect`, when it has one), whether or not it is over the
 captures lost an end-to-end run's results; output within the budget stays whole when the summary fails), except output
 within the budget that lists 10 or more problem lines, 3 or more of each kind (type errors at many call sites): each is
 a fix to make, so it stays whole. The variable is a comma separated list in order of preference: an OpenRouter chat
-model id (`deepseek/deepseek-v4.1-flash-1017`), or `claude-p:MODEL` (`claude-p:haiku`), which runs
+model id (`deepseek/deepseek-v4.1-flash-1017`), `claude-p:MODEL` (`claude-p:haiku`), which runs
 `claude -p --model MODEL` on the user's own Claude login, in an empty temporary directory with no tools, MCP servers,
-settings or saved session, so it loads neither nib nor hooks and needs no key. An OpenRouter entry takes one option,
+settings or saved session, so it loads neither nib nor hooks and needs no key, or `opencode:PROVIDER/MODEL`
+(`opencode:deepseek/deepseek-flash`, with `#VARIANT` where OpenCode takes one), which runs OpenCode 2's
+`opencode run --standalone` on a provider the user logged into in OpenCode. That run gets a temporary folder of its own
+for its data, config, state, cache and temporary files, removed after, and an in-memory database, so it neither reads
+nor writes the user's sessions, settings, MCP servers or plugins; its one agent carries the prompt with every
+permission denied, which leaves it no tools. Its provider's API key comes from the user's logins, read only (OpenCode
+2's database, then the `auth.json` of OpenCode 1), and goes in through the config the run is given; an OAuth login is
+refused, since a run that refreshed it could spend the user's refresh token, and a provider with no login runs as it
+is (keys in the environment). The program is `opencode` on `PATH`, or `NIB_DECIDER_OPENCODE`; one that is missing or
+not OpenCode 2 fails its entry when it runs, so the next one answers. An OpenRouter entry takes one option,
 `@reasoning=off|default|minimal|low|medium|high` (`off` is the default, `default` leaves it to the model). What the
 model reads is numbered by log line, each row cut to 300 characters: an output of at most 600 lines goes whole, and no
 decider is asked unless the summary fails; a longer one goes after the decider has chosen, as the excerpt of its picks:
@@ -666,6 +675,8 @@ cut find cases of the research set (`research/decider-eval/` on the research bra
 `anthropic/claude-haiku-5.5` on the excerpt (`@reasoning=default`) covered every needed line in 18, in 1.4 and 3.1 s,
 and `claude-p:haiku` in 17, in about 5 s; the offline check (`go test ./internal/nibash -run Captures -v`) measures
 `deepseek/deepseek-v4.1-flash-1017` with reasoning off.
+`opencode:deepseek/deepseek-flash` on OpenCode 2.0.30 answered in 2.8 to 4 s;
+its token and cost counts are added when OpenCode prints them, which it does not always do before it exits.
 
 **Tails.** `cmd | tail -N` at the model's end hands only N lines to the cut, far under any limit, so a failure printed
 before them would cost the agent another call. With a decision model or a summarizer configured, when the lines a
@@ -713,15 +724,17 @@ what the system programs would; only the form of the rows differs. `read` shows 
 | `NIB_DECIDER_SUMMARY` | unset | summarizers, comma separated, in order of preference (above); with `fixed`, or an OpenRouter model and no key, nib stops at startup |
 | `NIB_DECIDER_SUMMARY_URL` | `https://openrouter.ai/api/v1/chat/completions` | the chat endpoint |
 | `NIB_DECIDER_SUMMARY_TIMEOUT` | `30000` | milliseconds for the whole summary, every entry of the list included |
+| `NIB_DECIDER_OPENCODE` | `opencode` | the OpenCode 2 program `opencode:` summarizers run |
 | `NIB_DECIDER_CACHE` | unset | a directory for answers on disk, decisions and summaries |
 | `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1`; without it, that combination stops nib at startup |
 | `NIB_AUTO_NAMES` | unset | `0` turns off naming the directories agents keep seeing and keeping names for the next session ([named directories](#named-directories)) |
 
 **Choosing once for every nib.** `nib setup --decider KIND` (`fixed`, `keywords`, or `openrouter:MODEL,...` for decision
-models in order of preference) and `nib setup --summary LIST` remember `NIB_DECIDER`, `NIB_DECIDER_MODEL` and
-`NIB_DECIDER_SUMMARY` in `~/.config/nib/setup.json`, beside the providers; every nib reads them when it starts, unless
-its own environment sets one of the three, which then replaces the remembered choice whole. `--decider=` and
-`--summary=` forget them. A choice nib would refuse to start with is not remembered, and the key never is: nib finds it
+models in order of preference), `nib setup --summary LIST` and `nib setup --opencode PROGRAM` remember `NIB_DECIDER`,
+`NIB_DECIDER_MODEL`, `NIB_DECIDER_SUMMARY` and `NIB_DECIDER_OPENCODE` in `~/.config/nib/setup.json`, beside the
+providers; every nib reads them when it starts, unless its own environment sets one of the four, which then replaces
+the remembered choice whole. `--decider=`, `--summary=` and `--opencode=` forget them. A choice nib would refuse to
+start with is not remembered, and the key never is: nib finds it
 as above. Since claude-capture and zenit-workspace's bootstrap run `nib setup` anyway, the choice made once on a machine
 holds for every Claude Code profile and every OpenCode session there.
 

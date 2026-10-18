@@ -1,6 +1,6 @@
-// Package opencode reads the two things nib needs from OpenCode 2's own database: which session a session was forked or spawned from, and
-// when, and when it was last compacted. OpenCode tells an MCP server only the session making a call, and starts its servers with its own
-// environment, so nib finds the database where OpenCode does and opens it read-only.
+// Package opencode reads what nib needs from OpenCode 2's own database: which session a session was forked or spawned from, and when, when
+// it was last compacted, and a provider's login. OpenCode tells an MCP server only the session making a call, and starts its servers with
+// its own environment, so nib finds the database where OpenCode does and opens it read-only.
 package opencode
 
 import (
@@ -68,8 +68,7 @@ func Of(databases []string, session string) (origin Origin, ok bool) {
 // creation among them, as OpenCode stamps whole milliseconds and nib stamps seen lines before the message showing them completes, and the
 // parent's later calls run in messages created after those. A child session's moment is one millisecond past its creation.
 func lookup(path, session string) (origin Origin, found bool, err error) {
-	location := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
-	db, err := sql.Open("sqlite", location.String())
+	db, err := open(path)
 	if err != nil {
 		return Origin{}, false, err
 	}
@@ -132,8 +131,7 @@ func Compacted(databases []string, session string) (at time.Time, ok bool) {
 // compaction reads session's latest compaction from one database; found is false when it does not hold the session. OpenCode appends a
 // compaction message when the compaction ends, stamped then, in whole milliseconds; nib makes no call for the session while it runs.
 func compaction(path, session string) (at time.Time, found bool, err error) {
-	location := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
-	db, err := sql.Open("sqlite", location.String())
+	db, err := open(path)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -150,4 +148,53 @@ func compaction(path, session string) (at time.Time, found bool, err error) {
 		at = time.UnixMilli(latest.Int64 + 1)
 	}
 	return at, true, nil
+}
+
+// Login is a provider's credential as OpenCode 2 keeps it: Kind is "key" for an API key, with Key set, or "oauth" for a login it refreshes.
+type Login struct {
+	Kind string
+	Key  string
+}
+
+// Credential is provider's login, by the first of databases that holds one; ok is false when none does or can be read. An active
+// credential wins over an inactive one, and the latest update over older ones.
+func Credential(databases []string, provider string) (login Login, ok bool) {
+	for _, path := range databases {
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if login, found := credential(path, provider); found {
+			return login, true
+		}
+	}
+	return Login{}, false
+}
+
+// credential reads provider's login from one database; anything unexpected in its value is no login.
+func credential(path, provider string) (Login, bool) {
+	db, err := open(path)
+	if err != nil {
+		return Login{}, false
+	}
+	defer db.Close()
+	var value string
+	err = db.QueryRow(`select value from credential where integration_id = ? order by coalesce(active, 0) desc, time_updated desc limit 1`,
+		provider).Scan(&value)
+	if err != nil {
+		return Login{}, false
+	}
+	var stored struct {
+		Type string `json:"type"`
+		Key  string `json:"key"`
+	}
+	if json.Unmarshal([]byte(value), &stored) != nil || stored.Type == "" {
+		return Login{}, false
+	}
+	return Login{Kind: stored.Type, Key: stored.Key}, true
+}
+
+// open opens a database read-only, so nib never writes to OpenCode's data.
+func open(path string) (*sql.DB, error) {
+	location := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
+	return sql.Open("sqlite", location.String())
 }

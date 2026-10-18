@@ -180,3 +180,51 @@ func TestDatabasesAreWhereOpenCodeKeepsThem(t *testing.T) {
 		t.Fatal("got an origin from no database")
 	}
 }
+
+func TestCredentialIsAProvidersLoginReadOnly(t *testing.T) {
+	folder := t.TempDir()
+	path := filepath.Join(folder, "opencode.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		// As OpenCode 2.0.30's migrations create it.
+		`create table credential (id text primary key, integration_id text not null, label text, value text not null, connector_id text,
+			method_id text, active integer, time_created integer not null, time_updated integer not null)`,
+		`insert into credential values ('c1', 'deepseek', 'API key', '{"type":"key","key":"sk-old"}', null, null, 0, 1, 9)`,
+		`insert into credential values ('c2', 'deepseek', 'API key', '{"type":"key","key":"sk-live"}', null, null, 1, 1, 2)`,
+		`insert into credential values ('c3', 'openai', 'OAuth', '{"type":"oauth","refresh":"r","access":"a","expires":1}', null, null, 1, 1, 1)`,
+		`insert into credential values ('c4', 'broken', 'API key', 'not json', null, null, 1, 1, 1)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	db.Close()
+	before, _ := os.ReadFile(path)
+	// A database without the table, like OpenCode's first one, is passed over.
+	v1 := filepath.Join(folder, "v1.db")
+	if old, err := sql.Open("sqlite", "file:"+v1); err != nil {
+		t.Fatal(err)
+	} else if _, err := old.Exec(`create table session (id text primary key)`); err != nil {
+		t.Fatal(err)
+	} else {
+		old.Close()
+	}
+	databases := []string{filepath.Join(folder, "missing.db"), v1, path}
+	if got, ok := Credential(databases, "deepseek"); !ok || got != (Login{Kind: "key", Key: "sk-live"}) {
+		t.Fatalf("the active key wins: %+v %v", got, ok)
+	}
+	if got, ok := Credential(databases, "openai"); !ok || got != (Login{Kind: "oauth"}) {
+		t.Fatalf("oauth: %+v %v", got, ok)
+	}
+	for _, provider := range []string{"broken", "mistral"} {
+		if got, ok := Credential(databases, provider); ok {
+			t.Fatalf("%s: %+v", provider, got)
+		}
+	}
+	if after, _ := os.ReadFile(path); !slices.Equal(before, after) {
+		t.Fatal("a lookup must never write to OpenCode's database")
+	}
+}

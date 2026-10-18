@@ -397,6 +397,22 @@ neither nib nor hooks; its process group is killed at the deadline. It costs abo
 key. Answers are cached by entry, endpoint, prompt and input (`summary-` files beside the decisions in
 `NIB_DECIDER_CACHE`) and checked again whenever used.
 
+`opencode:PROVIDER/MODEL` runs OpenCode 2's `opencode run --standalone --agent nib-summary --model PROVIDER/MODEL
+--format json`, the output on stdin (`internal/decider/opencode.go`). OpenCode 2 has no flags for a system prompt, for no
+tools or for no saved session, so nib isolates it by its environment instead: `HOME`, `TMPDIR` and every `XDG_*` folder
+point into one temporary folder removed after, `OPENCODE_DB=:memory:` keeps its database in memory,
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` and the user's own `OPENCODE_*` variables left out keep every other config away, and
+`OPENCODE_CONFIG_CONTENT` gives it the one config it reads: the agent `nib-summary` with the prompt and `permission`
+`{"*": "deny"}`, and the provider's API key as `provider.ID.options.apiKey`. Denying every permission removes the tools
+from the request: a probe asking for a file came back as text with 267 input tokens and no file, where the same agent
+with permissions allowed sent 4,983 tokens and wrote it. `--standalone` keeps it off OpenCode 2's background service; a
+run without it starts one. A fresh database is built by schema bootstrap, which skips the migration that imports
+`auth.json`, so a login copied there would not be read: the key goes in through the config. It is read only from OpenCode
+2's `credential` table (`opencode.Credential`) or the `auth.json` of OpenCode 1; OAuth logins are refused, since a run
+that refreshed one could rotate the refresh token the user's own OpenCode holds. `--version` must say `opencode v2.`,
+asked once per program while nib runs. The answer is the run's text parts, in order; an `error` event fails the entry by
+its type (`provider.auth`, `provider.no-route`), and the process group is killed at the deadline.
+
 The decision model and the summarizer read the output deduplicated (`dedupe` in `internal/nibash/dedup.go`, over
 `engine.Repeats`, the one home of what counts as repeated output, which `engine.Compress` renders as the `[#N]` rows).
 On the 34 captures: 190,254 log lines and 10.1 MB became 119,701 entries and 5.8 MB; build-log went from 3,013 lines to

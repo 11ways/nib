@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/11ways/nib/internal/opencode"
 )
 
 // Kind names a decider, as NIB_DECIDER spells it.
@@ -71,6 +73,10 @@ type Config struct {
 	Summary        []SummaryEntry
 	SummaryURL     string
 	SummaryTimeout time.Duration
+	// OpenCode is the OpenCode 2 program opencode: summarizers run: NIB_DECIDER_OPENCODE, else opencode on PATH.
+	OpenCode string
+	// logins are where opencode: summarizers find a provider's login.
+	logins logins
 }
 
 // Parse reads every NIB_DECIDER_* variable through getenv, NIB_SANDBOX included; an error is a startup error.
@@ -108,11 +114,16 @@ func Parse(getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 		c.Summary = entries
-		if slices.ContainsFunc(entries, func(e SummaryEntry) bool { return !e.Claude }) {
+		if slices.ContainsFunc(entries, func(e SummaryEntry) bool { return e.Program == "" }) {
 			if c.Key, err = needKey("NIB_DECIDER_SUMMARY names an OpenRouter model, which"); err != nil {
 				return Config{}, err
 			}
 		}
+		c.OpenCode = getenv("NIB_DECIDER_OPENCODE")
+		if c.OpenCode == "" {
+			c.OpenCode = "opencode"
+		}
+		c.logins = logins{databases: opencode.Databases(getenv), auth: opencodeAuth(getenv)}
 		if url := getenv("NIB_DECIDER_SUMMARY_URL"); url != "" {
 			c.SummaryURL = url
 		}

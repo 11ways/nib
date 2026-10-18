@@ -58,6 +58,28 @@ func TestSetupRemembersADeciderChoiceEveryNibReads(t *testing.T) {
 	equal(t, saved, map[string]string{"NIB_DECIDER": "keywords"})
 }
 
+func TestSetupRemembersTheOpenCodeItsSummarizersRun(t *testing.T) {
+	home := t.TempDir()
+	run := func(choice map[string]string) []string {
+		return Setup(Options{Directory: filepath.Join(home, "project"), Command: nib, Home: home, Env: func(string) string { return "" },
+			Decider: choice, Claude: func(string, []string) (int, string) { return 0, "" }})
+	}
+	vars := decider.SummaryVars("opencode:deepseek/deepseek-flash")
+	for name, value := range decider.OpenCodeVars("/opt/oc2/opencode") {
+		vars[name] = value
+	}
+	// An opencode: summarizer needs no OpenRouter key, so the choice is remembered without one.
+	report := run(vars)
+	equal(t, report[0], "~/.config/nib/setup.json: remembers NIB_DECIDER_SUMMARY=opencode:deepseek/deepseek-flash, "+
+		"NIB_DECIDER_OPENCODE=/opt/oc2/opencode for every nib started")
+	saved, err := RememberedDecider(home, func(string) string { return "" })
+	equal(t, err, nil)
+	equal(t, saved, map[string]string{"NIB_DECIDER_SUMMARY": "opencode:deepseek/deepseek-flash", "NIB_DECIDER_OPENCODE": "/opt/oc2/opencode"})
+	run(decider.OpenCodeVars(""))
+	saved, _ = RememberedDecider(home, func(string) string { return "" })
+	equal(t, saved, map[string]string{"NIB_DECIDER_SUMMARY": "opencode:deepseek/deepseek-flash"})
+}
+
 func TestDeciderFlagsAreChecked(t *testing.T) {
 	for _, bad := range []string{"smart", "keywords:x", "Keywords"} {
 		if _, err := decider.DeciderVars(bad); err == nil {

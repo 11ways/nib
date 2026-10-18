@@ -40,7 +40,7 @@ func TestSummaryEntriesParseTheirOptionsAndRefuseTheRest(t *testing.T) {
 	want := []SummaryEntry{
 		{Spec: "deepseek/deepseek-v4.1-flash-1017", Model: "deepseek/deepseek-v4.1-flash-1017", Reasoning: "off"},
 		{Spec: "google/gemini-3.1-flash-lite@reasoning=low", Model: "google/gemini-3.1-flash-lite", Reasoning: "low"},
-		{Spec: "claude-p:haiku", Claude: true, Model: "haiku", Reasoning: "off"},
+		{Spec: "claude-p:haiku", Program: "claude-p", Model: "haiku", Reasoning: "off"},
 	}
 	if !slices.Equal(entries, want) {
 		t.Fatalf("entries %+v", entries)

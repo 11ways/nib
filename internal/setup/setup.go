@@ -1110,7 +1110,7 @@ func runClaude(dir string, args []string) (int, string) {
 	return 0, string(output)
 }
 
-var usage = `Usage: nib setup [--user] [--dry-run] [--quiet] [--provider NAME=PROGRAM]... [--decider KIND[:MODEL,...]] [--summary LIST]
+var usage = `Usage: nib setup [--user] [--dry-run] [--quiet] [--provider NAME=PROGRAM]... [--decider KIND[:MODEL,...]] [--summary LIST] [--opencode PROGRAM]
 Registers nib in this folder: the MCP server in .mcp.json; its approval, its Claude Code hook and deny rules for the built-in tools nib replaces
 (` + strings.Join(ClaudeDenied, ", ") + `) and an allow rule for ` + strings.Join(ClaudeAllowed, ", ") + `, which the nibash mod polls, in .claude/settings.local.json; and the server, in OpenCode 2's form with OpenCode's own tools denied, in opencode.json
 when there is one. With --user, for every project of this user instead. Only what is missing is added; deny rules an older setup wrote for
@@ -1121,9 +1121,10 @@ providers asked for are remembered in ~/.config/nib/setup.json, so a later setup
 hosts them too. With --user it also installs the nibash mod this nib carries to ~/.local/share/nib/mods/nibash and names that folder in
 env.CLAUDE_CODE_PLUGIN_DIRS of the config folder's settings.json. --quiet leaves out what was set up already, for a script that runs
 setup each time it starts Claude Code.
---decider KIND (fixed, keywords, or openrouter:MODEL,... for decision models in order of preference) and --summary LIST (summarizers, as
-NIB_DECIDER_SUMMARY takes them) are remembered in the same file, and every nib reads them when it starts, unless its environment sets a
-NIB_DECIDER variable itself; an empty value (--decider= or --summary=) forgets one. A choice nib would refuse is not remembered. The
+--decider KIND (fixed, keywords, or openrouter:MODEL,... for decision models in order of preference), --summary LIST (summarizers, as
+NIB_DECIDER_SUMMARY takes them) and --opencode PROGRAM (the OpenCode 2 its opencode: summarizers run) are remembered in the same file, and
+every nib reads them when it starts, unless its environment sets a NIB_DECIDER variable itself; an empty value (--decider=, --summary= or
+--opencode=) forgets one. A choice nib would refuse is not remembered. The
 OpenRouter key is never written anywhere: nib reads NIB_DECIDER_KEY or OPENROUTER_API_KEY, else ~/.config/nib/openrouter-key,
 else the openrouter entry of OpenCode's auth.json.`
 
@@ -1158,9 +1159,12 @@ func Main(args []string) int {
 		}
 		deciderValue, isDecider := "", false
 		summaryValue, isSummary := "", false
+		openCodeValue, isOpenCode := "", false
 		if !isProvider {
 			if deciderValue, isDecider = flagValue("--decider"); !isDecider {
-				summaryValue, isSummary = flagValue("--summary")
+				if summaryValue, isSummary = flagValue("--summary"); !isSummary {
+					openCodeValue, isOpenCode = flagValue("--opencode")
+				}
 			}
 		}
 		switch {
@@ -1173,6 +1177,12 @@ func Main(args []string) int {
 			choose(vars)
 		case isSummary:
 			choose(decider.SummaryVars(summaryValue))
+		case isOpenCode:
+			// Like a provider's program: a path relative to here would mean another file to a nib started elsewhere.
+			if strings.Contains(openCodeValue, "/") && !filepath.IsAbs(openCodeValue) {
+				openCodeValue = filepath.Join(directory, openCodeValue)
+			}
+			choose(decider.OpenCodeVars(openCodeValue))
 		case isProvider:
 			change, err := ParseChange(value)
 			if err != nil {
