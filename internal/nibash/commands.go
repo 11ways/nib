@@ -655,12 +655,17 @@ func (p *wcPlan) run(inv *invocation) int {
 				return true
 			})
 		} else {
-			data, err := os.ReadFile(inv.path(operand))
+			// open judges the path (sandbox, links) before its bytes are counted.
+			source := inv.open(operand, false)
+			if source == nil {
+				status = 1
+				continue
+			}
+			data, err := os.ReadFile(source.Canonical)
 			if err != nil {
-				if inv.open(operand, false) == nil {
-					status = 1
-					continue
-				}
+				inv.fail("%s: %s", operand, err)
+				status = 1
+				continue
 			}
 			// A file is counted by its bytes, so a missing final newline counts as GNU counts it.
 			t.lines = bytes.Count(data, []byte{'\n'})

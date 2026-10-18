@@ -388,7 +388,7 @@ func TestSandboxConfinesShellAndPrograms(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"cat " + outside + "/secret.txt", "/usr/bin/cat " + outside + "/secret.txt", "echo x > " + outside + "/new.txt", "cd " + outside} {
+	for _, command := range []string{"cat " + outside + "/secret.txt", "wc -c " + outside + "/secret.txt", "/usr/bin/cat " + outside + "/secret.txt", "echo x > " + outside + "/new.txt", "cd " + outside} {
 		if out := f.run(command); strings.Contains(out, "secret\n") || !strings.Contains(out, "[exit ") {
 			t.Errorf("%s: %s", command, out)
 		}
