@@ -576,9 +576,8 @@ Where the implementation departed from the text above, deliberately:
   work as before. The moment is taken as the hook runs, after the compaction; Claude Code keeps a tail of recent
   messages through a compaction (`preservedSegment`), but nib drops those lines too, which can only cost a re-read.
   OpenCode 2 appends a `compaction` message when one ends, so nib reads its latest per call. Markers
-  (`[lines A-B unchanged since you saw them]`) replace runs of 8 or more rows held whole and unchanged since, found
-  through the line map to every version the agent still holds, in a call that shows more than 60 rows of the file
-  (`heldFew`; fewer are a narrow request whose rows print whole); the lines a marker stands for are recorded seen in the
+  (`[lines A-B unchanged since you saw them]`) replace runs of 3 or more rows held whole and unchanged since, found
+  through the line map to every version the agent still holds; the lines a marker stands for are recorded seen in the
   version shown, so anchoring is unchanged. Grep's match rows always print, since they are the answer and carry the
   match; edit responses show one kept row on each side of a change, which never makes a run, and the agent checks its
   range against them. An immediate repeat of the same call is how an agent asks for the rows again, besides `full: true`

@@ -6,11 +6,8 @@ import (
 	"github.com/11ways/nib/internal/snapshots"
 )
 
-// heldRun is the fewest rows an agent already holds that one marker replaces; a shorter run saves too little for the look back it asks for.
-const heldRun = 8
-
-// heldFew is the most rows of a file one call may show and still print them all: so few rows are a narrow request for exactly those lines.
-const heldFew = 60
+// heldRun is the fewest rows an agent already holds that one marker replaces; a shorter run costs about what its marker does.
+const heldRun = 3
 
 // heldLessonKey is the lesson heldLesson teaches; heldLesson explains held markers, once per agent and again after its context was dropped.
 const heldLessonKey = "held"
@@ -73,18 +70,9 @@ func (r HeldRun) Lines() []int {
 }
 
 // HeldGroups puts each run of items the agent already holds, by the line each stands for (0 for one that may not join a run), as the one
-// item marker makes from the run's items; when at most heldFew items may join, they all stay.
+// item marker makes from the run's items.
 func HeldGroups[T any](items []T, held map[int]int, line func(T) int, marker func(run []T, r HeldRun) T) []T {
 	if len(held) == 0 {
-		return items
-	}
-	joinable := 0
-	for _, item := range items {
-		if line(item) > 0 {
-			joinable++
-		}
-	}
-	if joinable <= heldFew {
 		return items
 	}
 	runs := HeldRuns(len(items), func(i int) int { return line(items[i]) }, held)

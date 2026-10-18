@@ -116,7 +116,7 @@ describe("MCP server", () => {
   test("with nib's hook, rows an agent holds print as one marker until its context is compacted", async () => {
     const directory = await workspace()
     const runtime = await workspace()
-    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
+    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
     const env = { XDG_RUNTIME_DIR: runtime }
     const hook = async (input: Record<string, unknown>) => {
       const run = Bun.spawn([await binary(), "hook"], { stdin: new Blob([JSON.stringify({ session_id: "6d0b5e1c", ...input })]), stdout: "pipe", env: { ...process.env, ...env } })
@@ -132,10 +132,10 @@ describe("MCP server", () => {
       return result.content[0]!.text
     }
     await hook({ hook_event_name: "SessionStart", source: "startup" })
-    await read("1-70")
-    expect(await read("1-72")).toContain("\n[lines 1-70 unchanged since you saw them]\n71:line 71\n")
+    await read("1-5")
+    expect(await read("1-6")).toContain("\n[lines 1-5 unchanged since you saw them]\n6:line 6\n")
     await hook({ hook_event_name: "PostCompact", trigger: "manual", compact_summary: "the summary" })
-    const after = await read("1-74")
+    const after = await read("1-7")
     expect(after).toContain("\n1:line 1\n")
     expect(after).not.toContain("[lines")
   })

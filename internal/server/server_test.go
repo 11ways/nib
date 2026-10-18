@@ -934,37 +934,34 @@ func numbered(n int) string {
 func TestRowsAnAgentHoldsPrintAsMarkersUntilItsContextDrops(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	path := filepath.Join(directory, "a.txt")
-	file(t, path, numbered(100))
+	file(t, path, numbered(20))
 	r := &records{byUse: map[string]hookstate.Agent{}}
 	d := &drops{known: true}
 	c := connect(t, Options{Directory: directory, Agent: r.take, Dropped: d.take}, []string{directory}, nil, false)
-	c.call(t, r.as("", readCall(path+":1-70")))
-	wider := text(c.call(t, r.as("", readCall(path+":1-72"))))
+	c.call(t, r.as("", readCall(path+":1-10")))
+	wider := text(c.call(t, r.as("", readCall(path+":1-12"))))
 	tag := tagPatternText.FindStringSubmatch(wider)[1]
-	if !strings.Contains(wider, "\n[lines 1-70 unchanged since you saw them]\n71:line 71 of the file\n72:line 72 of the file\n") || !strings.Contains(wider, "[a [lines A-B unchanged") {
+	if !strings.Contains(wider, "\n[lines 1-10 unchanged since you saw them]\n11:line 11 of the file\n12:line 12 of the file\n") || !strings.Contains(wider, "[a [lines A-B unchanged") {
 		t.Fatalf("a wider read: %s", wider)
 	}
 	// The same call again at once asks for the rows, and so does full: true.
-	if again := text(c.call(t, r.as("", readCall(path+":1-72")))); !strings.Contains(again, "\n1:line 1 of the file\n") || strings.Contains(again, "[lines") {
+	if again := text(c.call(t, r.as("", readCall(path+":1-12")))); !strings.Contains(again, "\n1:line 1 of the file\n") || strings.Contains(again, "[lines") {
 		t.Fatalf("an immediate repeat: %s", again)
 	}
-	// A narrow read asks for exactly its lines, so they print however well the agent knows them.
-	if narrow := text(c.call(t, r.as("", readCall(path+":1-12")))); !strings.Contains(narrow, "\n1:line 1 of the file\n") || strings.Contains(narrow, "[lines") {
-		t.Fatalf("a narrow read: %s", narrow)
-	}
-	full := &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{path + ":1-72"}, "full": true}}
+	c.call(t, r.as("", readCall(path+":20")))
+	full := &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{path + ":1-12"}, "full": true}}
 	if whole := text(c.call(t, r.as("", full))); !strings.Contains(whole, "\n1:line 1 of the file\n") {
 		t.Fatalf("full: true: %s", whole)
 	}
 	// A line put above moves the rest down; the agent wrote the new row, and the rest it saw one line higher.
 	edited := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT <1:\n+first", path, tag)))))
-	moved := text(c.call(t, r.as("", readCall(path+":1-74"))))
-	if !strings.Contains(moved, "[lines 3-73 = your earlier 2-72, unchanged]\n74:line 73 of the file") || strings.Contains(moved, "[a [lines A-B") {
+	moved := text(c.call(t, r.as("", readCall(path+":1-14"))))
+	if !strings.Contains(moved, "[lines 3-13 = your earlier 2-12, unchanged]\n14:line 13 of the file") || strings.Contains(moved, "[a [lines A-B") {
 		t.Fatalf("after the edit %s: %s", edited, moved)
 	}
-	// A grep shows at most 40 context lines, too few to fold: its rows print whole.
+	// A grep's match rows always print; the context it shares with what the agent has is a marker.
 	grep := &mcp.CallToolParams{Name: "grep", Arguments: map[string]any{"pattern": "line 6 of", "paths": []string{path}, "before": 4, "after": 4}}
-	if found := text(c.call(t, r.as("", grep))); !strings.Contains(found, "\n 6:line 5 of the file\n*7:line 6 of the file\n 8:line 7 of the file\n") || strings.Contains(found, "[lines") {
+	if found := text(c.call(t, r.as("", grep))); !strings.Contains(found, "\n[lines 3-6 unchanged since you saw them]\n*7:line 6 of the file\n[lines 8-11 unchanged since you saw them]") {
 		t.Fatalf("grep: %s", found)
 	}
 	// Once the agent's context is compacted, what it was shown before is gone: rows print again, and an edit needs them shown first.
@@ -975,18 +972,18 @@ func TestRowsAnAgentHoldsPrintAsMarkersUntilItsContextDrops(t *testing.T) {
 	if seen := c.latestSeen("main", path); !slices.Equal(seen, []int{20, 21}) {
 		t.Fatalf("after the drop the agent holds %v", seen)
 	}
-	refused := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 5.=10:\n+FIVE", path, tagPatternText.FindStringSubmatch(after)[1])))))
+	refused := text(c.call(t, r.as("", editCall(fmt.Sprintf("[%s#%s]\nPUT 5:\n+FIVE", path, tagPatternText.FindStringSubmatch(after)[1])))))
 	if !strings.Contains(refused, "never displayed") {
 		t.Fatalf("an edit of a line seen only before the drop: %s", refused)
 	}
 	// Only the rows the refusal showed since are held again, and the markers are explained again.
-	if again := text(c.call(t, r.as("", readCall(path+":1-70")))); !strings.Contains(again, "\n2:line 1 of the file\n[lines 3-12 unchanged since you saw them]\n13:line 12 of the file\n") || !strings.Contains(again, "[a [lines A-B") {
+	if again := text(c.call(t, r.as("", readCall(path+":1-12")))); !strings.Contains(again, "\n2:line 1 of the file\n[lines 3-7 unchanged since you saw them]\n8:line 7 of the file\n") || !strings.Contains(again, "[a [lines A-B") {
 		t.Fatalf("after the drop: %s", again)
 	}
 	// Without the hook telling when contexts drop, nothing prints as a marker.
 	plain := connect(t, Options{Directory: directory, Agent: r.take}, []string{directory}, nil, false)
-	plain.call(t, r.as("", readCall(path+":1-70")))
-	if again := text(plain.call(t, r.as("", readCall(path+":1-72")))); strings.Contains(again, "[lines") {
+	plain.call(t, r.as("", readCall(path+":1-5")))
+	if again := text(plain.call(t, r.as("", readCall(path+":1-6")))); strings.Contains(again, "[lines") {
 		t.Fatalf("untracked: %s", again)
 	}
 }
@@ -994,7 +991,7 @@ func TestRowsAnAgentHoldsPrintAsMarkersUntilItsContextDrops(t *testing.T) {
 func TestOpenCodeSessionsHoldRowsUntilOpenCodeCompactsThem(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	path := filepath.Join(directory, "a.txt")
-	file(t, path, numbered(80))
+	file(t, path, numbered(8))
 	var mu sync.Mutex
 	compacted := map[string]time.Time{}
 	c := connect(t, Options{Directory: directory, Compacted: func(session string) (time.Time, bool) {
@@ -1006,19 +1003,19 @@ func TestOpenCodeSessionsHoldRowsUntilOpenCodeCompactsThem(t *testing.T) {
 	read := func(session, selector string) string {
 		return text(c.call(t, inSession(session, readCall(path+selector))))
 	}
-	read("ses_a", ":1-70")
-	if got := read("ses_a", ":1-72"); !strings.Contains(got, "[lines 1-70 unchanged since you saw them]\n71:") {
+	read("ses_a", ":1-4")
+	if got := read("ses_a", ":1-5"); !strings.Contains(got, "[lines 1-4 unchanged since you saw them]\n5:") {
 		t.Fatalf("held: %s", got)
 	}
 	mu.Lock()
 	compacted["ses_a"] = time.Now()
 	mu.Unlock()
-	if got := read("ses_a", ":1-74"); strings.Contains(got, "[lines") {
+	if got := read("ses_a", ":1-6"); strings.Contains(got, "[lines") {
 		t.Fatalf("after OpenCode compacted the session: %s", got)
 	}
 	// A session OpenCode's database cannot tell about never gets markers.
-	read("ses_b", ":1-70")
-	if got := read("ses_b", ":1-72"); strings.Contains(got, "[lines") {
+	read("ses_b", ":1-4")
+	if got := read("ses_b", ":1-5"); strings.Contains(got, "[lines") {
 		t.Fatalf("untracked session: %s", got)
 	}
 }
@@ -1026,20 +1023,20 @@ func TestOpenCodeSessionsHoldRowsUntilOpenCodeCompactsThem(t *testing.T) {
 func TestAForkHoldsWhatItsParentWasShownSinceTheParentsLastDrop(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	path := filepath.Join(directory, "a.txt")
-	file(t, path, numbered(80))
+	file(t, path, numbered(8))
 	r := &records{byUse: map[string]hookstate.Agent{}}
 	d := &drops{known: true}
 	c := connect(t, Options{Directory: directory, Agent: r.take, Dropped: d.take}, []string{directory}, nil, false)
-	c.call(t, r.as("", readCall(path+":1-70")))
+	c.call(t, r.as("", readCall(path+":1-4")))
 	spawned := time.Now()
-	if got := text(c.call(t, r.by(hookstate.Agent{ID: "f1", Spawned: true, Forked: true, At: spawned}, readCall(path+":1-72")))); !strings.Contains(got, "[lines 1-70 unchanged since you saw them]") {
+	if got := text(c.call(t, r.by(hookstate.Agent{ID: "f1", Spawned: true, Forked: true, At: spawned}, readCall(path+":1-5")))); !strings.Contains(got, "[lines 1-4 unchanged since you saw them]") {
 		t.Fatalf("a fork holds its parent's rows: %s", got)
 	}
 	// The hook files a fork's calls with its parent's compaction before the spawn: the fork's conversation starts from the summary.
 	d.mu.Lock()
 	d.dropped = spawned
 	d.mu.Unlock()
-	if got := text(c.call(t, r.by(hookstate.Agent{ID: "f2", Spawned: true, Forked: true, At: time.Now()}, readCall(path+":1-72")))); strings.Contains(got, "[lines") {
+	if got := text(c.call(t, r.by(hookstate.Agent{ID: "f2", Spawned: true, Forked: true, At: time.Now()}, readCall(path+":1-5")))); strings.Contains(got, "[lines") {
 		t.Fatalf("a fork of a compacted parent: %s", got)
 	}
 }
