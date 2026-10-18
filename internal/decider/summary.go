@@ -98,6 +98,9 @@ type SummaryInput struct {
 	// block named once in Legend.
 	Entries []Entry
 	Legend  Legend
+	// Base is how many lines of a file come before the log, a file read from its line Base+1 on: the model reads, and answers in, the
+	// file's own numbers, while Excerpt, Entries and the ranges of the Summary count from the log's start.
+	Base int
 }
 
 // Summary is a summarizer's checked answer: its prose, the ranges that lie in the lines it read, and how many ranges did not.
@@ -189,7 +192,7 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 			return Summary{Usage: usage}, failure
 		}
 	}
-	got, failure := check(reply, in.Log, in.Excerpt)
+	got, failure := check(reply, in.Log, in.Excerpt, in.Base)
 	got.Usage = usage
 	if failure != "" {
 		return got, failure
@@ -215,7 +218,7 @@ func render(in SummaryInput) string {
 			if i > 0 && n != in.Excerpt[i-1]+1 {
 				b.WriteString("[lines left out]\n")
 			}
-			fmt.Fprintf(&b, "%d: %s\n", n, cut(in.Log[n-1]))
+			fmt.Fprintf(&b, "%d: %s\n", in.Base+n, cut(in.Log[n-1]))
 		}
 		return b.String()
 	}
@@ -242,7 +245,7 @@ func render(in SummaryInput) string {
 		if i > 0 && e.First != in.Entries[i-1].Last+1 {
 			b.WriteString("[lines left out]\n")
 		}
-		fmt.Fprintf(&b, "%s: %s\n", e.Label(), cut(e.Text))
+		fmt.Fprintf(&b, "%s: %s\n", Entry{First: in.Base + e.First, Last: in.Base + e.Last}.Label(), cut(e.Text))
 	}
 	return b.String()
 }
@@ -264,7 +267,7 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 	}
 	text += "Command: " + in.Command + "\n" +
 		"Exit status (from the shell, always true): " + status + "\n" +
-		fmt.Sprintf("Output: %d lines, numbered below.\n\n", len(in.Log)) +
+		output(in) +
 		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
 		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
 		"lines or entries; the agent gets exact counts from the shell.\n" +
@@ -292,11 +295,19 @@ func summaryKey(e SummaryEntry, url, prompt, text string) string {
 	return "summary-" + hex.EncodeToString(sum.Sum(nil))
 }
 
+// output is the prompt's line about the lines it numbers: their count, or for a file read from a later line on, their numbers.
+func output(in SummaryInput) string {
+	if in.Base > 0 {
+		return fmt.Sprintf("Output: lines %d-%d of a file, numbered below.\n\n", in.Base+1, in.Base+len(in.Log))
+	}
+	return fmt.Sprintf("Output: %d lines, numbered below.\n\n", len(in.Log))
+}
+
 var fence = regexp.MustCompile("^```(?:json)?\\s*|\\s*```$")
 
-// check reads a reply and keeps the ranges inside the log that touch a line the entry read; an answer with no summary, or no range left,
-// fails.
-func check(reply string, log []string, shown []int) (Summary, string) {
+// check reads a reply, whose ranges count from base+1, and keeps the ranges inside the log that touch a line the entry read, counted from
+// the log's start; an answer with no summary, or no range left, fails.
+func check(reply string, log []string, shown []int, base int) (Summary, string) {
 	var a answer
 	if json.Unmarshal([]byte(fence.ReplaceAllString(strings.TrimSpace(reply), "")), &a) != nil {
 		return Summary{}, "its answer is not JSON"
@@ -311,6 +322,7 @@ func check(reply string, log []string, shown []int) (Summary, string) {
 		if len(r) == 2 {
 			first, ok1 = integer(r[0])
 			last, ok2 = integer(r[1])
+			first, last = first-base, last-base
 		}
 		touches := ok1 && ok2 && slices.ContainsFunc(shown, func(n int) bool { return n >= first && n <= last })
 		if i >= maxRanges || !touches || first < 1 || last < first || last > len(log) || last-first+1 > maxRangeLines {

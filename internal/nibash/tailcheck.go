@@ -153,7 +153,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 		}
 	}
 	if len(missed) > 0 {
-		clauses = append([]string{fmt.Sprintf("log %s it chose did not fit", spans(missed))}, clauses...)
+		clauses = append([]string{fmt.Sprintf("log %s it chose did not fit", t.log.spans(missed))}, clauses...)
 	}
 	purpose := ""
 	if choice.Model {
@@ -166,7 +166,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 	for _, clause := range clauses {
 		header += "; " + clause
 	}
-	t.added = append([]string{header + ":]"}, t.texts(inner(gapped(rows, keep, nil)))...)
+	t.added = append([]string{header + ":]"}, t.texts(inner(gapped(rows, keep, nil, t.log)))...)
 }
 
 // inner drops the rows of nib's own at either end of rows, the gaps before the first chosen line and after the last, which the header covers.

@@ -204,6 +204,16 @@ type decision struct {
 	expect     string
 	exit       int
 	timedOut   bool
+	// read says the purpose is a read's expect, not a call's description.
+	read bool
+}
+
+// asked names the purpose in notes: the call's description, or what a read expects.
+func (d decision) asked() string {
+	if d.read {
+		return "what you expect"
+	}
+	return "your description"
 }
 
 // render turns what the sink holds into the tool result, records the anchored rows it shows as seen, and writes the whole output to a log when
@@ -213,7 +223,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	facts, tails := s.facts, s.tails
 	s.mu.Unlock()
 	rows, raw, echoed := s.collect(e, ctx)
-	rows, footer := fit(ctx.Ctx, rows, raw, logs, d)
+	rows, footer := fit(ctx.Ctx, rows, raw, d, func() saved { return logs.save(raw) })
 	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
 	rows = groupListings(rows)
 	// Only rows that are shown count as seen.
@@ -258,13 +268,13 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 }
 
 // fit brings rows within the budget and saves the log when it cuts them or a row was cut at rowLimit; footer explains cut rows.
-func fit(ctx context.Context, rows []row, raw string, logs *logDirectory, d decision) ([]row, []string) {
+func fit(ctx context.Context, rows []row, raw string, d decision, save func() saved) ([]row, []string) {
 	over := len(rows) > budgetLines || size(rows) > budgetBytes
 	summarize := d.summarizer != nil && summaryDue(rows, raw)
 	if !over && !summarize && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
-	log := logs.save(raw)
+	log := save()
 	if over || summarize {
 		rows = shape(ctx, rows, raw, log, d)
 	}
@@ -279,7 +289,7 @@ func cutFooter(log saved) string {
 	if log.path == "" {
 		return "[cut rows: N is the row's line in the whole output, which could not be saved]"
 	}
-	return fmt.Sprintf("[cut rows: N is the row's line in the whole output; read %s:N with maxLineLength to see one whole]", log.path)
+	return fmt.Sprintf("[cut rows: N is the row's line in the %s; read %s:N with maxLineLength to see one whole]", log.whole(), log.path)
 }
 
 // summaryDue says whether output gets a summary: past summaryLines or summaryBytes, or past lower limits the more it shrinks under dedupe.
@@ -318,28 +328,9 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 		if len(plain) == 0 {
 			return
 		}
-		// Program output collapses only exact repeats, since lines that differ in a number may differ in what matters, and only when there is
-		// enough of it that collapsing pays.
-		rows := plain
-		if len(plain) > collapseAfter {
-			var echo bool
-			rows, _, echo = engine.Compress(plain, false)
-			echoed = echoed || echo
-		}
-		// A row stands for the log lines from its own to the next row's, which covers what a collapsed run left out.
-		end := plainAt[len(plainAt)-1]
-		for k, r := range rows {
-			first, last := plainAt[r.At-1], end
-			if k+1 < len(rows) {
-				last = plainAt[rows[k+1].At-1] - 1
-			}
-			// A collapsed run's row is no line the program printed.
-			var listed *listedLine
-			if r.Text == plain[r.At-1].Text {
-				listed = plainListed[r.At-1]
-			}
-			items = append(items, item{text: r.Text, plain: true, listed: listed, first: first, last: max(first, last)})
-		}
+		more, echo := plainItems(plain, plainAt, plainListed)
+		items = append(items, more...)
+		echoed = echoed || echo
 		plain, plainAt, plainListed = nil, nil, nil
 	}
 	for _, en := range entries {
@@ -392,6 +383,32 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 	}
 	flushPlain()
 	return s.layout(e, ctx, items), raw.String(), echoed
+}
+
+// plainItems are lines of program output as items, each standing for the log lines at gives it; echoed says a recurring block got [#N]
+// markers.
+func plainItems(plain []engine.PlainLine, at []int, listed []*listedLine) (items []item, echoed bool) {
+	// Program output collapses only exact repeats, since lines that differ in a number may differ in what matters, and only when there is
+	// enough of it that collapsing pays.
+	rows := plain
+	if len(plain) > collapseAfter {
+		rows, _, echoed = engine.Compress(plain, false)
+	}
+	// A row stands for the log lines from its own to the next row's, which covers what a collapsed run left out.
+	end := at[len(at)-1]
+	for k, r := range rows {
+		first, last := at[r.At-1], end
+		if k+1 < len(rows) {
+			last = at[rows[k+1].At-1] - 1
+		}
+		// A collapsed run's row is no line the program printed.
+		var line *listedLine
+		if r.Text == plain[r.At-1].Text {
+			line = listed[r.At-1]
+		}
+		items = append(items, item{text: r.Text, plain: true, listed: line, first: first, last: max(first, last)})
+	}
+	return items, echoed
 }
 
 func size(rows []row) int {
@@ -489,9 +506,14 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 // plainRow is a row of program output standing for log lines first to last; one too long to show whole is cut in read's bracketed form,
 // numbered with its log line, so it never looks like an anchor.
 func plainRow(text string, first, last int, listed *listedLine) row {
+	return plainRowAt(text, first, first, last, listed)
+}
+
+// plainRowAt is plainRow with a cut row numbered label, its line in a file whose lines the log starts after.
+func plainRowAt(text string, label, first, last int, listed *listedLine) row {
 	capped := false
 	if js.Len(text) > rowLimit {
-		text, _ = engine.Row(first, text, rowLimit)
+		text, _ = engine.Row(label, text, rowLimit)
 		capped = true
 	}
 	return row{text: text, header: -1, plain: true, capped: capped, listed: listed, first: first, last: last}
@@ -566,7 +588,7 @@ func fixedCut(rows []row, log saved, because string) []row {
 		header = append(header, rows[h])
 	}
 	shown := headRows + len(header) + tailRows
-	clauses := []string{leftOut(rows[headRows:start])}
+	clauses := []string{log.leftOut(rows[headRows:start])}
 	if because != "" {
 		clauses = append(clauses, because)
 	}
@@ -606,11 +628,33 @@ func (l *logDirectory) file(kind string) (string, error) {
 	return filepath.Join(l.path, fmt.Sprintf("%d-%s-%d.log", os.Getpid(), kind, l.next)), nil
 }
 
-// saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds.
+// saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds. A
+// file read with expect is its own log, whose notes say read and number its lines from base on: the log's line N is the file's base+N.
 type saved struct {
 	path         string
 	lines, holds int
+	file         bool
+	base         int
 }
+
+// note is a row of nib's own about the log.
+func (l saved) note(text string) string {
+	if l.file {
+		return "[read: " + text + "]"
+	}
+	return "[nibash: " + text + "]"
+}
+
+// whole names what the log holds.
+func (l saved) whole() string {
+	if l.file {
+		return "whole file"
+	}
+	return "whole output"
+}
+
+// span names log lines first to last as notes number them.
+func (l saved) span(first, last int) string { return lineSpan(l.base+first, l.base+last) }
 
 // save writes text to a new log, capped at logLimit.
 func (l *logDirectory) save(text string) saved {

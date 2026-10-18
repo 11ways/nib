@@ -468,3 +468,29 @@ Two halves of the first idea were dropped. `head` is not checked: the program be
 lines, as in bash, so the rest was never printed, and reading on would change what the command does. And the exit
 status of the program before the pipe is not a trigger: the interpreter keeps only the pipeline's status, `tail`'s,
 and matching a real program to the pipe a `tail` reads is not reliable, so the call's own status is what counts.
+
+## 18. Reading a log with expect
+
+An agent that wants what a test or build log says, rather than lines to edit, reads it with `read`'s `expect`, the
+one-sentence purpose a decider and a summarizer need. The server offers the argument only where `Shell.Expects` (a
+decision model or a summarizer), as for nibash's own `expect`, and hands such a read to `Shell.ReadLog`, so the
+schema of a server without one stays as it was and a read without `expect` never reaches this path.
+
+`engine.ReadLog` resolves each path as read does (sandbox, links, named directories, selectors) and returns the file's
+bytes from an offset on, at most `logLimit`, and the ranges a selector chose; an open range runs to the end. nibash
+turns them into plain lines (`plainLines`, as for program output), collapses exact repeats (`plainItems`, the same
+code `collect` uses) and calls `fit`, the function `render` calls, so the limits, `shape`, `choose`, the summary and
+every note are nibash's own. Only three things differ, all carried by `saved`: notes say `read` instead of `nibash`,
+the log is the file itself (`whole file: PATH`, `read PATH:A-B plain:true`), and `base` shifts the numbers notes and cut
+rows print. The decision model reads rows without numbers; the summarizer reads them under the file's own numbers
+(`SummaryInput.Base`), its prompt saying which (`Output: lines 501-600 of a file`), and its ranges are taken back to the
+window's before they are checked, so a summary that names a line names the one the agent sees; with no base the prompt
+is the recorded one. The decision gives the models `cat PATH` as the command, `expect` as the purpose and exit status 0,
+so the prompts stay those the answers were recorded with; notes say `for what you expect`.
+
+Each agent's shell session remembers, per file read whole, its size, its first 4 KiB, the whole lines read and the
+offset after them, and how much of a last line without its line break was shown. The next whole read starts at that
+offset, so the window is what was added, numbered after the lines already read; nothing added, or the same unfinished
+line, answers with one line. A smaller file or another start reads whole again and says so. A selector neither uses nor
+moves the mark. The shell session is per agent, so a subagent's reads never move its parent's mark, and closing it
+forgets the marks.

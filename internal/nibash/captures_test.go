@@ -242,8 +242,9 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 	s := &sink{}
 	s.Write(raw)
 	rows, text, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
-	shown, _ := fit(context.Background(), rows, text, &logDirectory{path: t.TempDir()}, decision{decider: d, summarizer: summarize, command: c.Command,
-		purpose: c.Purpose, expect: expectation(c), exit: c.Exit})
+	logs := &logDirectory{path: t.TempDir()}
+	shown, _ := fit(context.Background(), rows, text, decision{decider: d, summarizer: summarize, command: c.Command,
+		purpose: c.Purpose, expect: expectation(c), exit: c.Exit}, func() saved { return logs.save(text) })
 	// NIB_CAPTURES_SHOW=NAME prints what the summary arm shows of that capture.
 	if summarize != nil && os.Getenv("NIB_CAPTURES_SHOW") == c.Name {
 		var texts []string

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -477,6 +478,16 @@ type fakeShell struct {
 	// off is whether summaries were turned off; models are the model calls Status tells of.
 	off    bool
 	models []ModelCall
+	// expects is what Expects says; logs are the read calls with expect that reached the shell.
+	expects bool
+	logs    []string
+}
+
+func (f *fakeShell) ReadLog(_ context.Context, key any, paths []string, expect string, _ *engine.Context) (engine.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs = append(f.logs, fmt.Sprintf("%s %v %s", key.(shellKey).agent, paths, expect))
+	return engine.Result{Text: "log"}, nil
 }
 
 func (f *fakeShell) SetSummaries(on bool) {
@@ -486,7 +497,7 @@ func (f *fakeShell) SetSummaries(on bool) {
 }
 
 func (f *fakeShell) Description() string { return "fake" }
-func (f *fakeShell) Expects() bool       { return false }
+func (f *fakeShell) Expects() bool       { return f.expects }
 
 // Status lists one command per key a call ran under, so a test sees which keys a client owns.
 func (f *fakeShell) Status(owns func(key any) (string, bool), _ int) ShellStatus {
@@ -619,6 +630,50 @@ func TestStatusListsTheTrashAndRestoresFromIt(t *testing.T) {
 	}
 	if bad := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "elsewhere"}}); !bad.IsError || !strings.Contains(text(bad), "view is one of trash") {
 		t.Fatalf("an unknown view must be refused, got %q", text(bad))
+	}
+}
+
+func TestReadWithExpectGoesToTheShellAndIsOfferedOnlyWhereAModelReadsIt(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	file(t, filepath.Join(directory, "a.log"), "one\ntwo\n")
+	schema := func(shell *fakeShell) string {
+		c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
+		listed, err := c.session.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range listed.Tools {
+			if tool.Name == "read" {
+				data, _ := json.Marshal(tool.InputSchema)
+				return string(data)
+			}
+		}
+		t.Fatal("no read tool")
+		return ""
+	}
+	if got := schema(&fakeShell{}); strings.Contains(got, "expect") {
+		t.Fatalf("expect is offered only where a model reads it: %s", got)
+	}
+	shell := &fakeShell{expects: true}
+	if got := schema(shell); !strings.Contains(got, `"expect"`) {
+		t.Fatalf("expect must be offered where a model reads it: %s", got)
+	}
+	c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
+	if got := text(c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": " did it pass "}})); got != "log" {
+		t.Fatalf("a read with expect goes to the shell, got %q", got)
+	}
+	if want := []string{" [a.log] did it pass"}; !slices.Equal(shell.logs, want) {
+		t.Fatalf("shell got %q, want %q", shell.logs, want)
+	}
+	if got := text(c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}}})); !strings.Contains(got, "1:one") {
+		t.Fatalf("a read without expect is read's own, got %q", got)
+	}
+	if bad := c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": "x", "info": true}}); !bad.IsError || !strings.Contains(text(bad), "takes no info") {
+		t.Fatalf("expect with info must be refused, got %q", text(bad))
+	}
+	alone := connect(t, Options{Directory: directory}, []string{directory}, nil, false)
+	if got := text(alone.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": "x"}})); !strings.Contains(got, "1:one") || !strings.Contains(got, "expect needs nibash") {
+		t.Fatalf("without nibash expect is left out with a note, got %q", got)
 	}
 }
 

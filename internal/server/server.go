@@ -68,6 +68,8 @@ type Shell interface {
 	Expects() bool
 	// Run executes one nibash call for the agent under key, one per agent of a client; jobs it starts stay with that key.
 	Run(ctx context.Context, key any, call ShellCall, tools *engine.Context) (engine.Result, error)
+	// ReadLog reads files for what the agent under key expects of them, as plain lines shaped the way long output is.
+	ReadLog(ctx context.Context, key any, paths []string, expect string, tools *engine.Context) (engine.Result, error)
 	// Close kills the jobs under key and forgets it.
 	Close(key any)
 	// Status is what runs under the keys owns names an agent for, with the last tail lines of each one's output.
@@ -258,7 +260,7 @@ func New(options Options) *Server {
 	destructive := true
 	writes := &mcp.ToolAnnotations{DestructiveHint: &destructive}
 	always := mcp.Meta{"anthropic/alwaysLoad": true}
-	s.AddTool(&mcp.Tool{Name: "read", Description: readDescription, InputSchema: json.RawMessage(readSchema), Annotations: readOnly, Meta: always}, s.handle(s.read, false))
+	s.AddTool(&mcp.Tool{Name: "read", Description: readDescription, InputSchema: json.RawMessage(readSchema(options.Shell != nil && options.Shell.Expects())), Annotations: readOnly, Meta: always}, s.handle(s.read, false))
 	s.AddTool(&mcp.Tool{Name: "grep", Description: grepDescription, InputSchema: json.RawMessage(grepSchema), Annotations: readOnly, Meta: always}, s.handle(s.grep, false))
 	s.AddTool(&mcp.Tool{Name: "find", Description: findDescription, InputSchema: json.RawMessage(findSchema), Annotations: readOnly, Meta: always}, s.handle(s.find, false))
 	s.AddTool(&mcp.Tool{Name: "edit", Description: EditDescription, InputSchema: json.RawMessage(editSchema), Annotations: writes, Meta: always}, s.handle(s.edit, true))
@@ -978,7 +980,7 @@ func grepMode(value string, notes *[]string) (string, error) {
 	return mode, nil
 }
 
-func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, _ *call) (engine.Result, error) {
+func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {
 	paths, err := readPaths(args, notes)
 	if err != nil {
 		return engine.Result{}, err
@@ -1002,6 +1004,20 @@ func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, _ *c
 	full, _, err := args.flag("full", notes)
 	if err != nil {
 		return engine.Result{}, err
+	}
+	expect, _, err := args.text("expect")
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if expect = strings.TrimSpace(expect); expect != "" {
+		if s.options.Shell == nil {
+			*notes = append(*notes, "[expect needs nibash, which this server does not offer, so it was left out]")
+		} else {
+			if info || full || hasCollapse || maxLineLength != nil {
+				return engine.Result{}, errors.New("expect reads files as plain lines for a model to choose from, so it takes no info, full, collapse or maxLineLength")
+			}
+			return s.options.Shell.ReadLog(ctx.Ctx, s.shell(c), paths, expect, ctx)
+		}
 	}
 	readArgs := engine.ReadArgs{Paths: paths, MaxLineLength: maxLineLength, Plain: plain, Info: info, Full: full}
 	if hasCollapse {

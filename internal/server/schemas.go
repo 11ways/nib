@@ -19,7 +19,16 @@ const namedHint = "Name a directory you will use again with hash -d name=dir in 
 const providersLine = "Tools named %s are hosted by nib: code they show prints as [PATH#TAG] and LINE:TEXT rows, like read's, that edit can anchor on."
 
 // Schemas are lean: nib reads and checks arguments itself, so they only tell the model what to send.
-const readSchema = `{"type":"object","properties":{"paths":{"description":"Required: files or directories, each optionally with a :selector, or path#TAG","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"maxLineLength":{"description":"Default 2000","type":"integer"},"plain":{"description":"For logs and files you will not edit: no numbers or tags, color codes stripped, long lines shortened, repeats collapsed; any size","type":"boolean"},"collapse":{"description":"Plain only: false keeps repeated lines","type":"boolean"},"info":{"description":"One line of facts per file (tag, lines, size, line endings, age) instead of its content","type":"boolean"},"full":{"description":"Print rows you saw instead of [lines A-B ...] markers","type":"boolean"}}}`
+
+// readSchema is the read tool's schema, with expect only where a decision model or a summarizer reads it.
+func readSchema(expect bool) string {
+	arg := ""
+	if expect {
+		arg = `"expect":{"description":"For logs: what to learn; long ones return the lines that answer it or a summary, rereads only what was added","type":"string"},`
+	}
+	return `{"type":"object","properties":{"paths":{"description":"Required: files or directories, each optionally with a :selector, or path#TAG","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},` + arg +
+		`"maxLineLength":{"description":"Default 2000","type":"integer"},"plain":{"description":"For logs and files you will not edit: no numbers or tags, color codes stripped, long lines shortened, repeats collapsed; any size","type":"boolean"},"collapse":{"description":"Plain only: false keeps repeated lines","type":"boolean"},"info":{"description":"One line of facts per file (tag, lines, size, line endings, age) instead of its content","type":"boolean"},"full":{"description":"Print rows you saw instead of [lines A-B ...] markers","type":"boolean"}}}`
+}
 
 const grepSchema = `{"type":"object","properties":{"pattern":{"description":"Regex; with literal:true a plain string","type":"string"},"paths":{"description":"Files or directories; a file may carry a read selector like log.txt:100-250. Default the project","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"glob":{"description":"Like *.ts or !*.test.ts, or a list","anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},"ignoreCase":{"type":"boolean"},"literal":{"type":"boolean"},"before":{"description":"Context lines before each match; default 1, at most 20","type":"integer"},"after":{"description":"Context lines after each match; default 1, at most 20. Past 40 context lines in all, definitions get them first","type":"integer"},"mode":{"description":"matches (default); files: matching paths only; count: matches per file; both list paths as find does","type":"string"},"noIgnore":{"description":"Also search ignored files","type":"boolean"},"maxLineLength":{"description":"Default 512","type":"integer"},"skip":{"description":"Files to skip, for the next page","type":"integer"},"replace":{"description":"Replacement with $1 or ${name}; previews the changes and returns a token for edit","type":"string"}},"required":["pattern"]}`
 

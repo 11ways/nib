@@ -67,7 +67,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 			}
 		}
 		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
-			Excerpt: shown, Entries: chosen, Legend: legend}
+			Excerpt: shown, Entries: chosen, Legend: legend, Base: log.base}
 		s := d.summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}
@@ -325,14 +325,14 @@ func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown
 		}
 		shown += share
 		if first, last := logLines(rowsAt(rows, add[head:len(add)-(share-head)])); first > 0 {
-			note := "[nibash: log " + lineSpan(first, last) + " left out; the middle of this passage"
+			note := "log " + log.span(first, last) + " left out; the middle of this passage"
 			if log.path != "" {
-				note += fmt.Sprintf(": read %s:%d-%d plain:true", log.path, first, last)
+				note += fmt.Sprintf(": read %s:%d-%d plain:true", log.path, log.base+first, log.base+last)
 			}
-			notes[add[head]] = note + "]"
+			notes[add[head]] = log.note(note)
 		}
 	}
-	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes)...)
+	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes, log)...)
 	return out, shown
 }
 
@@ -373,7 +373,7 @@ func summaryText(text string) string {
 
 // gapped is the rows keep marks, with a row naming the log lines of each run left out between them, or the note given for the run's first
 // row.
-func gapped(rows []row, keep []bool, notes map[int]string) []row {
+func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
 	var out []row
 	for i := 0; i < len(rows); {
 		if keep[i] {
@@ -387,7 +387,7 @@ func gapped(rows []row, keep []bool, notes map[int]string) []row {
 		}
 		text, ok := notes[i]
 		if !ok {
-			text = "[nibash: " + leftOut(rows[i:j]) + "]"
+			text = log.note(log.leftOut(rows[i:j]))
 		}
 		out = append(out, row{text: text, header: -1})
 		i = j
@@ -406,11 +406,11 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	if choice.Model {
 		purpose = " for the failure"
 		if d.purpose != "" {
-			purpose = " for your description"
+			purpose = " for " + d.asked()
 		}
 	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
-		return fixedCut(rows, log, strings.Join(append([]string{who + " judged that your description needs every line, so filter or count the whole output instead"}, notes...), "; "))
+		return fixedCut(rows, log, strings.Join(append([]string{who + " judged that " + d.asked() + " needs every line, so filter or count the " + log.whole() + " instead"}, notes...), "; "))
 	}
 	n := len(rows)
 	end := n - decidedTail
@@ -468,14 +468,14 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	if !chose && len(missed) == 0 {
 		return fixedCut(rows, log, strings.Join(append([]string{who + " found nothing in them" + purpose}, notes...), "; "))
 	}
-	out := gapped(rows, keep, nil)
+	out := gapped(rows, keep, nil, log)
 	clauses := []string{who + " chose the middle" + purpose}
 	if len(missed) > 0 {
 		passages := "passages"
 		if len(missed) == 1 {
 			passages = "passage"
 		}
-		clauses = append(clauses, fmt.Sprintf("%d more %s it chose did not fit (log %s)", len(missed), passages, spans(missed)))
+		clauses = append(clauses, fmt.Sprintf("%d more %s it chose did not fit (log %s)", len(missed), passages, log.spans(missed)))
 	}
 	var reasons []string
 	byReason := map[string][][2]int{}
@@ -490,7 +490,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 		byReason[u.Reason] = append(byReason[u.Reason], [2]int{first, last})
 	}
 	for _, reason := range reasons {
-		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", spans(byReason[reason]), reason))
+		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", log.spans(byReason[reason]), reason))
 	}
 	return append(out, row{text: closing(shown, log, append(clauses, notes...)), header: -1})
 }
@@ -511,16 +511,16 @@ func logLines(rows []row) (int, int) {
 }
 
 // leftOut names what a gap leaves out by its log lines, so sed -n A,Bp on the log shows exactly that.
-func leftOut(rows []row) string {
+func (l saved) leftOut(rows []row) string {
 	first, last := logLines(rows)
 	if first == 0 {
 		return fmt.Sprintf("%s rows left out", thousands(len(rows)))
 	}
-	return "log " + lineSpan(first, last) + " left out"
+	return "log " + l.span(first, last) + " left out"
 }
 
 // spans lists ranges of log lines, merging overlaps, up to three.
-func spans(ranges [][2]int) string {
+func (l saved) spans(ranges [][2]int) string {
 	slices.SortFunc(ranges, func(a, b [2]int) int { return a[0] - b[0] })
 	var merged [][2]int
 	for _, r := range ranges {
@@ -537,9 +537,9 @@ func spans(ranges [][2]int) string {
 			break
 		}
 		if r[0] == r[1] {
-			parts = append(parts, fmt.Sprint(r[0]))
+			parts = append(parts, fmt.Sprint(l.base+r[0]))
 		} else {
-			parts = append(parts, fmt.Sprintf("%d-%d", r[0], r[1]))
+			parts = append(parts, fmt.Sprintf("%d-%d", l.base+r[0], l.base+r[1]))
 		}
 	}
 	if len(merged) == 1 && merged[0][0] == merged[0][1] {
@@ -550,12 +550,12 @@ func spans(ranges [][2]int) string {
 
 // closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is.
 func closing(shown int, log saved, clauses []string) string {
-	text := fmt.Sprintf("[nibash: %s rows shown of %s log lines; ", thousands(shown), thousands(log.lines))
+	text := fmt.Sprintf("%s rows shown of %s log lines; ", thousands(shown), thousands(log.lines))
 	for _, clause := range clauses {
 		text += clause + "; "
 	}
 	if log.path == "" {
-		return text + "the whole output could not be saved]"
+		return log.note(text + "the whole output could not be saved")
 	}
 	if log.holds < log.lines {
 		limit := thousands(logLimit) + " bytes"
@@ -564,5 +564,5 @@ func closing(shown int, log saved, clauses []string) string {
 		}
 		text += fmt.Sprintf("the log stops at its %s limit, in log line %s; ", limit, thousands(log.holds))
 	}
-	return text + "whole output: " + log.path + "]"
+	return log.note(text + log.whole() + ": " + log.path)
 }

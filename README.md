@@ -20,7 +20,7 @@ bun typecheck           # go vet and tsgo --noEmit
 
 | Tool | Input | Purpose |
 | --- | --- | --- |
-| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `info` gives one line of facts per file instead of content. |
+| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info`, `expect` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `info` gives one line of facts per file instead of content; `expect` (with a decision or summary model) reads a log for what you need to learn from it. |
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search whose output rows are valid edit anchors; can also just list matching files or count matches; `replace` previews a search-and-replace and returns a token that applies it. |
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files recursively with line counts, sizes and ages; filters by size and age, sorts by path, size or age. |
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
@@ -132,6 +132,30 @@ least 3 lines that comes back later, such as a stack trace, prints once as `[#1,
 copy as one row, `[#1 again, 23 lines] its own first line`; the first time an agent sees these markers, in a plain read
 or in nibash, a closing line explains them. Collapsing only happens where it prints fewer rows, never across a gap
 between selected ranges, and when it hid other numbers the block ends with a note; `collapse: false` shows every line.
+
+#### Reading a log with expect
+
+Where nibash has a decision model or a summarizer ([long output and deciders](#long-output-and-deciders)), `read` takes
+`expect`: what the agent needs to learn from a file, like `did the unit phase pass; if not, which tests failed and why`.
+Each file is then read as plain lines (no numbers, nothing to edit from) and shaped the way nibash shapes a long program
+output, with `expect` as the purpose: within 150 lines and 12 KB it prints whole; past them the decider chooses the
+lines that bear on it, or a summary leads the lines it points at, under the same notes, which say `read` and name the
+file and its own line numbers (`[read: log lines 31-1179 left out]`, `whole file: run.log`), so
+`read run.log:31-1179 plain:true` shows what a gap left out.
+
+```
+[run.log] lines 4001-5213 of 5213, plain: new since your last read
+<summary>The unit phase timed out after 601 s with 6 failures; SyncedRefTest.everySubscriberReceivesPushes was still running.</summary>
+...
+```
+
+A file the agent read whole with `expect` before shows only the lines added since, numbered as the file numbers them, so
+polling a test log costs only what it grew by; a last line still being written shows as it stands and again once it is
+finished, and `[...] N lines, plain: nothing new since your last read` answers a read of a log that did not grow. A file
+that shrank or whose first 4 KiB changed is read whole again and says so. A selector (`run.log:200-900`, `run.log:-500`)
+reads those lines, an open range to the end, and leaves where the next whole read goes on alone. Several files read in
+one call, a missing one noted in its place; at most 64 MiB of a file is read per call. `expect` takes no `info`, `full`,
+`collapse` or `maxLineLength`, and without nibash it is left out with a note.
 
 #### Changes since a tag
 
@@ -674,7 +698,8 @@ output under the limits shrinks 1.06 times or less, so none of them changes). An
 the decision model and the summary apply to it: a log is a file named `*.log`, `*.out` (or `*.log.N`) or kept in a
 `log`, `logs` or `test-logs` directory that git does not track, or a file of 100 lines or more that shrinks at least 2
 times under deduplication (no tracked file of nib's own passes 1.42; a test checks every one). The commands still print
-what the system programs would; only the form of the rows differs. `read` shows a log as anchored rows for editing.
+what the system programs would; only the form of the rows differs. `read` shows a log as anchored rows for editing, or
+with `expect` as program output for a purpose ([reading a log with expect](#reading-a-log-with-expect)).
 
 | variable | default | meaning |
 | --- | --- | --- |
@@ -699,10 +724,10 @@ as above. Since claude-capture and zenit-workspace's bootstrap run `nib setup` a
 holds for every Claude Code profile and every OpenCode session there.
 
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
-exit status and the rows between the kept start and end of each output long enough to be cut. That is whatever the
-program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in it; setting the variable is consent to
-that. File rows of nib's own commands, the log path, the working directory and anything the command did not print are
-never sent. Every request asks for zero data retention and no data collection
+exit status, the lines of a file read with `expect` and the rows between the kept start and end of each output long
+enough to be cut. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in
+it; setting the variable is consent to that. File rows of nib's own commands, the log path, the working directory and
+anything the command did not print are never sent. Every request asks for zero data retention and no data collection
 (`provider: {"zdr": true, "data_collection": "deny"}`); OpenRouter's own prompt logging is an account setting nib cannot
 override, so check it in the [privacy settings](https://openrouter.ai/settings/privacy).
 

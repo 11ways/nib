@@ -196,6 +196,25 @@ func TestASummarizerReadsOnlyTheExcerptAndAnswersAreCached(t *testing.T) {
 	}
 }
 
+func TestAFileReadFromALaterLineIsNumberedAndAnsweredByTheFilesOwnLines(t *testing.T) {
+	log := logOf(100, map[int]string{41: "error: the one that matters"})
+	f := &chatFake{answer: func(int, map[string]any) (int, string) {
+		return 200, `{"summary": "One error.", "ranges": [[541, 541], [41, 41]]}`
+	}}
+	server := f.serve(t)
+	in := SummaryInput{Command: "cat run.log", Purpose: "why", Log: log, Excerpt: []int{40, 41, 42}, Base: 500}
+	got := summarizerFor(t, server, "v/m", "").Summarize(context.Background(), in)
+	// The answer's 541 is the log's line 41; its 41, before the log, is dropped.
+	if got.Failure != "" || !slices.Equal(got.Ranges, [][2]int{{41, 41}}) || got.Dropped != 1 {
+		t.Fatalf("summary %+v", got)
+	}
+	messages := f.requests[0]["messages"].([]any)
+	system, user := messages[0].(map[string]any)["content"].(string), messages[1].(map[string]any)["content"].(string)
+	if user != fmt.Sprintf("540: %s\n541: %s\n542: %s\n", log[39], log[40], log[41]) || !strings.Contains(system, "Output: lines 501-600 of a file, numbered below.") {
+		t.Fatalf("prompt %q\ninput %q", system, user)
+	}
+}
+
 func TestClaudePRunsOnTheLoginWithNothingOfTheProjectLoaded(t *testing.T) {
 	record := fakeClaude(t, `{"summary": "It hangs.", "ranges": [[2, 2]]}`, 0)
 	entries, _ := parseSummary("claude-p:haiku")

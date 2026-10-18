@@ -1,0 +1,166 @@
+package nibash
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/11ways/nib/internal/engine"
+)
+
+// logMark is how far an agent read a file with expect: its size and start then, and the whole lines read, which end at offset; partial is
+// how many bytes of a last line without its line break were shown after them.
+type logMark struct {
+	size    int64
+	head    []byte
+	lines   int
+	offset  int64
+	partial int
+}
+
+// ReadLog reads files for what the agent expects of them, as plain lines shaped the way long program output is: past the limits a decider
+// chooses the lines that bear on expect, or a summary leads the lines it points at. A file read whole again shows only what was added
+// since, unless it shrank or its start changed.
+func (s *Shell) ReadLog(ctx context.Context, key any, paths []string, expect string, tools *engine.Context) (engine.Result, error) {
+	sess := s.session(key)
+	d := decision{decider: s.decider, summarizer: s.activeSummarizer(), purpose: purpose(expect), read: true}
+	var blocks, failures []string
+	for _, entry := range paths {
+		text, err := s.readLog(ctx, sess, entry, d, tools)
+		if err != nil {
+			if ctx.Err() != nil {
+				return engine.Result{}, err
+			}
+			failures = append(failures, err.Error())
+			text = "[" + err.Error() + "]"
+		}
+		blocks = append(blocks, text)
+	}
+	if len(failures) == len(paths) {
+		return engine.Result{}, errors.New(strings.Join(failures, "; "))
+	}
+	return engine.Result{Text: strings.Join(blocks, "\n\n")}, nil
+}
+
+// readLog is one file's block: a head line of facts, then each window of its lines as shape leaves it.
+func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d decision, tools *engine.Context) (string, error) {
+	whole, resumed, rewritten := false, false, false
+	var mark logMark
+	file, err := s.engine.ReadLog(tools, entry, logLimit, func(f *engine.LogFile) int64 {
+		whole = true
+		sess.mu.Lock()
+		m, ok := sess.marks[f.Canonical]
+		sess.mu.Unlock()
+		if !ok {
+			return 0
+		}
+		if f.Size < m.size || !bytes.HasPrefix(f.Head, m.head) {
+			rewritten = true
+			return 0
+		}
+		mark, resumed = m, true
+		return m.offset
+	})
+	if err != nil {
+		return "", err
+	}
+	raw := file.Raw
+	skipped := 0
+	if file.From == 0 && bytes.HasPrefix(raw, []byte("\xef\xbb\xbf")) {
+		raw, skipped = raw[3:], 3
+	}
+	lines := plainLines(raw)
+	base := mark.lines
+	total := base + len(lines)
+	d.command = "cat " + file.Display
+	if whole {
+		next := logMark{size: file.Size, head: file.Head, lines: base, offset: file.From + int64(skipped)}
+		if end := bytes.LastIndexByte(raw, '\n'); end >= 0 {
+			next.lines += bytes.Count(raw[:end+1], []byte("\n"))
+			next.offset += int64(end + 1)
+		}
+		next.partial = len(raw) - int(next.offset-file.From-int64(skipped))
+		sess.mu.Lock()
+		if sess.marks == nil {
+			sess.marks = map[string]logMark{}
+		}
+		sess.marks[file.Canonical] = next
+		sess.mu.Unlock()
+		// A last line still being written was shown whole as it stood; shown again unchanged, it is nothing new.
+		if resumed && (len(raw) == 0 || len(raw) == mark.partial && next.lines == mark.lines) {
+			return fmt.Sprintf("[%s] %d lines, plain: nothing new since your last read", file.Display, total), nil
+		}
+	}
+	var out []string
+	switch {
+	case len(lines) == 0 && !resumed:
+		return fmt.Sprintf("[%s] empty, plain", file.Display), nil
+	case file.Ranges != nil:
+		var parts []string
+		for _, r := range file.Ranges {
+			if r[0] == r[1] {
+				parts = append(parts, fmt.Sprint(r[0]))
+			} else {
+				parts = append(parts, fmt.Sprintf("%d-%d", r[0], r[1]))
+			}
+		}
+		out = append(out, fmt.Sprintf("[%s] lines %s of %d, plain", file.Display, strings.Join(parts, ", "), total))
+	case resumed:
+		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last read", file.Display, base+1, total, total))
+	case rewritten:
+		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten since your last read, so all of it", file.Display, total))
+	default:
+		out = append(out, fmt.Sprintf("[%s] %d lines, plain", file.Display, total))
+	}
+	windows := file.Ranges
+	if windows == nil {
+		windows = [][2]int{{base + 1, total}}
+	}
+	echoed := false
+	for _, w := range windows {
+		texts, echo := shapeWindow(ctx, lines[w[0]-1-base:w[1]-base], w[0]-1, file.Display, d)
+		out = append(out, texts...)
+		echoed = echoed || echo
+	}
+	if file.Short {
+		if whole {
+			out = append(out, fmt.Sprintf("[read: stopped after %d MiB, at line %d; the next read with expect goes on from there]", logLimit>>20, total))
+		} else {
+			out = append(out, fmt.Sprintf("[read: only the first %d MiB of the file were read]", logLimit>>20))
+		}
+	}
+	if echoed {
+		out = append(out, s.engine.EchoNote(tools)...)
+	}
+	return strings.Join(out, "\n"), nil
+}
+
+// shapeWindow is lines, the file's lines from base+1 on, as rows numbered from 1 that shape reads as a log of their own, while every note
+// and cut row names the file's line numbers.
+func shapeWindow(ctx context.Context, lines []string, base int, display string, d decision) ([]string, bool) {
+	if len(lines) == 0 {
+		return nil, false
+	}
+	plain := make([]engine.PlainLine, len(lines))
+	at := make([]int, len(lines))
+	for i, line := range lines {
+		plain[i] = engine.PlainLine{At: i + 1, Text: line}
+		at[i] = i + 1
+	}
+	items, echoed := plainItems(plain, at, make([]*listedLine, len(lines)))
+	rows := make([]row, len(items))
+	for i, it := range items {
+		rows[i] = plainRowAt(it.text, base+it.first, it.first, it.last, nil)
+	}
+	raw := strings.Join(lines, "\n")
+	rows, footer := fit(ctx, rows, raw, d, func() saved {
+		return saved{path: display, lines: len(lines), holds: len(lines), file: true, base: base}
+	})
+	texts := make([]string, 0, len(rows)+len(footer))
+	for _, r := range rows {
+		texts = append(texts, r.text)
+	}
+	return append(texts, footer...), echoed
+}
