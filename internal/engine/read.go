@@ -1449,7 +1449,8 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		if reason := junk(t.canonical, size, anchored.Lines); reason != "" {
 			return noteBlock(fmt.Sprintf("[%s] skipped: %s, %s. Read %s:1- to read it anyway, a range like %s:1-100, or grep it.", t.display, reason, sizeText, t.display, t.display)), nil
 		}
-		if total > outlineLines || size > outlineBytes {
+		large := total > outlineLines || size > outlineBytes
+		if large || total > codeOutlineLines || size > codeOutlineBytes {
 			s := outline(t.display, anchored.Lines)
 			anchors := 0
 			for _, r := range s.rows {
@@ -1464,7 +1465,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 				}
 			}
 			// Flat data (logs, CSV, lists) puts nearly every line at the top level; its head says more than such an "outline".
-			if anchors >= outlineMinRows && s.candidates*2 <= nonBlank {
+			if anchors >= outlineMinRows && s.candidates*2 <= nonBlank && (large || len(s.rows)*3 <= total) {
 				rows := make([]blockRow, len(s.rows))
 				for i, r := range s.rows {
 					if r.line > 0 {
@@ -1487,24 +1488,26 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 					},
 				}, nil
 			}
-			count := min(headLines, total)
-			rows := make([]blockRow, count)
-			for i := range rows {
-				rows[i] = rowFor(i + 1)
+			if large {
+				count := min(headLines, total)
+				rows := make([]blockRow, count)
+				for i := range rows {
+					rows[i] = rowFor(i + 1)
+				}
+				rows = e.heldRows(ctx, t.canonical, anchored, rows)
+				return &block{
+					head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, t.display, count+1),
+					rows: rows,
+					finish: func(shown int) []string {
+						record(rows[:shown])
+						var out []string
+						if shown < len(rows) {
+							out = append(out, stop(rows[shown].at, rows[shown].text))
+						}
+						return append(out, cuts(rows[:shown])...)
+					},
+				}, nil
 			}
-			rows = e.heldRows(ctx, t.canonical, anchored, rows)
-			return &block{
-				head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, t.display, count+1),
-				rows: rows,
-				finish: func(shown int) []string {
-					record(rows[:shown])
-					var out []string
-					if shown < len(rows) {
-						out = append(out, stop(rows[shown].at, rows[shown].text))
-					}
-					return append(out, cuts(rows[:shown])...)
-				},
-			}, nil
 		}
 	}
 	selected, err := selectLines(sel, total)

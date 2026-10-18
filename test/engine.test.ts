@@ -189,6 +189,17 @@ describe("large reads", () => {
     expect((await f.read(":1-")).anchors).toHaveLength(lines.length - 1)
   })
 
+  test("code past 200 lines gets its outline when that is at most a third of the file; flat data and dense code stay whole", async () => {
+    const outlined = await fixture(source(50))
+    expect((await outlined.read()).text.split("\n")[0]).toEndWith("outline only. Read the ranges you need, like file.txt:120-180, or file.txt:1- for everything.")
+    const small = await fixture(source(36))
+    expect((await small.read()).anchors).toHaveLength(source(36).split("\n").length - 1)
+    const flat = Array.from({ length: 300 }, (_, index) => `row ${index}`).join("\n") + "\n"
+    expect((await (await fixture(flat)).read()).anchors).toHaveLength(300)
+    const dense = "export class Dense {\n" + Array.from({ length: 70 }, (_, index) => `  m${index}() {\n  }\n`).join("\n") + "}\n"
+    expect((await (await fixture(dense)).read()).anchors).toHaveLength(dense.split("\n").length - 1)
+  })
+
   test("outlines skip comments, multi-line strings and signature tails, and list class members of any language", async () => {
     const f = await fixture()
     const java = [

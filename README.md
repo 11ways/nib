@@ -76,9 +76,10 @@ reads the file as asked, though a minified file still gets shorter lines.
 - **Minified lines.** When a range read of a minified file has lines over 300 characters and no `maxLineLength` was
   passed, its lines are cut at 300 characters instead of 2000, and the header says so; passing `maxLineLength` restores
   the usual cut.
-- **Outlines.** Files over 500 lines or 20 KiB return `[PATH#TAG] N lines, about Xk tokens; outline only...` followed by
-  real `LINE:TEXT` rows: every top-level code line, plus the first-level members of top-level classes, interfaces,
-  structs, enums, traits, impls, namespaces and similar containers. Runs of imports collapse to the first one and a
+- **Outlines.** Code files over 200 lines or 8 KiB, whose outline is at most a third of their length, and any file over
+  500 lines or 20 KiB return `[PATH#TAG] N lines, about Xk tokens; outline only...` followed by real `LINE:TEXT` rows:
+  every top-level code line, plus the first-level members of top-level classes, interfaces, structs, enums, traits,
+  impls, namespaces and similar containers. Runs of imports collapse to the first one and a
   `[lines A-B: N more import lines]` note, and runs of three or more one-line declarations at the same depth (constants,
   type aliases, fields: lines whose next code line is not deeper) collapse the same way into
   `[lines A-B: N more one-line declarations]`. Comments, blank lines, closing-bracket lines (including signature tails
