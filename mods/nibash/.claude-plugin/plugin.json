@@ -1,7 +1,7 @@
 {
   "name": "nibash",
   "version": "0.1.0",
-  "description": "Shows the nibash commands and jobs nib runs: a band above the prompt, a /nibash pane with their output, a toast when a job ends",
+  "description": "Shows what nib runs and holds: a band above the prompt for nibash calls, jobs, long summaries and slow providers, a /nibash pane with their output, panes /trash, /tokens, /names and /seen, a toast when a job ends",
   "author": { "name": "Jelle De Loecker" },
   "types": "./types/index.d.ts"
 }
