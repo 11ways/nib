@@ -998,8 +998,8 @@ up to three running jobs and calls, one line each, `nibash 0:42 Run all Go tests
 `job %1 3:10 bun bench/run.ts subagent`, the first ending in `/nibash` (or `+2 more /nibash`). A call still in its
 request is left out, since the transcript already shows it, until Claude Code moves it to the background. `/nibash`
 opens a pane with every command and job, the ones ended in the last 10 minutes included, each with its command and
-last output lines (Escape closes it while it holds the keys, and a second `/nibash` closes it too); and a job that ends while the mod
-watched it gets a toast with its exit status. The mod hooks every
+last output lines (Escape closes it while it holds the keys, and a second `/nibash` closes it too); and a job that
+ends while the mod watched it gets a toast with its exit status. The mod hooks every
 `mcp__<server>__nibash` call, which tells it nib's server name and when to look, and while anything runs it asks that
 server's `nibash_status` once a second (with `tail: 12`), stopping once nothing runs; nib is the only source of what
 runs, so subagents' commands and jobs show too. Claude Code passes a tool's structured content on as the JSON of its one
