@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, NameList, SeenList, Status, Tokens, TrashEntry, Views } from '../types'
+import type { Command, Job, ModelCall, NameList, SeenList, Status, Tokens, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -64,13 +64,31 @@ function job(value: unknown): Job | undefined {
 }
 
 /** Reads a nibash_status answer; undefined for anything else, so a server that is not nib, or another version of it, shows nothing. */
+function modelCall(value: unknown): ModelCall | undefined {
+  const v = value as Record<string, unknown> | null
+  if (typeof v !== 'object' || v === null || typeof v.kind !== 'string' || typeof v.model !== 'string' || !isNumber(v.started)) return undefined
+  return { kind: v.kind, model: v.model, started: v.started }
+}
+
 export function parse(content: unknown, at: number): Status | undefined {
   const v = content as Record<string, unknown> | null
   if (typeof v !== 'object' || v === null || !Array.isArray(v.commands) || !Array.isArray(v.jobs)) return undefined
   const commands = v.commands.map(command)
   const jobs = v.jobs.map(job)
   if (commands.some(c => c === undefined) || jobs.some(j => j === undefined)) return undefined
-  return { commands: commands as Command[], jobs: jobs as Job[], at }
+  const status: Status = { commands: commands as Command[], jobs: jobs as Job[], at }
+  // Answers of an older nib hold neither; one that does is read in full or not at all.
+  if (v.models !== undefined) {
+    const models = Array.isArray(v.models) ? v.models.map(modelCall) : undefined
+    if (models === undefined || models.some(m => m === undefined)) return undefined
+    status.models = models as ModelCall[]
+  }
+  if (v.summaries !== undefined) {
+    const on = (v.summaries as { on?: unknown } | null)?.on
+    if (typeof on !== 'boolean') return undefined
+    status.summaries = on
+  }
+  return status
 }
 
 /** The trash a nibash_status answer lists; undefined when it lists none or not in nib's shape. */
@@ -222,6 +240,16 @@ export function rows(s: Status, ended: boolean, waiting: readonly string[] = [])
       isDone: false,
     })
   })
+  for (const m of s.models ?? []) {
+    out.push({
+      key: `m:${m.kind}:${m.model}:${m.started}`,
+      label: m.kind === 'summary' ? 'summary' : 'decider',
+      time: elapsed(s.at - m.started),
+      title: m.model,
+      tail: [],
+      isDone: false,
+    })
+  }
   for (const j of s.jobs) {
     if (!j.running && !ended) continue
     out.push({
@@ -282,7 +310,7 @@ async function poll($: EngineInterface): Promise<void> {
       }
     }
     await update($, status, () => next)
-    if (inFlight === 0 && next.commands.length === 0 && !next.jobs.some(j => j.running)) stop()
+    if (inFlight === 0 && next.commands.length === 0 && !(next.models?.length) && !next.jobs.some(j => j.running)) stop()
   } catch {
     // No nib server by that name (yet), or it went away: nothing to show until a nibash call names one.
     stop()
@@ -342,6 +370,33 @@ async function restore($: EngineInterface, path: string): Promise<void> {
   }
 }
 
+/** /nibash summaries [on|off]: turns nib's summaries of long output on or off, or flips them; the line to show of what nib answered. */
+async function setSummaries($: EngineInterface, args: string): Promise<string> {
+  const [word, setting] = args.split(/\s+/)
+  if (word !== 'summaries' || (setting !== undefined && setting !== 'on' && setting !== 'off')) return 'usage: /nibash summaries [on|off]'
+  const none = 'nib has no summary model set, so there are no summaries to turn on or off.'
+  try {
+    const name = await read($, server)
+    const ask = async (extra: Record<string, unknown>) => {
+      const answer = await $.mcp.call(name, 'nibash_status', extra)
+      return answer.isError ? undefined : parse(answer.structuredContent ?? structuredText(answer.content), await $.clock.now())
+    }
+    let on = setting === undefined ? undefined : setting === 'on'
+    if (on === undefined) {
+      const now = await ask({})
+      if (now?.summaries === undefined) return none
+      on = !now.summaries
+    }
+    const done = await ask({ summaries: on })
+    if (done?.summaries === undefined) return none
+    const summaries = done.summaries
+    await update($, status, s => (s === null ? s : { ...s, summaries }))
+    return summaries ? 'Summaries of long nibash output are on.' : 'Summaries of long nibash output are off: long output is cut as without a summary model.'
+  } catch {
+    return 'nib did not answer.'
+  }
+}
+
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
@@ -354,7 +409,9 @@ export const register: Register = on => {
   })
 
   // /nibash again, or Escape while the pane holds the keys, closes it.
-  on('command.run', { command: PANE }, async $ => {
+  on('command.run', { command: PANE }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    if (args !== '') return { text: await setSummaries($, args) }
     if ((await $.ui.panes()).some(pane => pane.id === PANE)) {
       await $.ui.close({ id: PANE })
       return {}
@@ -424,6 +481,7 @@ export const register: Register = on => {
     if (all.length === 0) {
       return (
         <Box flexDirection="column">
+          {s?.summaries === undefined ? null : <Text dimColor>summaries are {s.summaries ? 'on; /nibash summaries off turns them off' : 'off; /nibash summaries on turns them on'}</Text>}
           <Text dimColor>Nothing runs in nibash, and no job ended in the last 10 minutes.</Text>
         </Box>
       )
@@ -433,6 +491,7 @@ export const register: Register = on => {
     const lines = Math.max(0, Math.floor(room / all.length) - 1)
     return (
       <Box flexDirection="column">
+        {s?.summaries === undefined ? null : <Text dimColor>summaries are {s.summaries ? 'on; /nibash summaries off turns them off' : 'off; /nibash summaries on turns them on'}</Text>}
         {all.map(row => (
           <Box key={row.key} flexDirection="column">
             <Text wrap="truncate-end" dimColor={row.isDone}>

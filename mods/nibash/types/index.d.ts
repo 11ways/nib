@@ -4,8 +4,11 @@ export type Command = { agent: string; command: string; description?: string; st
 /** A nibash job, running or ended; exit and ended are set once it ended. */
 export type Job = { id: number; agent: string; command: string; started: number; ended?: number; running: boolean; exit?: number; log: string; tail?: string[] }
 
+/** A decision or summary model nib is asking now, as nibash_status reports it; started is Unix milliseconds. */
+export type ModelCall = { kind: string; model: string; started: number }
+
 /** One nibash_status answer, with when it was asked. */
-export type Status = { commands: Command[]; jobs: Job[]; at: number }
+export type Status = { commands: Command[]; jobs: Job[]; models?: ModelCall[]; summaries?: boolean; at: number }
 
 /** A path nib moved to the trash that is still there; path is absolute and what a restore takes. */
 export type TrashEntry = { path: string; shown: string; when: number; dir?: boolean }

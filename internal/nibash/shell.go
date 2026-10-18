@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -46,6 +47,11 @@ type Shell struct {
 	logs       *logDirectory
 	mu         sync.Mutex
 	sessions   map[any]*session
+	// summariesOff is set when a client turned summaries off; models are the model calls running now, for Status.
+	summariesOff atomic.Bool
+	modelMu      sync.Mutex
+	models       map[int]server.ModelCall
+	modelNext    int
 }
 
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
@@ -57,13 +63,47 @@ func New(e *engine.Engine, sandbox bool) *Shell {
 // Deciding sets the decider that chooses what long output shows; nil is the fixed cut. Call it before serving.
 func (s *Shell) Deciding(d decider.Decider) *Shell {
 	s.decider = d
+	if o, ok := d.(decider.Observable); ok {
+		o.Observe(s.observe)
+	}
 	return s
 }
 
 // Summarizing sets the summarizer whose checked summary leads long output; nil is none. Call it before serving.
 func (s *Shell) Summarizing(summarizer decider.Summarizer) *Shell {
 	s.summarizer = summarizer
+	if o, ok := summarizer.(decider.Observable); ok {
+		o.Observe(s.observe)
+	}
 	return s
+}
+
+// observe notes a model call running until the function it returns is called, for Status.
+func (s *Shell) observe(kind, model string) func() {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	if s.models == nil {
+		s.models = map[int]server.ModelCall{}
+	}
+	s.modelNext++
+	id := s.modelNext
+	s.models[id] = server.ModelCall{Kind: kind, Model: model, Started: time.Now().UnixMilli()}
+	return func() {
+		s.modelMu.Lock()
+		delete(s.models, id)
+		s.modelMu.Unlock()
+	}
+}
+
+// SetSummaries turns the summary of long output on or off; with no summarizer it changes nothing.
+func (s *Shell) SetSummaries(on bool) { s.summariesOff.Store(!on) }
+
+// activeSummarizer is the summarizer a call uses: none while summaries are off.
+func (s *Shell) activeSummarizer() decider.Summarizer {
+	if s.summariesOff.Load() {
+		return nil
+	}
+	return s.summarizer
 }
 
 // Description is the tool description, which says how the configured decider cuts long output.
@@ -377,7 +417,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		status = 1
 	}
 	callTools.Ctx = ctx
-	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
 	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
@@ -410,7 +450,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		j.finish(err, out)
 	}()
 	c.tools.Ctx = ctx
-	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.summarizer, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
 	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
 	return c.result(reports, text, tail, before, bodies), nil
 }

@@ -231,3 +231,50 @@ func TestTheDescriptionSaysASummaryMayLeadACut(t *testing.T) {
 		t.Fatal("the description does not name the summary")
 	}
 }
+
+// observing is a summarizer that tells its observer of its model call, as the real ones do.
+type observing struct {
+	fakeSummarizer
+	observer decider.Observer
+}
+
+func (o *observing) Observe(f decider.Observer) { o.observer = f }
+
+func TestSummariesCanBeTurnedOffAndStatusTellsOfModelCallsRunning(t *testing.T) {
+	f := newFixture(t, nil)
+	status := func() server.ShellStatus { return f.shell.Status(func(any) (string, bool) { return "", false }, 0) }
+	var during []server.ModelCall
+	s := &observing{}
+	s.summarize = func(decider.SummaryInput) decider.Summary {
+		defer s.observer("summary", "fake/model")()
+		during = status().Models
+		return decider.Summary{Text: "Line 5 is it.", Ranges: [][2]int{{5, 5}}}
+	}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	f.shell.Deciding(choose).Summarizing(s)
+	call := server.ShellCall{Command: "seq 1 1000; exit 1", Description: "run it"}
+	if out := f.call(call); !strings.Contains(out, "<summary>Line 5 is it.</summary>") {
+		t.Fatalf("a summary leads the cut:\n%s", out)
+	}
+	if len(during) != 1 || during[0].Kind != "summary" || during[0].Model != "fake/model" || during[0].Started == 0 {
+		t.Fatalf("a call running is told of: %+v", during)
+	}
+	after := status()
+	if len(after.Models) != 0 || after.Summaries == nil || !after.Summaries.On {
+		t.Fatalf("a call that ended is gone, and summaries are on: %+v", after)
+	}
+	f.shell.SetSummaries(false)
+	if out := f.call(call); strings.Contains(out, "<summary>") || len(s.asked) != 1 {
+		t.Fatalf("with summaries off the summarizer is not asked, and the cut stands:\n%s", out)
+	}
+	if off := status(); off.Summaries == nil || off.Summaries.On {
+		t.Fatalf("status says they are off: %+v", off.Summaries)
+	}
+	f.shell.SetSummaries(true)
+	if out := f.call(call); !strings.Contains(out, "<summary>") || len(s.asked) != 2 {
+		t.Fatalf("on again:\n%s", out)
+	}
+	if none := New(nil, false).Status(func(any) (string, bool) { return "", false }, 0); none.Summaries != nil || len(none.Models) != 0 {
+		t.Fatalf("with no summarizer a status has no summaries state: %+v", none)
+	}
+}

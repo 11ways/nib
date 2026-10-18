@@ -235,3 +235,16 @@ func (s *Server) seenView(ctx *engine.Context, u *usageLog) *SeenView {
 	}
 	return view
 }
+
+// ModelCall is a decision or summary model being asked now; Started is Unix milliseconds.
+type ModelCall struct {
+	// Kind is "decider" or "summary", and Model what is asked: a model, or the summary entry.
+	Kind    string `json:"kind"`
+	Model   string `json:"model"`
+	Started int64  `json:"started"`
+}
+
+// SummaryState says whether summaries of long output are on; a status has it only where a summarizer is set.
+type SummaryState struct {
+	On bool `json:"on"`
+}

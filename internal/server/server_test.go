@@ -474,6 +474,15 @@ type fakeShell struct {
 	mu     sync.Mutex
 	ran    []shellKey
 	closed []shellKey
+	// off is whether summaries were turned off; models are the model calls Status tells of.
+	off    bool
+	models []ModelCall
+}
+
+func (f *fakeShell) SetSummaries(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.off = !on
 }
 
 func (f *fakeShell) Description() string { return "fake" }
@@ -483,7 +492,7 @@ func (f *fakeShell) Expects() bool       { return false }
 func (f *fakeShell) Status(owns func(key any) (string, bool), _ int) ShellStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	status := ShellStatus{Commands: []RunningCommand{}, Jobs: []ShellJob{}}
+	status := ShellStatus{Commands: []RunningCommand{}, Jobs: []ShellJob{}, Models: f.models, Summaries: &SummaryState{On: !f.off}}
 	for _, key := range f.ran {
 		if agent, ok := owns(key); ok {
 			status.Commands = append(status.Commands, RunningCommand{Agent: agent, Command: "fake", Started: time.Now().UnixMilli()})
@@ -1139,4 +1148,34 @@ func TestStatusListsTheLinesEachAgentHoldsAsSeenWithoutChangingThem(t *testing.T
 		t.Fatalf("asking changed what main has seen:\nbefore %s\nafter  %s", before, after)
 	}
 	ask()
+}
+
+func TestStatusTellsOfModelCallsAndTurnsSummariesOnAndOff(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	shell := &fakeShell{models: []ModelCall{{Kind: "summary", Model: "deepseek/deepseek-v4.1-flash-1017", Started: 1_000}}}
+	c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
+	ask := func(arguments map[string]any) map[string]any {
+		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: arguments})
+		if result.IsError {
+			t.Fatalf("%s", text(result))
+		}
+		return result.StructuredContent.(map[string]any)
+	}
+	status := ask(nil)
+	models, _ := status["models"].([]any)
+	if len(models) != 1 || models[0].(map[string]any)["kind"] != "summary" || models[0].(map[string]any)["model"] != "deepseek/deepseek-v4.1-flash-1017" {
+		t.Fatalf("models: %#v", status["models"])
+	}
+	if on := status["summaries"].(map[string]any)["on"]; on != true {
+		t.Fatalf("summaries start on, got %v", on)
+	}
+	if off := ask(map[string]any{"summaries": false})["summaries"].(map[string]any)["on"]; off != false || !shell.off {
+		t.Fatalf("summaries false must turn them off, got %v (shell off %v)", off, shell.off)
+	}
+	if on := ask(map[string]any{"summaries": true})["summaries"].(map[string]any)["on"]; on != true || shell.off {
+		t.Fatalf("summaries true must turn them on, got %v", on)
+	}
+	if bad := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"summaries": "maybe"}}); !bad.IsError {
+		t.Fatalf("a non-boolean must be refused, got %q", text(bad))
+	}
 }

@@ -256,3 +256,70 @@ describe('the seen pane', () => {
     }
   })
 })
+
+describe('the summary indicator and its switch', () => {
+  const summarizing = { kind: 'summary', model: 'deepseek/deepseek-v4.1-flash-1017', started: 40_000 }
+
+  test('models being asked and the summaries state are read in nib shape only', () => {
+    const answer = { commands: [], jobs: [], models: [summarizing], summaries: { on: true } }
+    expect(parse(answer, 43_000)).toEqual({ commands: [], jobs: [], models: [summarizing], summaries: true, at: 43_000 })
+    expect(parse({ ...answer, summaries: { on: 'yes' } }, 0)).toBeUndefined()
+    expect(parse({ ...answer, models: [{ ...summarizing, started: 'soon' }] }, 0)).toBeUndefined()
+    expect(parse({ ...answer, models: 'none' }, 0)).toBeUndefined()
+    expect(rows({ commands: [], jobs: [], models: [summarizing, { kind: 'decider', model: 'typesafe/jev-1.14', started: 42_000 }], at: 43_000 }, false)
+      .map(row => [row.label, row.time, row.title])).toEqual([['summary', '0:03', 'deepseek/deepseek-v4.1-flash-1017'], ['decider', '0:01', 'typesafe/jev-1.14']])
+  })
+
+  test('the band names the model being asked while a call waits, and polling stops when none is', async ($, on) => {
+    const clock = mock.clock(on, { now: 43_000 })
+    let answer: unknown = { commands: [], jobs: [], models: [summarizing], summaries: { on: true } }
+    let asked = 0
+    on('mcp.call', async () => {
+      asked += 1
+      return { value: { content: [], isError: false, structuredContent: answer } }
+    })
+    on('tool.call', { tool: 'mcp__nib__nibash' }, async () => ({ result: 'done' }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Box } = $.ui.resolve(e)
+      return <Box key="engine" />
+    })
+    await $.tool.call({ tool: 'mcp__nib__nibash', command: 'go test ./...' })
+    await clock.settle()
+    const band = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100 } as never })
+    expect((await band.find({ text: /summary 0:03/ }))?.text).toContain('summary 0:03 deepseek/deepseek-v4.1-flash-1017')
+    // The call has returned, yet a model is still asked, so nib is asked again.
+    const before = asked
+    await clock.advance(2_000)
+    expect(asked).toBeGreaterThan(before)
+    answer = { commands: [], jobs: [], models: [], summaries: { on: true } }
+    await clock.advance(1_000)
+    await clock.advance(1_000)
+    expect(await band.find({ text: /summary/ })).toBeUndefined()
+    const after = asked
+    await clock.advance(5_000)
+    expect(asked).toBe(after)
+  })
+
+  test('/nibash summaries turns them on or off, or flips them, through nib', async ($, on) => {
+    mock.clock(on, { now: 43_000 })
+    const sent: Record<string, unknown>[] = []
+    let current: unknown = { on: true }
+    on('mcp.call', async (_, e) => {
+      sent.push(e.args)
+      if (typeof e.args.summaries === 'boolean' && current !== undefined) current = { on: e.args.summaries }
+      return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [], ...(current === undefined ? {} : { summaries: current }) } } }
+    })
+    const say = async (args: string) => ((await $.command.run({ command: 'nibash', args })) as { text?: string }).text
+    expect(await say('summaries off')).toContain('are off')
+    expect(sent).toEqual([{ summaries: false }])
+    expect(await say('summaries')).toContain('are on')
+    expect(sent.at(-1)).toEqual({ summaries: true })
+    expect(sent.slice(-2)[0]).toEqual({})
+    expect(await say('summaries sometimes')).toBe('usage: /nibash summaries [on|off]')
+    expect(await say('whatever')).toBe('usage: /nibash summaries [on|off]')
+    // A nib without a summary model has no state to turn.
+    current = undefined
+    expect(await say('summaries off')).toContain('no summary model')
+    expect(await say('summaries')).toContain('no summary model')
+  })
+})

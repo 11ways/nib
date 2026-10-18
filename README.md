@@ -1023,6 +1023,13 @@ seen in full, the ones an edit may anchor on, as ranges, with the tag of the ver
 content, and "edits may anchor anywhere" for a file nib has no record of seen lines for. It reads the snapshot store
 without touching it, so asking changes nothing about what an agent may edit; it lists the 40 files used most recently.
 
+While nib asks a decision or summary model about a long output, the band also lists it, `summary 0:07 deepseek/...` or
+`decider 0:02 typesafe/jev-1.14`, so a call that waits shows what it waits for: nib reports them in `nibash_status`
+from the places where the decider and the summarizer ask a model (an answer from the cache asks none), and the mod keeps
+asking nib while one runs. `/nibash summaries off` turns the summaries of long output off for this server, `on` turns
+them on again, and `/nibash summaries` alone flips them; the pane says which they are. It is `nibash_status`'s
+`summaries` argument, so a client without the mod can send it too, and with no summarizer set there is nothing to turn.
+
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to
 `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of the config folder's `settings.json` (`$CLAUDE_CONFIG_DIR`, else

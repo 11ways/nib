@@ -38,6 +38,7 @@ var inFlight = make(chan struct{}, 16)
 // openRouter asks a decision model on OpenRouter which windows of the output matter, and adds the keyword hits to its picks; with several
 // models, the next one answers when one fails.
 type openRouter struct {
+	observers
 	config Config
 	client *http.Client
 	cache  *cache
@@ -95,7 +96,9 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 	var usage Usage
 	var failures []string
 	for _, model := range o.config.Models {
+		end := o.begin("decider", model)
 		choice, failure := o.decideWith(deadline, in, model, fallback.Picks)
+		end()
 		usage.add(choice.Usage)
 		if failure == "" {
 			if len(failures) > 0 {

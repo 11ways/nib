@@ -132,6 +132,7 @@ func (c Config) Summarizer() Summarizer {
 }
 
 type summaries struct {
+	observers
 	config Config
 	client *http.Client
 	cache  *cache
@@ -177,11 +178,13 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 		reply, usage.Cached = cached, 1
 	} else {
 		var failure string
+		end := s.begin("summary", e.Spec)
 		if e.Claude {
 			reply, failure = s.claude(ctx, e, prompt, text, &usage)
 		} else {
 			reply, failure = s.chat(ctx, e, prompt, text, &usage)
 		}
+		end()
 		if failure != "" {
 			return Summary{Usage: usage}, failure
 		}

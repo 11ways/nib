@@ -72,6 +72,8 @@ type Shell interface {
 	Close(key any)
 	// Status is what runs under the keys owns names an agent for, with the last tail lines of each one's output.
 	Status(owns func(key any) (agent string, ok bool), tail int) ShellStatus
+	// SetSummaries turns the summaries of long output on or off for this server.
+	SetSummaries(on bool)
 }
 
 // ShellStatus is what nibash runs for one client: the commands still in their call and the jobs, oldest first.
@@ -84,6 +86,9 @@ type ShellStatus struct {
 	Tokens  *TokensView `json:"tokens,omitempty"`
 	Names   *NamesView  `json:"names,omitempty"`
 	Seen    *SeenView   `json:"seen,omitempty"`
+	// Models are the decision and summary models being asked now, and Summaries whether summaries are on.
+	Models    []ModelCall   `json:"models,omitempty"`
+	Summaries *SummaryState `json:"summaries,omitempty"`
 }
 
 // RunningCommand is a nibash call still running; times are Unix milliseconds.
@@ -1167,6 +1172,13 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 	restore, _, err := args.text("restore")
 	if err != nil {
 		return engine.Result{}, err
+	}
+	summaries, set, err := args.flag("summaries", notes)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if set {
+		s.options.Shell.SetSummaries(summaries)
 	}
 	status := s.options.Shell.Status(func(key any) (string, bool) {
 		k, ok := key.(shellKey)

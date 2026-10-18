@@ -64,6 +64,7 @@ func (s *Shell) Status(owns func(key any) (agent string, ok bool), tail int) ser
 			status.Jobs = append(status.Jobs, job)
 		}
 	}
+	status.Models, status.Summaries = s.modelCalls()
 	slices.SortStableFunc(status.Commands, func(a, b server.RunningCommand) int { return cmp.Compare(a.Started, b.Started) })
 	slices.SortStableFunc(status.Jobs, func(a, b server.ShellJob) int { return cmp.Compare(a.Started, b.Started) })
 	return status
@@ -120,4 +121,20 @@ func lastLines(text string, n int) []string {
 		lines[i] = engine.PlainText(strings.ToValidUTF8(strings.TrimSuffix(line, "\r"), "�"))
 	}
 	return lines
+}
+
+// modelCalls are the decider and summarizer calls running now, oldest first, and whether summaries are on; nil without a summarizer.
+func (s *Shell) modelCalls() ([]server.ModelCall, *server.SummaryState) {
+	s.modelMu.Lock()
+	calls := make([]server.ModelCall, 0, len(s.models))
+	for _, c := range s.models {
+		calls = append(calls, c)
+	}
+	s.modelMu.Unlock()
+	slices.SortStableFunc(calls, func(a, b server.ModelCall) int { return cmp.Compare(a.Started, b.Started) })
+	var state *server.SummaryState
+	if s.summarizer != nil {
+		state = &server.SummaryState{On: !s.summariesOff.Load()}
+	}
+	return calls, state
 }
