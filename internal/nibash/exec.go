@@ -97,9 +97,10 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 }
 
 // ranAsSystem notes once per call that a nib command ran as the system program, whose output reached the model as plain text; a form nib's
-// own never handles gets no note.
-func (c *call) ranAsSystem(name string, err error) {
-	if errors.Is(err, errForeign) {
+// own never handles gets no note, nor does one whose own lines would have had no rows either: wc's, or those of a command naming no file or
+// directory, which reads only standard input.
+func (c *call) ranAsSystem(name string, err error, dir string, args []string) {
+	if errors.Is(err, errForeign) || !commands[name].renders && (!commands[name].rows || !namesPath(dir, args)) {
 		return
 	}
 	why := "nib's own does not implement this form of it"
@@ -119,6 +120,22 @@ func (c *call) ranAsSystem(name string, err error) {
 	if !slices.Contains(c.system, note) {
 		c.system = append(c.system, note)
 	}
+}
+
+// namesPath says whether any of a command's arguments, or the value of a --name=value one, is a file or directory that exists.
+func namesPath(dir string, args []string) bool {
+	for _, arg := range args {
+		if _, value, found := strings.Cut(arg, "="); found && strings.HasPrefix(arg, "--") {
+			arg = value
+		}
+		if arg == "" || arg == "-" {
+			continue
+		}
+		if _, err := os.Stat(absolute(dir, arg)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // pipedNote tells an agent once that rows it piped into a real program reached it as plain text.
@@ -160,7 +177,7 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		// command says why. Bytes a nib reader takes in band are such a program's to write.
 		out, isFile := hc.Stdout.(*os.File)
 		if mode != fromLink && mode != fromBand && (band || !(isFile && c.links.get(out) != nil)) {
-			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err) })
+			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err, hc.Dir, args[1:]) })
 		}
 		fmt.Fprintf(hc.Stderr, "%s: %s\n", name, because)
 		// The stages it was joined to must still see it end, or they would wait for it.

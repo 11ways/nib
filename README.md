@@ -473,7 +473,8 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   `sed -i`, `cut -f`), redirected to a file, inside `$(...)` or feeding a real program is the real program. Where only an
   expansion gives what decides it (`sed -n "${r}p"`, `cut -c "$n"`), it is decided as the command runs, from the words
   the expansion gave. One given an option or pattern nibash lacks whose output reaches the model ends the call with a
-  note once it printed, like
+  note once it printed, unless nib's own would have printed its lines plain too (`wc`, or one naming no file or
+  directory, reading only standard input), like
   `[grep ran as the system program: its pattern needs a feature nib's own cannot run exactly, so its lines are plain output, not edit anchors]`.
   Between nib commands, lines pass with their origin (file, line, version) over a channel, never as bytes, so no GNU
   byte format is ever imitated where a program could read it. A loop, block or subshell, or a command decided as it

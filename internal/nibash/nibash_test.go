@@ -230,6 +230,19 @@ func TestOtherFormsRunTheSystemProgram(t *testing.T) {
 	}
 }
 
+func TestASystemProgramReadingOnlyStandardInputGetsNoNote(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers})
+	// Its lines would have been plain from nib's own too, so the note would say nothing.
+	expect(t, f.run("printf 'one\\ntwo\\n' | head -q -n 1"), "one")
+	expect(t, f.run("printf 'one\\n' | grep -P '\\bone'"), "one")
+	expect(t, f.run("printf 'one\\n' | wc -m"), "4")
+	expect(t, f.run("wc -m a.txt"), fmt.Sprintf("%d a.txt", len(numbers)))
+	// A file operand's rows lost their numbers, which the note says.
+	if out := f.run("grep -P '\\bone' a.txt"); !strings.HasSuffix(out, "so its lines are plain output, not edit anchors]") {
+		t.Fatalf("got %s", out)
+	}
+}
+
 func TestEveryCallStartsFreshExitStatusAndChangedFiles(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	expect(t, f.run("cd /tmp && export FOO=bar"), "(no output)")
