@@ -36,7 +36,11 @@ func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 	if !strings.HasPrefix(again, "[~bewidgets/W0.java#") || strings.Contains(again, "nib named") {
 		t.Fatalf("got:\n%s", again)
 	}
-	// The next server of this directory has the name from the start, in its instructions.
+	// Once a second server of this directory made it too, the next one has the name from the start, in its instructions.
+	second := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: learned}, nil, nil, false)
+	for i := range 6 {
+		second.call(t, readCall(filepath.Join(deep, fmt.Sprintf("W%d.java", i))))
+	}
 	table := &names.Table{Base: directory}
 	table.AddLearned(learned)
 	if got := Instructions(Options{Names: table}); !strings.Contains(got, "\n~bewidgets = zenit/src/server/java/be/elevenways/widgets") {

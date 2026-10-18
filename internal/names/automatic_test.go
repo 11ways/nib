@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,8 +83,20 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	if shown, ok := (&Table{Base: root}).For(defined, "other").Display(filepath.Join(widgets, "A.java")); ok {
 		t.Fatalf("another agent got the name: %q", shown)
 	}
-	// The next server of the same directory has it from the start; one of another directory does not.
+	// The next server of the same directory does not start with a name only one session used.
 	next := &Table{Base: root}
+	next.AddLearned(file)
+	if len(next.Entries) != 0 {
+		t.Fatalf("one session's name was carried: %v", next.Entries)
+	}
+	// Once a second session made it too, the next one has it from the start; one of another directory does not.
+	second := NewDefined()
+	second.Automatic(file, root)
+	again := (&Table{Base: root}).For(second, "main")
+	for i := range 6 {
+		again.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
+	}
+	second.Announced("main")
 	next.AddLearned(file)
 	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"bewidgets", widgets}) {
 		t.Fatalf("learned %v", next.Entries)
@@ -92,6 +105,18 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	elsewhere.AddLearned(file)
 	if len(elsewhere.Entries) != 0 {
 		t.Fatalf("another directory learned %v", elsewhere.Entries)
+	}
+}
+
+// sessions runs define once in each of count servers of root keeping names in file, as successive sessions would.
+func sessions(t *testing.T, count int, file, root string, define func(*Defined) error) {
+	t.Helper()
+	for range count {
+		defined := NewDefined()
+		defined.Automatic(file, root)
+		if err := define(defined); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -219,11 +244,9 @@ func TestNamesAnAgentDefinesAreLearnedToo(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	widgets := deep(t, root, "widgets")
 	file := filepath.Join(t.TempDir(), "learned.json")
-	defined := NewDefined()
-	defined.Automatic(file, root)
-	if err := (&Table{Base: root}).For(defined, "main").Define("w", widgets); err != nil {
-		t.Fatal(err)
-	}
+	sessions(t, 2, file, root, func(defined *Defined) error {
+		return (&Table{Base: root}).For(defined, "main").Define("w", widgets)
+	})
 	next := &Table{Base: root}
 	next.AddLearned(file)
 	if len(next.Entries) != 1 || next.Entries[0].Name != "w" {
@@ -260,22 +283,21 @@ func TestLearnedNamesThatSaveNothingInTheBaseAreNeitherKeptNorLoaded(t *testing.
 	}
 	widgets := deep(t, root, "widgets")
 	file := filepath.Join(t.TempDir(), "learned.json")
-	defined := NewDefined()
-	defined.Automatic(file, root)
 	// An agent in a worktree sees the server's internal folder as an absolute path, where a name saves a lot; in root it saves nothing.
-	if err := (&Table{Base: worktree}).For(defined, "main").Define("pninternal", internal); err != nil {
-		t.Fatal(err)
-	}
-	if err := (&Table{Base: root}).For(defined, "main").Define("bewidgets", widgets); err != nil {
-		t.Fatal(err)
-	}
+	sessions(t, 2, file, root, func(defined *Defined) error {
+		if err := (&Table{Base: worktree}).For(defined, "main").Define("pninternal", internal); err != nil {
+			return err
+		}
+		return (&Table{Base: root}).For(defined, "main").Define("bewidgets", widgets)
+	})
 	next := &Table{Base: root}
 	next.AddLearned(file)
 	if len(next.Entries) != 1 || next.Entries[0].Name != "bewidgets" {
 		t.Fatalf("learned %v", next.Entries)
 	}
 	// A file written before this rule holds such a name; loading leaves it out.
-	data := `{"base": "` + root + `", "names": [{"Name": "pninternal", "Directory": "` + internal + `"}, {"Name": "bewidgets", "Directory": "` + widgets + `"}]}`
+	used := fmt.Sprint(time.Now().Unix())
+	data := `{"base": "` + root + `", "names": [{"Name": "pninternal", "Directory": "` + internal + `", "runs": 2, "used": ` + used + `}, {"Name": "bewidgets", "Directory": "` + widgets + `", "runs": 2, "used": ` + used + `}]}`
 	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -283,5 +305,134 @@ func TestLearnedNamesThatSaveNothingInTheBaseAreNeitherKeptNorLoaded(t *testing.
 	loaded.AddLearned(file)
 	if len(loaded.Entries) != 1 || loaded.Entries[0].Name != "bewidgets" {
 		t.Fatalf("loaded %v", loaded.Entries)
+	}
+}
+
+// showSix prints six paths in directory to a fresh server of root keeping names in file, enough for nib to name it, and returns the notes.
+func showSix(file, root, directory string) []string {
+	defined := NewDefined()
+	defined.Automatic(file, root)
+	view := (&Table{Base: root}).For(defined, "main")
+	for i := range 6 {
+		view.Display(filepath.Join(directory, fmt.Sprintf("W%d.java", i)))
+	}
+	return defined.Announced("main")
+}
+
+func TestAKeptNameStaysWhileSessionsPrintUnderItAndGoesOnceUnused(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	widgets := deep(t, root, "widgets")
+	file := filepath.Join(t.TempDir(), "learned.json")
+	showSix(file, root, widgets)
+	showSix(file, root, widgets)
+	// A third session starts with the name; a path it prints under the name counts it once more, however many it prints.
+	table := &Table{Base: root}
+	table.AddLearned(file)
+	third := NewDefined()
+	third.Automatic(file, root)
+	view := table.For(third, "main")
+	for range 3 {
+		if shown, _ := view.Display(filepath.Join(widgets, "A.java")); shown != "~bewidgets/A.java" {
+			t.Fatalf("got %q", shown)
+		}
+	}
+	if kept := readLearned(file, root); len(kept) != 1 || kept[0].Runs != 3 {
+		t.Fatalf("kept %+v", kept)
+	}
+	// Unused for longer than learnedDays, it is neither carried nor kept.
+	old := time.Now().Add(-(learnedDays + 1) * 24 * time.Hour).Unix()
+	data := fmt.Sprintf(`{"base": %q, "names": [{"Name": "bewidgets", "Directory": %q, "runs": 5, "used": %d}]}`, root, widgets, old)
+	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := &Table{Base: root}
+	stale.AddLearned(file)
+	if len(stale.Entries) != 0 {
+		t.Fatalf("a stale name was carried: %v", stale.Entries)
+	}
+	gadgets := deep(t, root, "gadgets")
+	showSix(file, root, gadgets)
+	if kept := readLearned(file, root); len(kept) != 1 || kept[0].Name != "begadgets" || kept[0].Runs != 1 {
+		t.Fatalf("kept %+v", kept)
+	}
+}
+
+func TestNamesInTheTemporaryFolderOrAnotherWorktreeAreNotKept(t *testing.T) {
+	scratch, _ := filepath.EvalSymlinks(t.TempDir())
+	skill := deep(t, scratch, "types")
+	file := filepath.Join(t.TempDir(), "learned.json")
+	// A server outside the temporary folder keeps no name for a folder inside it; it names it for the session alone.
+	outside := "/nib-test-base-outside-the-temporary-folder"
+	sessions(t, 2, file, outside, func(defined *Defined) error {
+		return (&Table{Base: outside}).For(defined, "main").Define("skill", skill)
+	})
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("a temporary folder's name was written: %v", err)
+	}
+	// In a repository, a folder of another worktree of it is not kept; one of the server's own worktree or of a nested repository is.
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	worktree := filepath.Join(root, ".claude", "worktrees", "agent-a1")
+	gitdir := filepath.Join(root, ".git", "worktrees", "agent-a1")
+	nested := filepath.Join(root, "vendor", "lib")
+	for _, directory := range []string{worktree, gitdir, filepath.Join(nested, ".git")} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{filepath.Join(worktree, ".git"): "gitdir: " + gitdir + "\n", filepath.Join(gitdir, "commondir"): "../..\n"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directories := map[string]string{"theirs": deep(t, worktree, "models"), "ours": deep(t, root, "widgets"), "vendored": deep(t, nested, "parts")}
+	sessions(t, 2, file, root, func(defined *Defined) error {
+		view := (&Table{Base: root}).For(defined, "main")
+		for name, directory := range directories {
+			if err := view.Define(name, directory); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	next := &Table{Base: root}
+	next.AddLearned(file)
+	var got []string
+	for _, e := range next.Entries {
+		got = append(got, e.Name)
+	}
+	if slices.Sort(got); !slices.Equal(got, []string{"ours", "vendored"}) {
+		t.Fatalf("carried %v", got)
+	}
+}
+
+func TestAFileFromBeforeSessionsWereCountedKeepsOnlyNamesNibMakesAsOneSession(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	projects := filepath.Join(root, "claude", "projects", "-home-skerit-projects-nib")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	widgets, gadgets := deep(t, root, "widgets"), deep(t, root, "gadgets")
+	file := filepath.Join(t.TempDir(), "learned.json")
+	// An older scheme's name, an agent's, a gone folder's and one nib makes now, numbered as a taken name is.
+	data := fmt.Sprintf(`{"base": %q, "names": [{"Name": "cphome-skerit-projects-nib", "Directory": %q}, {"Name": "w", "Directory": %q}, {"Name": "begone", "Directory": %q}, {"Name": "begadgets2", "Directory": %q}]}`,
+		root, projects, widgets, filepath.Join(root, "gone"), gadgets)
+	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	next := &Table{Base: root}
+	next.AddLearned(file)
+	if len(next.Entries) != 0 {
+		t.Fatalf("carried %v", next.Entries)
+	}
+	// The name nib makes counts as one session, so the next one that names the folder gets that name again, and the one after starts with it.
+	if notes := showSix(file, root, gadgets); len(notes) != 1 || !strings.Contains(notes[0], "~begadgets2 = ") {
+		t.Fatalf("notes %v", notes)
+	}
+	if kept := readLearned(file, root); len(kept) != 1 || kept[0].Name != "begadgets2" || kept[0].Runs != 2 {
+		t.Fatalf("kept %+v", kept)
+	}
+	next.AddLearned(file)
+	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"begadgets2", gadgets}) {
+		t.Fatalf("carried %v", next.Entries)
 	}
 }

@@ -65,7 +65,7 @@ func (d *Defined) usedBy(agent string) map[string]int {
 	return maps.Clone(d.uses[agent])
 }
 
-// use counts a path printed as shown, which starts with ~name/ when a name stands for part of it.
+// use counts a path printed as shown, which starts with ~name/ when a name stands for part of it, and toward the name's kept entry.
 func (d *Defined) use(agent, shown string) {
 	if d == nil || !strings.HasPrefix(shown, "~") {
 		return
@@ -80,4 +80,5 @@ func (d *Defined) use(agent, shown string) {
 		d.uses[agent] = map[string]int{}
 	}
 	d.uses[agent][name]++
+	d.touchLocked(name)
 }

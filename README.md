@@ -703,11 +703,15 @@ rows below), the notes went with it: the first path printed under a name the age
 inherited, tells of it again
 (`[~bewidgets = zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared; ...]`
 in full for the first, `[~bewidgets = ...]` after), and a subagent, whose first call's greeting listed its names, is
-greeted again; the server's own names are in the instructions, which a compaction keeps. Both kinds are kept for the
-next session of the same server directory, the newest 16, in `~/.local/state/nib/names/` (`$XDG_STATE_HOME` when set):
-the next server names them from the start, so they are in its instructions with the table's names, where a name a
-directory or another name already holds is left out, and so is one that prints nothing shorter from that directory (a
-name made while an agent worked in a worktree for a folder of the server's own). `NIB_AUTO_NAMES=0` turns naming and
+greeted again; the server's own names are in the instructions, which a compaction keeps. Both kinds are kept for later
+sessions of the same server directory, the 16 used last, in `~/.local/state/nib/names/` (`$XDG_STATE_HOME` when set),
+and a server starts with a name once two sessions made it, defined it or printed a path under it, as a folder one session
+used (a transcript's, a test run's logs) is seldom used again and every name in the instructions costs every session; a
+later session that names the folder again gets the name it had. The next server then names them from the start, so they
+are in its instructions with the table's names. Left out, and not kept, are a name a directory or another name already
+holds, one that prints nothing shorter from that directory (a name made while an agent worked in a worktree for a folder
+of the server's own), one for a folder that is gone, in the temporary folder (unless the server's directory is too) or in
+another worktree of the server's repository, and one no session used for 30 days. `NIB_AUTO_NAMES=0` turns naming and
 keeping off; without a home folder they are off too. Bare `hash -d` in nibash lists every name an agent has, the
 table's, its own and nib's.
 

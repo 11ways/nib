@@ -1,6 +1,7 @@
 package names
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,11 @@ const (
 	autoLimit = 8
 	// learnedLimit bounds the names kept for the next session of one server directory.
 	learnedLimit = 16
+	// learnedRuns is how many servers must have made, defined or printed a path under a name before the next one starts with it: a folder
+	// one session used (a transcript's, a test run's logs) is seldom used again, and every name in the instructions costs every session.
+	learnedRuns = 2
+	// learnedDays drops a kept name no server used for that long.
+	learnedDays = 30
 	// fullAgain is how many calls showing paths pass before a note is told in full again, as the first one may have left the agent's context.
 	fullAgain = 25
 	// nameMax caps a name nib makes, its number included: a name is typed and printed often, and two initials plus a folder's word of up
@@ -41,7 +47,9 @@ const (
 func (d *Defined) Automatic(file, base string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.automatic, d.file, d.base = true, file, base
+	id := make([]byte, 8)
+	_, _ = rand.Read(id)
+	d.automatic, d.file, d.base, d.run = true, file, base, hex.EncodeToString(id)
 }
 
 // Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect, then the notes
@@ -221,7 +229,10 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 	if best == "" {
 		return
 	}
-	name := autoName(best, table)
+	name := d.learnedNameLocked(best, table)
+	if name == "" {
+		name = autoName(best, table)
+	}
 	if name == "" {
 		return
 	}
@@ -279,13 +290,27 @@ func stem(folder string) string {
 // meaningless matches a folder whose name says nothing of what it holds: a hash, or a version.
 var meaningless = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8,}|v?[0-9]+(?:\.[0-9]+)*)$`)
 
-// autoName is a free name for directory: the first letters of the two folders above it that say something (a hash or a version does not),
-// outer first, then its own folder's stem, as ~bptypes for bundled-skills/2.1.302/<hash>/plugin-authoring/types and ~cpnib for
-// claude/projects/-home-skerit-projects-nib; with a number after where that is taken, never past nameMax; "" when none can be made.
+// autoName is a free name for directory: schemeName, with a number after where that is taken, never past nameMax; "" when none can be made.
 func autoName(directory string, table *Table) string {
-	taken := func(name string) bool {
-		return !valid.MatchString(name) || isUser(name) || slices.ContainsFunc(table.Entries, func(e Entry) bool { return e.Name == name })
+	base := schemeName(directory)
+	if base == "" {
+		return ""
 	}
+	if free(base, table) {
+		return base
+	}
+	for n := 2; n < 100; n++ {
+		if candidate := numbered(base, n); free(candidate, table) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// schemeName is the name nib makes for directory: the first letters of the two folders above it that say something (a hash or a version
+// does not), outer first, then its own folder's stem, as ~bptypes for bundled-skills/2.1.302/<hash>/plugin-authoring/types and ~cpnib for
+// claude/projects/-home-skerit-projects-nib; "" when its folder gives no stem.
+func schemeName(directory string) string {
 	last := stem(filepath.Base(directory))
 	if last == "" {
 		return ""
@@ -297,17 +322,32 @@ func autoName(directory string, table *Table) string {
 			initials = folder[:1] + initials
 		}
 	}
-	base := initials + last
-	if !taken(base) {
-		return base
+	return initials + last
+}
+
+// numbered is base with n after it, base cut so the whole stays within nameMax.
+func numbered(base string, n int) string {
+	number := strconv.Itoa(n)
+	return strings.TrimRight(base[:min(len(base), nameMax-len(number))], "-") + number
+}
+
+// free reports whether name may be given in table: valid, not a user's, and no entry's.
+func free(name string, table *Table) bool {
+	return valid.MatchString(name) && !isUser(name) && !slices.ContainsFunc(table.Entries, func(e Entry) bool { return e.Name == name })
+}
+
+// fromScheme reports whether entry's name is one autoName could have given its directory.
+func fromScheme(entry Entry) bool {
+	base := schemeName(entry.Directory)
+	if base == "" {
+		return false
 	}
-	for n := 2; n < 100; n++ {
-		number := strconv.Itoa(n)
-		if candidate := strings.TrimRight(base[:min(len(base), nameMax-len(number))], "-") + number; !taken(candidate) {
-			return candidate
+	for n := 1; n < 100; n++ {
+		if (n == 1 && entry.Name == base) || (n > 1 && entry.Name == numbered(base, n)) {
+			return true
 		}
 	}
-	return ""
+	return false
 }
 
 // LearnedFile is where the names agents got while serving base are kept for the next session: nib's folder in the user's state home, one
@@ -325,28 +365,34 @@ func LearnedFile(base string) string {
 	return filepath.Join(state, "nib", "names", hex.EncodeToString(sum[:8])+".json")
 }
 
-// learnedNames is a learned file: the server directory it is for, and its names, oldest first.
+// learnedNames is a learned file: the server directory it is for, and its names, least recently used first.
 type learnedNames struct {
-	Base  string  `json:"base"`
-	Names []Entry `json:"names"`
+	Base  string    `json:"base"`
+	Names []learned `json:"names"`
 }
 
-// AddLearned adds the names file keeps for this table's directory after the table's own: each with a free name and an existing directory
-// no name holds yet.
+// learned is one kept name: Runs counts the servers that made, defined or printed a path under it, Run is the last of them and Used when,
+// in Unix seconds; a file written before runs were counted leaves Runs 0.
+type learned struct {
+	Entry
+	Runs int    `json:"runs,omitempty"`
+	Run  string `json:"run,omitempty"`
+	Used int64  `json:"used,omitempty"`
+}
+
+// AddLearned adds the names file keeps for this table's directory after the table's own: those learnedRuns servers used, each with a free
+// name and a directory no name holds yet.
 func (t *Table) AddLearned(file string) {
-	for _, entry := range readLearned(file, t.Base) {
-		if !valid.MatchString(entry.Name) || isUser(entry.Name) || !useful(t.Base, entry) || slices.ContainsFunc(t.Entries, func(e Entry) bool { return e.Name == entry.Name || e.Directory == entry.Directory }) {
+	for _, entry := range current(file, t.Base, time.Now()) {
+		if entry.Runs < learnedRuns || slices.ContainsFunc(t.Entries, func(e Entry) bool { return e.Name == entry.Name || e.Directory == entry.Directory }) {
 			continue
 		}
-		if canonical, err := filepath.EvalSymlinks(entry.Directory); err != nil || canonical != entry.Directory {
-			continue
-		}
-		t.Entries = append(t.Entries, entry)
+		t.Entries = append(t.Entries, entry.Entry)
 	}
 }
 
-// readLearned are the names file keeps for base; none when it is missing, unreadable or for another directory.
-func readLearned(file, base string) []Entry {
+// readLearned are the names file keeps for base as written; none when it is missing, unreadable or for another directory.
+func readLearned(file, base string) []learned {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil
@@ -358,16 +404,142 @@ func readLearned(file, base string) []Entry {
 	return saved.Names
 }
 
-// learnLocked adds entry to the learned file, replacing a name of the same name or directory, dropping names that no longer print shorter
-// from the file's directory, and keeping the newest learnedLimit.
-func (d *Defined) learnLocked(entry Entry) {
-	if d.file == "" || !useful(d.base, entry) {
+// current are the names file keeps for base that still count at now: keepable, used within learnedDays, and from a file written before runs
+// were counted only those nib's scheme makes, as one run; agents' names and older nib's are not told apart there, so both go.
+func current(file, base string, now time.Time) []learned {
+	var kept []learned
+	for _, e := range readLearned(file, base) {
+		if e.Runs == 0 {
+			if !fromScheme(e.Entry) {
+				continue
+			}
+			e.Runs, e.Used = 1, now.Unix()
+		}
+		if now.Sub(time.Unix(e.Used, 0)) > learnedDays*24*time.Hour || !keepable(base, e.Entry) {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept
+}
+
+// keepable reports whether the next session of base may start with entry: a valid name that is no user's, for an existing canonical
+// directory it prints shorter from base (a name made in a worktree for a folder of base's own does not), outside the temporary folder unless
+// base is in it too, and outside the other worktrees of base's repository, which come and go.
+func keepable(base string, entry Entry) bool {
+	if !valid.MatchString(entry.Name) || isUser(entry.Name) || !useful(base, entry) {
+		return false
+	}
+	if canonical, err := filepath.EvalSymlinks(entry.Directory); err != nil || canonical != entry.Directory {
+		return false
+	}
+	if temporary, err := filepath.EvalSymlinks(os.TempDir()); err == nil && within(temporary, entry.Directory) && !within(temporary, base) {
+		return false
+	}
+	return !otherWorktree(base, entry.Directory)
+}
+
+// within reports whether path is directory or below it.
+func within(directory, path string) bool {
+	return path == directory || strings.HasPrefix(path, directory+string(filepath.Separator))
+}
+
+// otherWorktree reports whether directory lies in a git worktree of base's repository other than the one holding base.
+func otherWorktree(base, directory string) bool {
+	root, common := repository(base)
+	if common == "" {
+		return false
+	}
+	there, theirs := repository(directory)
+	return theirs == common && there != root
+}
+
+// repository is the top of the git worktree holding directory and its repository's common git directory, read from .git without running
+// git; "" for both outside a repository or when .git cannot be read.
+func repository(directory string) (root, common string) {
+	for d := directory; ; d = filepath.Dir(d) {
+		dotgit := filepath.Join(d, ".git")
+		if info, err := os.Lstat(dotgit); err == nil {
+			common = dotgit
+			if !info.IsDir() {
+				data, err := os.ReadFile(dotgit)
+				gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+				if err != nil || !ok {
+					return "", ""
+				}
+				common = relativeTo(d, strings.TrimSpace(gitdir))
+				if data, err := os.ReadFile(filepath.Join(common, "commondir")); err == nil {
+					common = relativeTo(common, strings.TrimSpace(string(data)))
+				}
+			}
+			if resolved, err := filepath.EvalSymlinks(common); err == nil {
+				common = resolved
+			}
+			return d, common
+		}
+		if d == filepath.Dir(d) {
+			return "", ""
+		}
+	}
+}
+
+// relativeTo is path, joined to directory when it is relative.
+func relativeTo(directory, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(directory, path)
+}
+
+// learnedNameLocked is the name the learned file keeps for directory when it is free in table, so a directory nib names again in a later
+// session gets the name it had; "" otherwise.
+func (d *Defined) learnedNameLocked(directory string, table *Table) string {
+	if d.file == "" {
+		return ""
+	}
+	for _, e := range readLearned(d.file, d.base) {
+		if e.Directory == directory && free(e.Name, table) {
+			return e.Name
+		}
+	}
+	return ""
+}
+
+// touchLocked counts a path printed under name toward its kept entry, once per name in this server.
+func (d *Defined) touchLocked(name string) {
+	if d.file == "" || d.touched[name] {
 		return
 	}
-	kept := slices.DeleteFunc(readLearned(d.file, d.base), func(e Entry) bool {
-		return e.Name == entry.Name || e.Directory == entry.Directory || !valid.MatchString(e.Name) || !useful(d.base, e)
+	if d.touched == nil {
+		d.touched = map[string]bool{}
+	}
+	d.touched[name] = true
+	for _, e := range readLearned(d.file, d.base) {
+		if e.Name == name {
+			d.learnLocked(e.Entry)
+			return
+		}
+	}
+}
+
+// learnLocked records in the learned file that this server made, defined or printed a path under entry: a directory's first such use by a
+// server counts one run and moves it to the end, past which only the newest learnedLimit stay; names that no longer count are dropped.
+func (d *Defined) learnLocked(entry Entry) {
+	if d.file == "" || !keepable(d.base, entry) {
+		return
+	}
+	now := d.Now()
+	runs := 1
+	kept := slices.DeleteFunc(current(d.file, d.base, now), func(e learned) bool {
+		if e.Directory == entry.Directory {
+			runs = e.Runs
+			if e.Run != d.run {
+				runs++
+			}
+		}
+		return e.Name == entry.Name || e.Directory == entry.Directory
 	})
-	kept = append(kept, entry)
+	kept = append(kept, learned{entry, runs, d.run, now.Unix()})
 	if len(kept) > learnedLimit {
 		kept = kept[len(kept)-learnedLimit:]
 	}

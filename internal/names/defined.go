@@ -23,9 +23,12 @@ type Defined struct {
 	// Now stamps definitions; it must be comparable with other processes' clocks, as a spawn moment comes from the harness. Set it before
 	// first use.
 	Now func() time.Time
-	// automatic is set by Automatic: nib names the directories shown paths keep running through, and keeps names in file for base.
+	// automatic is set by Automatic: nib names the directories shown paths keep running through, and keeps names in file for base. run tells
+	// this server apart from others in the file, and touched are the kept names it counted a use of.
 	automatic  bool
 	file, base string
+	run        string
+	touched    map[string]bool
 	// uses counts, per agent, the paths printed under each name, the server's own included.
 	uses map[string]map[string]int
 }
