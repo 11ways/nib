@@ -189,16 +189,16 @@ tag is a base for a later `path#TAG` read. `info` takes no selectors, `plain`, `
 ```
 
 `*` marks matches; other rows are context (1 before and 1 after by default). Context lines on one page come to at most
-40, so they cannot multiply the output; within that, `before` and `after` give what they ask for. Past it, every match
-gets the same smaller context, the widest that fits: the larger side gives up a line first, and `before` on a tie, down
-to none, so a grep that lists many definitions, like `^function`, stays a short list. Context asked for with `before`
-or `after` is the one exception: definitions keep all of it (up to the 40 KiB output budget), and the other matches
-share what is left of the 40 lines. A definition is a match in
+40, so they cannot multiply the output; within that, `before` and `after` give what they ask for. Past it, context goes
+to definitions first, and the other matches show bare: context that was asked for with `before` or `after` goes to every
+definition (up to the 40 KiB output budget), while the default context goes to definitions in page order only while it
+fits in the 40 lines, so a grep that lists many definitions, like `^function`, stays a list. A definition is a match in
 the declaring part of its line, before the parameters, type, value or body: on a top-level line whose declaring part
 holds a word like `function`, `const`, `class`, `def` or `fn` (the match may be that word, as with a pattern
-`^function`), on a member of a top-level class or similar container, or in a Markdown heading. A note then says that
-every match row is still shown, what context the matches got instead of what was asked, how many lines that would have
-needed, and a range to read for more around a match. Every fully shown row counts as
+`^function`), on a member of a top-level class or similar container, or in a Markdown heading. With no definition among
+the matches, context that was asked for goes to the first matches in page order, up to the first that no longer fits,
+and the default context goes to none. A note then says that every match row is still shown, which matches got context,
+how many lines all of them would have needed, and a range to read for another match. Every fully shown row counts as
 seen, so an edit can anchor on it without a read. Pages hold 20 files (continue with `skip`), with 20 matches per file,
 or 100 when only one file matches, the most a harness's own grep shows (OpenCode stops at 100). A matched line over 200
 characters shows only its first 40 and the 40 on each side of its first matches, as
