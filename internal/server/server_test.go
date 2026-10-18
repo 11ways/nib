@@ -1101,3 +1101,42 @@ func TestStatusListsEachAgentsNamedDirectoriesWithTheirUses(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusListsTheLinesEachAgentHoldsAsSeenWithoutChangingThem(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	path := filepath.Join(directory, "a.txt")
+	file(t, path, "one\ntwo\nthree\nfour\nfive\n")
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	c := connect(t, Options{Directory: directory, Shell: &fakeShell{}, Agent: r.take}, []string{directory}, nil, false)
+	c.call(t, readCall(path+":2-3"))
+	c.call(t, r.as("a1", readCall(path)))
+	before := c.seen()
+	ask := func() []any {
+		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "seen"}})
+		view, _ := result.StructuredContent.(map[string]any)["seen"].(map[string]any)
+		agents, _ := view["agents"].([]any)
+		return agents
+	}
+	agents := ask()
+	if len(agents) != 2 {
+		t.Fatalf("seen view: %#v", agents)
+	}
+	for i, want := range []struct {
+		agent string
+		seen  string
+	}{{"main", "[[2 3]]"}, {"agent:a1", "[[1 5]]"}} {
+		got := agents[i].(map[string]any)
+		files, _ := got["files"].([]any)
+		if got["agent"] != want.agent || len(files) != 1 {
+			t.Fatalf("agent %d: %#v", i, got)
+		}
+		file := files[0].(map[string]any)
+		if file["path"] != "a.txt" || file["lines"] != float64(5) || fmt.Sprint(file["seen"]) != want.seen || file["anywhere"] != nil || len(fmt.Sprint(file["tag"])) != 4 {
+			t.Fatalf("%s's file: %#v", want.agent, file)
+		}
+	}
+	if after := c.seen(); after != before {
+		t.Fatalf("asking changed what main has seen:\nbefore %s\nafter  %s", before, after)
+	}
+	ask()
+}

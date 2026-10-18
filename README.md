@@ -1018,6 +1018,10 @@ that paused to ask a question left out; the mod adds nothing.
 `/names` lists, for each agent that called, the named directories it sees: nib's own (`nib.json`, detected source roots,
 names kept from earlier sessions), those it defined with `hash -d`, those nib made for it and those it inherited from the
 agent that started it, each with the directory and the paths nib printed under the name.
+`/seen` lists, for each agent that called, the files nib holds a version of for it and the lines of each it counts as
+seen in full, the ones an edit may anchor on, as ranges, with the tag of the version, the lines it knows only by their
+content, and "edits may anchor anywhere" for a file nib has no record of seen lines for. It reads the snapshot store
+without touching it, so asking changes nothing about what an agent may edit; it lists the 40 files used most recently.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

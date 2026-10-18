@@ -83,6 +83,7 @@ type ShellStatus struct {
 	Trash   *TrashView  `json:"trash,omitempty"`
 	Tokens  *TokensView `json:"tokens,omitempty"`
 	Names   *NamesView  `json:"names,omitempty"`
+	Seen    *SeenView   `json:"seen,omitempty"`
 }
 
 // RunningCommand is a nibash call still running; times are Unix milliseconds.
@@ -1185,6 +1186,9 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 	}
 	if view == "tokens" {
 		status.Tokens = s.state(c.key).usage.tokens()
+	}
+	if view == "seen" {
+		status.Seen = s.seenView(ctx, &s.state(c.key).usage)
 	}
 	if view == "names" {
 		status.Names = s.namesView(ctx, &s.state(c.key).usage)

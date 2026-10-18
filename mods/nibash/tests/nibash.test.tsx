@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { count, elapsed, parse, parseNames, parseRestored, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
+import { count, elapsed, parse, parseNames, parseRestored, parseSeen, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
 
 const go = { agent: 'main', command: 'go test ./...', description: 'Run all Go tests', started: 1_000, tail: ['ok  internal/engine'] }
 const bench = { id: 1, agent: 'agent:a1', command: 'bun bench/run.ts', started: 0, running: true, log: '/run/nib/job-1.log', tail: ['run 1 of 3', 'run 2 of 3'] }
@@ -226,5 +226,33 @@ describe('the names pane', () => {
   test('/names lists each agent with where its names came from and how often they printed', async ($, on) => {
     const pane = await openView($, on, 'names', { commands: [], jobs: [], names: { agents } })
     for (const text of [/main/, /~core = packages\/core/, /automatic, 1,200 paths/, /agent:a1/, /no names/]) expect(await pane.find({ text })).toBeDefined()
+  })
+})
+
+describe('the seen pane', () => {
+  const agents = [
+    {
+      agent: 'main',
+      files: [
+        { path: 'src/a.go', tag: '3C4D', lines: 1_200, seen: [[1, 40], [80, 80]], moreRanges: 3, known: 4 },
+        { path: 'b.txt', tag: '9F12', lines: 12, anywhere: true, seen: [] },
+        { path: 'c.txt', tag: 'AAAA', lines: 5, seen: [] },
+      ],
+      more: 5,
+    },
+    { agent: 'agent:a1', files: [] },
+  ]
+
+  test('nib answers are read in nib shape only', () => {
+    expect(parseSeen({ seen: { agents } })).toMatchObject([{ agent: 'main', files: [{ seen: [[1, 40], [80, 80]] }, {}, {}], more: 5 }, { agent: 'agent:a1', files: [] }])
+    expect(parseSeen({ seen: { agents: [{ agent: 'main', files: [{ path: 'a', tag: 'T', lines: 1, seen: [[1]] }] }] } })).toBeUndefined()
+    expect(parseSeen({ seen: {} })).toBeUndefined()
+  })
+
+  test('/seen shows the lines each agent holds as seen, and the files nib has no record for', async ($, on) => {
+    const pane = await openView($, on, 'seen', { commands: [], jobs: [], seen: { agents } })
+    for (const text of [/src\/a\.go#3C4D 1,200 lines/, /seen 1-40, 80 and 3 more ranges/, /known 4/, /edits may anchor anywhere/, /none seen/, /and 5 more files/, /nothing held/]) {
+      expect(await pane.find({ text })).toBeDefined()
+    }
   })
 })

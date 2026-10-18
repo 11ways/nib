@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, NameList, Status, Tokens, TrashEntry, Views } from '../types'
+import type { Command, Job, NameList, SeenList, Status, Tokens, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -24,6 +24,7 @@ const VIEWS = {
   trash: 'Show what this session moved to the trash, and put one back',
   tokens: 'Show how many characters nib returned in this session, by agent and tool',
   names: 'Show the named directories each agent has, where each came from and how often it was used',
+  seen: 'Show the lines nib counts each agent as having seen of its files',
 } as const
 type ViewName = keyof typeof VIEWS
 const VIEW_NAMES = Object.keys(VIEWS) as ViewName[]
@@ -134,6 +135,29 @@ export function parseNames(content: unknown): NameList | undefined {
   return agents
 }
 
+/** The seen lines a nibash_status answer lists, per agent; undefined when it lists none in nib's shape. */
+export function parseSeen(content: unknown): SeenList | undefined {
+  const v = (content as { seen?: { agents?: unknown } } | null)?.seen
+  if (typeof v !== 'object' || v === null || !Array.isArray(v.agents)) return undefined
+  const agents: SeenList = []
+  for (const a of v.agents as Record<string, unknown>[]) {
+    if (typeof a !== 'object' || a === null || typeof a.agent !== 'string' || !Array.isArray(a.files) || (a.more !== undefined && !isCount(a.more))) return undefined
+    const files: SeenList[number]['files'] = []
+    for (const f of a.files as Record<string, unknown>[]) {
+      if (typeof f !== 'object' || f === null || typeof f.path !== 'string' || typeof f.tag !== 'string' || !isCount(f.lines) || !Array.isArray(f.seen)) return undefined
+      if ((f.anywhere !== undefined && typeof f.anywhere !== 'boolean') || (f.known !== undefined && !isCount(f.known)) || (f.moreRanges !== undefined && !isCount(f.moreRanges))) return undefined
+      const seen: [number, number][] = []
+      for (const range of f.seen as unknown[]) {
+        if (!Array.isArray(range) || range.length !== 2 || !isCount(range[0]) || !isCount(range[1])) return undefined
+        seen.push([range[0], range[1]])
+      }
+      files.push({ path: f.path, tag: f.tag, lines: f.lines, anywhere: f.anywhere as boolean | undefined, seen, moreRanges: f.moreRanges as number | undefined, known: f.known as number | undefined })
+    }
+    agents.push({ agent: a.agent, files, more: a.more as number | undefined })
+  }
+  return agents
+}
+
 /** The part of Views a view's answer fills; undefined when the answer holds that list in no shape of nib's. */
 export function parseView(name: ViewName, content: unknown): Partial<Views> | undefined {
   switch (name) {
@@ -148,6 +172,10 @@ export function parseView(name: ViewName, content: unknown): Partial<Views> | un
     case 'names': {
       const names = parseNames(content)
       return names === undefined ? undefined : { names }
+    }
+    case 'seen': {
+      const seen = parseSeen(content)
+      return seen === undefined ? undefined : { seen }
     }
   }
 }
@@ -506,6 +534,39 @@ export const register: Register = on => {
                 {'  '}~{name.name} = {name.directory} <Text dimColor>{name.source}, {count(name.uses)} paths</Text>
               </Text>
             ))}
+          </Box>
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'seen' }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const list = (await read($, views)).seen ?? []
+    if (list.length === 0) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No agent has called nib yet.</Text>
+        </Box>
+      )
+    }
+    const ranges = (seen: [number, number][]) => seen.map(([from, to]) => (from === to ? String(from) : `${from}-${to}`)).join(', ')
+    return (
+      <Box flexDirection="column">
+        {list.map(agent => (
+          <Box key={`agent:${agent.agent}`} flexDirection="column">
+            <Text color="cyan">{agent.agent}</Text>
+            {agent.files.length === 0 ? <Text dimColor>{'  '}nothing held</Text> : null}
+            {agent.files.map(file => (
+              <Text key={`file:${agent.agent}:${file.path}`} wrap="truncate-end">
+                {'  '}
+                {file.path}
+                <Text dimColor>#{file.tag} {count(file.lines)} lines </Text>
+                {file.anywhere ? <Text dimColor>edits may anchor anywhere</Text> : file.seen.length === 0 ? <Text dimColor>none seen</Text> : <Text>seen {ranges(file.seen)}{file.moreRanges ? ` and ${file.moreRanges} more ranges` : ''}</Text>}
+                {file.known ? <Text dimColor> known {file.known}</Text> : null}
+              </Text>
+            ))}
+            {agent.more ? <Text dimColor>{'  '}and {agent.more} more files</Text> : null}
           </Box>
         ))}
       </Box>

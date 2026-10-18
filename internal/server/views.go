@@ -118,6 +118,14 @@ func viewLines(status ShellStatus) []string {
 			}
 		}
 	}
+	if v := status.Seen; v != nil {
+		for _, a := range v.Agents {
+			lines = append(lines, fmt.Sprintf("seen by [%s]: %d files", a.Agent, len(a.Files)+a.More))
+			for _, f := range a.Files {
+				lines = append(lines, fmt.Sprintf("  | %s#%s %d lines, %d ranges seen", f.Path, f.Tag, f.Lines, len(f.Seen)+f.MoreRanges))
+			}
+		}
+	}
 	if n := status.Names; n != nil {
 		for _, a := range n.Agents {
 			lines = append(lines, fmt.Sprintf("names of [%s]: %d", a.Agent, len(a.Names)))
@@ -157,12 +165,71 @@ func (s *Server) namesView(ctx *engine.Context, u *usageLog) *NamesView {
 	view := &NamesView{Agents: []AgentNames{}}
 	for _, agent := range u.agentList() {
 		row := AgentNames{Agent: agent, Names: []NameRow{}}
-		session := s.engineSession("")
-		if agent != "main" {
-			session = s.engineSession(agent)
-		}
-		for _, d := range s.options.Names.For(s.defined, session).Describe() {
+		for _, d := range s.options.Names.For(s.defined, s.sessionOf(agent)).Describe() {
 			row.Names = append(row.Names, NameRow{Name: d.Name, Directory: shown(ctx.Directory, d.Directory), Source: d.Source, Uses: d.Uses})
+		}
+		view.Agents = append(view.Agents, row)
+	}
+	return view
+}
+
+// sessionOf is the engine session of an agent shown as label: "main" is the client's own.
+func (s *Server) sessionOf(label string) string {
+	if label == "main" {
+		return s.engineSession("")
+	}
+	return s.engineSession(label)
+}
+
+// seenFiles bounds the files listed per agent, and seenRanges the ranges per file.
+const (
+	seenFiles  = 40
+	seenRanges = 24
+)
+
+// SeenView is what nib counts each agent as having seen of its files: the lines an edit may anchor on.
+type SeenView struct {
+	Agents []AgentSeen `json:"agents"`
+}
+
+// AgentSeen are one agent's files, the most recently used first.
+type AgentSeen struct {
+	Agent string    `json:"agent"`
+	Files []SeenRow `json:"files"`
+	// More counts the files past the ones listed.
+	More int `json:"more,omitempty"`
+}
+
+// SeenRow is one file as an agent holds it.
+type SeenRow struct {
+	Path  string `json:"path"`
+	Tag   string `json:"tag"`
+	Lines int    `json:"lines"`
+	// Anywhere says nib has no record of which lines the agent saw, so an edit may anchor on any.
+	Anywhere bool `json:"anywhere,omitempty"`
+	// Seen are the lines seen in full, as inclusive ranges; MoreRanges counts those past the ones listed.
+	Seen       [][2]int `json:"seen"`
+	MoreRanges int      `json:"moreRanges,omitempty"`
+	// Known counts lines the agent knows by content but does not hold as seen.
+	Known int `json:"known,omitempty"`
+}
+
+// seenView lists, for each agent that called, the files nib holds a version of and the lines of each it counts as seen. It only reads.
+func (s *Server) seenView(ctx *engine.Context, u *usageLog) *SeenView {
+	view := &SeenView{Agents: []AgentSeen{}}
+	for _, agent := range u.agentList() {
+		row := AgentSeen{Agent: agent, Files: []SeenRow{}}
+		files := s.engine.Store.SeenFiles(s.sessionOf(agent))
+		row.More = max(len(files)-seenFiles, 0)
+		for _, f := range files[:min(len(files), seenFiles)] {
+			r := SeenRow{Path: shown(ctx.Directory, f.Path), Tag: f.Tag, Lines: f.Lines, Anywhere: f.Anywhere, Seen: f.Seen, Known: f.Known}
+			if r.Seen == nil {
+				r.Seen = [][2]int{}
+			}
+			if len(r.Seen) > seenRanges {
+				r.MoreRanges, r.Seen = len(r.Seen)-seenRanges, r.Seen[:seenRanges]
+			}
+			row.Files = append(row.Files, r)
 		}
 		view.Agents = append(view.Agents, row)
 	}

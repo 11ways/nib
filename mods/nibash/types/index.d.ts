@@ -13,6 +13,13 @@ export type TrashEntry = { path: string; shown: string; when: number; dir?: bool
 /** The named directories of each agent, as nib lists them; source is server, defined, automatic or inherited. */
 export type NameList = { agent: string; names: { name: string; directory: string; source: string; uses: number }[] }[]
 
+/** The lines nib counts each agent as having seen of its files: inclusive 1-based ranges; anywhere says nib has no record, so edits may anchor on any line. */
+export type SeenList = {
+  agent: string
+  files: { path: string; tag: string; lines: number; anywhere?: boolean; seen: [number, number][]; moreRanges?: number; known?: number }[]
+  more?: number
+}[]
+
 /** What nib's tools returned in this session, in characters of text: by agent and tool, and the largest results. */
 export type Tokens = {
   chars: number
@@ -22,7 +29,7 @@ export type Tokens = {
 }
 
 /** The lists the view panes draw, each as nib last gave it; note is nib's answer to the last restore. */
-export type Views = { trash?: TrashEntry[]; tokens?: Tokens; names?: NameList; note?: string }
+export type Views = { trash?: TrashEntry[]; tokens?: Tokens; names?: NameList; seen?: SeenList; note?: string }
 
 declare module 'claude-code' {
   interface PluginState {
