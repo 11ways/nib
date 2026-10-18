@@ -715,7 +715,8 @@ func TestAForkWithNoMomentStartsWithACopyOfWhatItsParentSawAtItsFirstCall(t *tes
 	// Afterwards each one's reads are its own; the fork is seeded once, so the parent's later read never reaches it.
 	c.call(t, r.as("", readCall(path+":5")))
 	c.call(t, r.by(fork, readCall(path+":7")))
-	if got := c.latestSeen("main", path); !slices.Equal(got, []int{5}) {
+	// Lines 1 and 3 kept their number and text through the fork's edit, so main still holds them; line 2 changed and needs a read again.
+	if got := c.latestSeen("main", path); !slices.Equal(got, []int{1, 3, 5}) {
 		t.Fatalf("main saw %v of the edited file", got)
 	}
 	if got := c.latestSeen("agent:f1", path); slices.Contains(got, 5) || !slices.Contains(got, 7) {

@@ -885,8 +885,12 @@ line shown, and `path#TAG` reads record it like an edit response.
 - **Seen lines.** An edit may anchor on lines its tagged output showed in full, or as `N~TEXT` rows. Otherwise it is
   rejected with the actual content of up to 40 such lines plus 2 lines around each (`*` marks the anchors); all of those
   rows are then marked seen, so an unchanged retry or the `REAPPLY` token succeeds, and a miscount can be fixed from the
-  rows around it. After an edit, only lines that kept both number and content stay displayed, plus the rows shown in the
-  response. Moved lines are known, not seen, at their new numbers, so a hunk anchored on one needs a `~TEXT` check. A
+  rows around it. An anchor the agent saw only cut prints whole there when it fits (up to 4096 characters a line and 16
+  KiB in all), so the retry applies too; a longer one, or one with color codes, gets a cut preview and a token that
+  applies once it was read whole. After an edit, only lines that kept both number and content stay displayed, plus the
+  rows shown in the response. Moved lines are known, not seen, at their new numbers, so a hunk anchored on one needs a
+  `~TEXT` check. A new version made any other way, by a program the agent ran, another agent or a formatter, keeps the
+  same rule against the version before it: lines the change left at their number stay seen, moved ones stay known. A
   replacement on a moved line is still accepted when the new content carries that line's current text (at least 8
   characters, unique in the file), a port of oh-my-pi's shifted-anchor rescue. A file with no snapshot (for example
   after a restart) is not restricted. Every line of a file that `write` or `*** Add File:` wrote whole counts as seen,

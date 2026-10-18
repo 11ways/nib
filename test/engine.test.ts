@@ -132,7 +132,8 @@ describe("read", () => {
     expect(r.text).toContain("\n[line 1, chars 1-2000 of 2001]|word word")
     expect(r.text).toEndWith("\n[cut rows: change them in place with SUB N: OLD, or read file.txt:N with maxLineLength to see one whole]")
     expect(r.anchors).toEqual([2])
-    await expect(f.edit(r.tag, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow("Preview of the first 1 unseen line(s)")
+    // A refusal shows a cut line whole when it fits, so resending the edit would apply it.
+    await expect(f.edit(r.tag, [{ start: 1, content: "x", operation: "replace" }])).rejects.toThrow("Actual file content (* marks those lines):\n*1:word word")
     expect((await f.read("", { maxLineLength: 40_000 })).anchors).toEqual([1, 2])
     expect((await f.read(":1-2", { maxLineLength: 40_000 })).anchors).toEqual([1, 2])
     const full = await f.read(":1", { maxLineLength: 40_000 })
@@ -1323,7 +1324,7 @@ describe("refusals and reapply tokens", () => {
   })
 
   test("an unseen line too long to display gets a token that applies the patch unchanged once the line was read whole", async () => {
-    const long = "word ".repeat(500) + "w"
+    const long = "word ".repeat(1000) + "w"
     const f = await fixture(`${long}\nshort\n`)
     const r = await f.read(":2")
     const message = await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 1.=1:\n+x`))

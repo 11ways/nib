@@ -20,12 +20,15 @@ const (
 	// GrepContextLines is the context one grep page shows in all; past it every match gets less, except definitions that asked for theirs.
 	GrepContextLines = 2 * grepContext
 
-	previewContext    = 2
-	editContext       = 1
-	writtenRows       = 5
-	revealLines       = 40
-	revealContext     = 2
-	revealColumns     = 512
+	previewContext = 2
+	editContext    = 1
+	writtenRows    = 5
+	revealLines    = 40
+	revealContext  = 2
+	revealColumns  = 512
+	// A refusal shows a cut unseen line whole, up to wholeColumns each and wholeBudget in all, so resending the patch applies it.
+	wholeColumns      = 4096
+	wholeBudget       = 16 * 1024
 	grepColumns       = 512
 	grepFiles         = 20
 	grepListFiles     = 200

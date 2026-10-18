@@ -61,13 +61,24 @@ func unseenError(store *snapshots.Store, session string, t *target, current snap
 	if store.Forgotten(session, t.canonical) {
 		header = fmt.Sprintf("This edit anchors to lines %s of %s that this agent was not shown since nib dropped its earlier views of the file: nib keeps the views of a limited number of files across all agents, and dropped this one's to make room, so lines read before then no longer count.", ranges(unseen), t.display)
 	}
-	long := len(unseen) > revealLines
+	ansi := slices.ContainsFunc(unseen, func(line int) bool {
+		return line-1 < len(current.Lines) && visible(current.Lines[line-1]) != current.Lines[line-1]
+	})
+	columns, total := revealColumns, 0
+	cut := false
 	for _, line := range unseen {
-		content := ""
 		if line-1 < len(current.Lines) {
-			content = current.Lines[line-1]
+			size := js.Len(current.Lines[line-1])
+			total += size
+			cut = cut || size > revealColumns
 		}
-		if js.Len(content) > revealColumns || visible(content) != content {
+	}
+	if cut && !ansi && len(unseen) <= revealLines && total <= wholeBudget {
+		columns = wholeColumns
+	}
+	long := ansi || len(unseen) > revealLines
+	for _, line := range unseen {
+		if line-1 < len(current.Lines) && js.Len(current.Lines[line-1]) > columns {
 			long = true
 		}
 	}
@@ -75,16 +86,13 @@ func unseenError(store *snapshots.Store, session string, t *target, current snap
 		shown := unseen[:min(len(unseen), revealLines)]
 		f := contextRows(current.Lines, shown, 0, revealColumns)
 		// Color codes keep a line from ever showing whole, so only a SUB, never a read, can make such a patch apply.
-		ansi := slices.ContainsFunc(unseen, func(line int) bool {
-			return line-1 < len(current.Lines) && visible(current.Lines[line-1]) != current.Lines[line-1]
-		})
 		next := "Read those lines in full (with maxLineLength for cut ones), or change a cut line in place with SUB N: OLD."
 		if ansi {
 			next = "Change a cut or ansi line in place with SUB N: OLD; color codes keep an ansi line from ever showing in full."
 		}
 		return &Refusal{message: fmt.Sprintf("%s Preview of the first %d unseen line(s):\n%s\n%s", header, len(shown), strings.Join(f.rows, "\n"), next), Retry: !ansi, Unread: true}
 	}
-	f := contextRows(current.Lines, unseen, revealContext, revealColumns)
+	f := contextRows(current.Lines, unseen, revealContext, columns)
 	store.Record(session, t.canonical, current, nonNil(f.shown), nil)
 	written := ""
 	if slices.ContainsFunc(unseen, func(line int) bool { return known[line] }) && store.Teach(session, "unseen-known") {

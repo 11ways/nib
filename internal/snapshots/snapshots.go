@@ -120,8 +120,14 @@ func NewStoreWith(limits Limits) *Store {
 func id(session, path string) string { return session + "\x00" + path }
 
 // Record makes view the most recent version and unions seen and known into its line sets; a nil seen leaves Seen as it is. A line keeps the
-// moment it first joined a set.
+// moment it first joined a set. A view new to the history, when seen is given, starts with what the agent held of the newest version before
+// it, however the file changed: a line that kept its number and text stays seen, one that moved is known content a ~ check anchors, each
+// with its first moment, so dropping a context later drops them alike.
 func (s *Store) Record(session, path string, view View, seen, known []int) *Version {
+	var inherited *carried
+	if seen != nil {
+		inherited = s.carry(session, path, view)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.Now().UnixNano()
@@ -144,6 +150,11 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	}
 	if version == nil {
 		version = &Version{View: view, at: now}
+		// A version recorded since the diff is the newer basis, and its lines were not carried.
+		if inherited != nil && len(h.versions) > 0 && h.versions[0].Key == inherited.from {
+			version.Seen, version.seenAt = inherited.seen, inherited.seenAt
+			version.Known, version.knownAt = inherited.known, inherited.knownAt
+		}
 	}
 	if seen != nil {
 		version.Seen, version.seenAt = stamp(version.Seen, version.seenAt, seen, now)
@@ -163,6 +174,58 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	s.units += h.units
 	s.evict()
 	return version
+}
+
+// carried are the lines of a newest version that hold for a new view, with the moments they joined their sets.
+type carried struct {
+	from            string
+	seen, known     map[int]bool
+	seenAt, knownAt map[int]int64
+}
+
+// carry is what the agent held of the newest version of path that still holds for view, or nil when view is not new or nothing restricts the
+// newest version; it copies under the lock and diffs outside it, as Held does.
+func (s *Store) carry(session, path string, view View) *carried {
+	s.mu.Lock()
+	element, ok := s.histories[id(session, path)]
+	if !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	versions := element.Value.(*history).versions
+	if len(versions) == 0 || versions[0].Seen == nil || slices.ContainsFunc(versions, func(v *Version) bool { return v.Key == view.Key }) {
+		s.mu.Unlock()
+		return nil
+	}
+	newest := versions[0]
+	from, lines := newest.Key, newest.Lines
+	seen, seenAt := before(newest.Seen, newest.seenAt, math.MaxInt64)
+	known, knownAt := before(newest.Known, newest.knownAt, math.MaxInt64)
+	s.mu.Unlock()
+	mapping, ok := LineMap(lines, view.Lines)
+	if !ok {
+		return nil
+	}
+	c := &carried{from: from, seen: map[int]bool{}, seenAt: map[int]int64{}, known: map[int]bool{}, knownAt: map[int]int64{}}
+	add := func(set map[int]bool, at map[int]int64, line int, moment int64) {
+		if !set[line] || moment < at[line] {
+			set[line], at[line] = true, moment
+		}
+	}
+	for old := range seen {
+		if now, ok := mapping[old]; ok {
+			if now == old {
+				add(c.seen, c.seenAt, now, seenAt[old])
+			}
+			add(c.known, c.knownAt, now, seenAt[old])
+		}
+	}
+	for old := range known {
+		if now, ok := mapping[old]; ok {
+			add(c.known, c.knownAt, now, knownAt[old])
+		}
+	}
+	return c
 }
 
 // evict drops least recently used histories until the store is within its limits, remembering which.
