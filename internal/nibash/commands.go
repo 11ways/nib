@@ -83,12 +83,11 @@ var commands = func() map[string]command {
 	return byName
 }()
 
-// ownNames lists the commands that pass file lines on, as "cat, head, ... and wc", the way the tool description names them; aliases adds the
-// other names of a command.
-func ownNames(aliases bool) string {
+// ownNames lists the commands that pass file lines on, every name of each, as "cat, head, ... and wc", the way the tool description names them.
+func ownNames() string {
 	var forms []string
 	for _, c := range ownCommands {
-		if c.renders || c.alias && !aliases {
+		if c.renders {
 			continue
 		}
 		form := c.form

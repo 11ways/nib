@@ -131,7 +131,7 @@ func (c *call) pipedNote() string {
 
 // pipedText is what pipedNote says of p.
 func pipedText(p pipe) string {
-	return fmt.Sprintf("[%s's rows went through %s as plain text, without line numbers; only nib's own commands keep them, and read takes path:A-B,C-D and maxLineLength]", p.command, p.program)
+	return fmt.Sprintf("[%s's rows lost their line numbers in %s; read path:A-B,C-D keeps them]", p.command, p.program)
 }
 
 // standIn is a plan that checks, once it knows the shell's environment, that it does what the system program would; an error makes the

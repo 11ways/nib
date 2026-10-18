@@ -116,12 +116,7 @@ func (s *Shell) Description() string {
 	if s.summarizer != nil {
 		cut += fmt.Sprintf(", or past %d lines or %d KB to a <summary> of it and the log lines that summary points at", summaryLines, summaryBytes/1024)
 	}
-	return fmt.Sprintf(description, ownNames(true), cut)
-}
-
-// Commands names nib's own commands for the server instructions.
-func (s *Shell) Commands() string {
-	return ownNames(false)
+	return fmt.Sprintf(description, ownNames(), cut)
 }
 
 // Expects says whether a model reads a call's expectation: a decision model or a summarizer.

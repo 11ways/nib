@@ -2216,9 +2216,9 @@ func (e *Engine) refusal(session string, sections []*patch.Section, failures []i
 	case retry:
 		parts = append(parts, "REAPPLY "+token)
 	case e.Store.Teach(session, "reapply-fix"):
-		parts = append(parts, "To send only the corrected sections, call edit with input: REAPPLY "+token+" on the first line, then those [PATH#TAG] sections; each replaces its file's section in this patch, and the rest applies as sent.")
+		parts = append(parts, "To resend only corrected sections, call edit with input: REAPPLY "+token+" on the first line, then those [PATH#TAG] sections; the rest applies as sent.")
 	default:
-		parts = append(parts, "REAPPLY "+token+", then the corrected sections")
+		parts = append(parts, "REAPPLY "+token+", then corrected sections")
 	}
 	return errors.New(strings.Join(parts, "\n\n"))
 }

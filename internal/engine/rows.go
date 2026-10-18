@@ -138,8 +138,12 @@ func charsLabel(stretches []string, length int) string {
 	return fmt.Sprintf("chars %s of %d", strings.Join(stretches, ", "), length)
 }
 
-// cutRow is the one form of a bracketed row that is never an anchor: the line's number spelled out, what was done to it, and the text shown.
+// cutRow is the one form of a bracketed row that is never an anchor: the line's number spelled out, what was done to it, and the text shown;
+// a row only stripped of color keeps the shorter [N ansi] form, where no count follows the number to be mistaken for it.
 func cutRow(line int, label, text string) string {
+	if label == "ansi" {
+		return fmt.Sprintf("[%d ansi]|%s", line, text)
+	}
 	return fmt.Sprintf("[line %d, %s]|%s", line, label, text)
 }
 

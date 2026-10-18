@@ -70,7 +70,7 @@ func shownLines(out string) []string {
 	for _, row := range strings.Split(out, "\n") {
 		switch {
 		case header.MatchString(row), row == plainFollows, strings.HasPrefix(row, "[exit "):
-		case strings.HasPrefix(row, "[line "):
+		case strings.HasPrefix(row, "[line "), regexp.MustCompile(`^\[\d+ ansi\]\|`).MatchString(row):
 			_, text, _ := strings.Cut(row, "]|")
 			lines = append(lines, strings.TrimPrefix(engine.PlainText(strings.ReplaceAll(text, " ... ", "")), "\xef\xbb\xbf"))
 		case anchor.MatchString(row):

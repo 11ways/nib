@@ -97,7 +97,7 @@ Lines longer than `maxLineLength` (default 2000) print as `[line N, chars 1-2000
 anchor, and the block ends with a note saying so. `SUB` changes such a line in place without reading it; to see it
 whole, read it with a larger `maxLineLength`. A larger value works for any selection within the shared 40 KiB budget,
 and one `path:N` entry alone may go up to 2 MiB; a row bigger than the whole budget is replaced by a hint to read that
-line alone. A line with terminal color codes prints as `[line N, ansi]|text` with the codes stripped, which is not an
+line alone. A line with terminal color codes prints as `[N ansi]|text` with the codes stripped, which is not an
 anchor either; the tag still covers the real bytes, and `SUB` edits such a line too. Directories list their entries;
 PNG, JPEG, GIF and WebP files are returned as MCP image content; PDFs are refused, so use the client's own reader for
 them.
@@ -357,8 +357,8 @@ REM
   `To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY t0k3n5`, or after an
   agent's first such refusal with just `REAPPLY t0k3n5`. Unseen lines the refusal could not display whole (lines cut
   past its width, more than 40 lines) must be read first, and it says so; a token sent before that is refused again,
-  with a new token. Any other refusal ends with `To send only the corrected sections, call edit with input: REAPPLY
-  t0k3n5 on the first line, then those [PATH#TAG] sections; ...`, later just `REAPPLY t0k3n5, then the corrected
+  with a new token. Any other refusal ends with `To resend only corrected sections, call edit with input: REAPPLY
+  t0k3n5 on the first line, then those [PATH#TAG] sections; ...`, later just `REAPPLY t0k3n5, then corrected
   sections`: sections under the `REAPPLY` line replace every stored section for their path, in its place, sections for
   other paths join the patch, and the patch stays all or nothing. A line with color codes can never be read whole, so
   an unseen one gets that kind of token too. Either way the stored patch goes through the full normal validation, as a
@@ -483,8 +483,7 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   prints anchored rows. At the end, file lines print as `[PATH#TAG]` blocks of `N:TEXT` rows, grep matches as `*N:`, and
   each row is checked against the file version the session holds, so an `N:` row is always a real line and counts as
   displayed for `edit`. The first time an agent pipes such rows into a real program whose output reaches it, the call
-  ends with one note, `[sed's rows went through awk as plain text, without line numbers; ...]`, naming `read`'s
-  `path:A-B,C-D` and `maxLineLength`.
+  ends with one note, `[sed's rows lost their line numbers in awk; read path:A-B,C-D keeps them]`.
 - **cut -c.** nib's `cut -c LIST` (`N`, `N-M`, `N-`, `-M`, comma lists, `--characters`) keeps a file's line it leaves
   whole as its `N:` row, and prints one it shortens as a bracketed row naming what it kept,
   `[line 40, chars 1-220 of 431]|...` (stretches joined by ` ... `), which is no anchor. It selects exactly what the

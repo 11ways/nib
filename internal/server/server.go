@@ -64,8 +64,6 @@ type Options struct {
 type Shell interface {
 	// Description is the nibash tool's description.
 	Description() string
-	// Commands names the commands nibash runs as its own, for the server instructions.
-	Commands() string
 	// Expects says whether a model reads a call's expect argument, which is offered only then.
 	Expects() bool
 	// Run executes one nibash call for the agent under key, one per agent of a client; jobs it starts stay with that key.
@@ -204,7 +202,7 @@ type origin struct {
 func Instructions(options Options) string {
 	text := toolInstructions
 	if options.Shell != nil {
-		text = fmt.Sprintf(shellInstructions, options.Shell.Commands())
+		text = shellInstructions
 	}
 	if len(options.Providers) > 0 {
 		var names []string

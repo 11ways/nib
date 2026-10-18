@@ -544,25 +544,21 @@ func frameMatches(files []*grepFile, before, after int, asked bool) string {
 	if len(others) == 0 || (b == before && a == after) {
 		return ""
 	}
-	kind := "the default"
-	if asked {
-		kind = "the asked"
-	}
-	got := "none"
+	got := "no context"
 	if b > 0 || a > 0 {
-		got = fmt.Sprintf("%d before and %d after each", b, a)
+		got = fmt.Sprintf("%d before and %d after", b, a)
 	}
 	first := others[0]
-	over := fmt.Sprintf("around all %d %s context would be %d lines, over grep's budget of %d; for more around one, read a range like %s:%d-%d", len(all),
-		kind, wanted, GrepContextLines, first.file.target.display, max(1, first.line-before), first.line+after)
+	over := fmt.Sprintf("around all it would be %d lines, past grep's %d; read a range like %s:%d-%d for more", wanted, GrepContextLines,
+		first.file.target.display, max(1, first.line-before), first.line+after)
 	if len(definitions) == 0 {
-		return fmt.Sprintf("[all %d match rows shown, context lines: %s instead of %s %d before and %d after: %s]", len(all), got, kind, before, after, over)
+		return fmt.Sprintf("[all %d match rows shown, with %s, since %s]", len(all), got, over)
 	}
 	which := fmt.Sprintf("the %d definitions", len(definitions))
 	if len(definitions) == 1 {
 		which = fmt.Sprintf("the definition at %s:%d", definitions[0].file.target.display, definitions[0].line)
 	}
-	return fmt.Sprintf("[all %d match rows shown; %s got %s %d before and %d after, the other matches %s: %s]", len(all), which, kind, before, after, got, over)
+	return fmt.Sprintf("[all %d match rows shown; %s got the asked context, the rest %s, since %s]", len(all), which, got, over)
 }
 
 // replaceLine swaps a line's submatches for ripgrep's replacements; ripgrep reports UTF-8 byte offsets.
