@@ -1,0 +1,204 @@
+package server
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/hookstate"
+)
+
+// ShapeRequest is what nib shape asks the session's server: the log, the run's description, its exit status and the command that wrote it.
+type ShapeRequest struct {
+	Log     string `json:"log"`
+	Purpose string `json:"purpose"`
+	Command string `json:"command,omitempty"`
+	Exit    int    `json:"exit"`
+}
+
+// ShapeAnswer is the server's answer: the shaped text, or with Status 2 why the log was refused.
+type ShapeAnswer struct {
+	Text   string `json:"text"`
+	Status int    `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+const (
+	// shapeRequestLimit bounds a request; a log's path, purpose and command fit many times over.
+	shapeRequestLimit = 64 * 1024
+	// shapeWait bounds how long nib shape waits for the session's server, which may ask a decider and then a summarizer.
+	shapeWait = 3 * time.Minute
+	// shapeAgent is how the token report names what nib shape requests returned, as no agent is known to have asked.
+	shapeAgent = "nib shape"
+)
+
+// RuntimeDirectory is nib's private runtime folder: nibash's logs and the session sockets nib shape finds a server by.
+func RuntimeDirectory() string {
+	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
+		return filepath.Join(base, "nib")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("nib-%d", os.Getuid()))
+}
+
+// SocketPath is the socket of the nib server the process pid started, which nib shape run under that process asks.
+func SocketPath(pid int) string {
+	return filepath.Join(RuntimeDirectory(), fmt.Sprintf("session-%d.sock", pid))
+}
+
+// ListenShape listens on the socket of the process that started this server, parent; nil when the runtime folder is not private or another
+// live server of the same parent holds the socket already, the first one keeping it. A socket a dead server left is replaced.
+func ListenShape(parent int) (net.Listener, error) {
+	if !hookstate.Private(RuntimeDirectory(), true) {
+		return nil, nil
+	}
+	path := SocketPath(parent)
+	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
+		conn.Close()
+		return nil, nil
+	}
+	_ = os.Remove(path)
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		listener.Close()
+		return nil, err
+	}
+	return listener, nil
+}
+
+// ServeShape answers nib shape requests on listener until ctx ends, closing it then, which removes the socket.
+func (s *Server) ServeShape(ctx context.Context, listener net.Listener) {
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go s.answerShape(ctx, conn)
+	}
+}
+
+// answerShape reads one request from conn and writes its answer.
+func (s *Server) answerShape(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(io.LimitReader(conn, shapeRequestLimit)).ReadBytes('\n')
+	var request ShapeRequest
+	if err == nil {
+		err = json.Unmarshal(line, &request)
+	}
+	if err == nil && !filepath.IsAbs(request.Log) {
+		err = fmt.Errorf("the log %q is not an absolute path", request.Log)
+	}
+	answer := ShapeAnswer{Status: 2}
+	if err != nil {
+		answer.Error = err.Error()
+	} else {
+		answer = s.shapeAnswer(ctx, request)
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = json.NewEncoder(conn).Encode(answer)
+}
+
+// shapeAnswer shapes the log a request names with this server's shell, judging its path as a read is judged; what it returns counts in the
+// token report under shapeAgent.
+func (s *Server) shapeAnswer(ctx context.Context, request ShapeRequest) ShapeAnswer {
+	if s.options.Shell == nil {
+		return ShapeAnswer{Status: 2, Error: "this nib server offers no nibash"}
+	}
+	arguments, _ := json.Marshal(request)
+	end := s.shapes.begin(shapeAgent, "shape", false, arguments)
+	tools := &engine.Context{
+		Ctx:       ctx,
+		Directory: s.options.Directory,
+		Session:   s.engineSession(shapeAgent),
+		Sandbox:   s.options.Sandbox,
+		Authorize: func(context.Context, string, string) error { return nil },
+		Names:     s.options.Names.For(s.defined, s.engineSession(shapeAgent)),
+	}
+	if s.options.Sandbox {
+		roots, err := s.knownRoots()
+		if err != nil {
+			end(nil)
+			return ShapeAnswer{Status: 2, Error: err.Error()}
+		}
+		tools.Roots = func(context.Context) ([]string, error) { return roots, nil }
+	}
+	text, err := s.options.Shell.Shape(ctx, request.Log, request.Command, request.Purpose, request.Exit, tools)
+	if err != nil {
+		end(nil)
+		return ShapeAnswer{Status: 2, Error: err.Error()}
+	}
+	end(&mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}})
+	return ShapeAnswer{Text: text}
+}
+
+// knownRoots are the roots the sandbox confines a nib shape request to: the client's, as last listed for one of its calls, or the server's
+// directory for a client that has none; with neither known yet the sandbox allows nothing, as for a call.
+func (s *Server) knownRoots() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, state := range s.sessions {
+		params := key.InitializeParams()
+		if params == nil || params.Capabilities == nil || params.Capabilities.RootsV2 == nil {
+			return []string{s.options.Directory}, nil
+		}
+		state.mu.Lock()
+		roots := state.roots
+		state.mu.Unlock()
+		if roots != nil {
+			return roots, nil
+		}
+	}
+	return nil, errors.New("the client's roots are not known yet, so the sandbox allows nothing")
+}
+
+// AskShape asks the server of the first of pids, nearest ancestor first, whose socket answers; ok is false when none did, or the answer
+// could not be read, so the caller shapes the log itself.
+func AskShape(ctx context.Context, pids []int, request ShapeRequest) (answer ShapeAnswer, ok bool) {
+	if !hookstate.Private(RuntimeDirectory(), false) {
+		return answer, false
+	}
+	for _, pid := range pids {
+		path := SocketPath(pid)
+		if _, err := os.Lstat(path); err != nil {
+			continue
+		}
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(ctx, "unix", path)
+		if err != nil {
+			continue
+		}
+		answer, ok = exchange(conn, request)
+		return answer, ok
+	}
+	return answer, false
+}
+
+// exchange sends request on conn and reads the answer, within shapeWait.
+func exchange(conn net.Conn, request ShapeRequest) (answer ShapeAnswer, ok bool) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(shapeWait))
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return answer, false
+	}
+	if err := json.NewDecoder(conn).Decode(&answer); err != nil {
+		return answer, false
+	}
+	return answer, answer.Status == 0 || answer.Status == 2
+}

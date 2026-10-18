@@ -490,6 +490,14 @@ func (f *fakeShell) ReadLog(_ context.Context, key any, paths []string, expect s
 	return engine.Result{Text: "log"}, nil
 }
 
+// Shape answers with the request it got, or refuses a path the sandbox does not allow, judged as a read's.
+func (f *fakeShell) Shape(_ context.Context, path, command, description string, exit int, tools *engine.Context) (string, error) {
+	if _, err := engine.New().ReadLog(tools, path, 1<<20, nil); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("shaped %s for %q, %q exit %d", path, description, command, exit), nil
+}
+
 func (f *fakeShell) SetSummaries(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

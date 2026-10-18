@@ -10,14 +10,35 @@ import (
 	"github.com/11ways/nib/internal/engine"
 )
 
-// logMark is how far an agent read a file with skim: its size and start then, and the whole lines read, which end at offset; partial is
-// how many bytes of a last line without its line break were shown after them.
+// logMark is how far a file was read with skim: its size and start then, and the whole lines read, which end at offset; partial is how many
+// bytes of a last line without its line break were shown after them. shaped marks what nib shape showed, which counts for every agent.
 type logMark struct {
 	size    int64
 	head    []byte
 	lines   int
 	offset  int64
 	partial int
+	shaped  bool
+}
+
+// advanced is the mark a whole read of file leaves, going on from base lines: raw is what it held from file.From on, after skipped bytes of a
+// byte order mark.
+func advanced(file *engine.LogFile, raw []byte, skipped, base int) logMark {
+	next := logMark{size: file.Size, head: file.Head, lines: base, offset: file.From + int64(skipped)}
+	if end := bytes.LastIndexByte(raw, '\n'); end >= 0 {
+		next.lines += bytes.Count(raw[:end+1], []byte("\n"))
+		next.offset += int64(end + 1)
+	}
+	next.partial = len(raw) - int(next.offset-file.From-int64(skipped))
+	return next
+}
+
+// since says what a mark of an earlier read is, for the head line of a read going on from it.
+func (m logMark) since() string {
+	if m.shaped {
+		return "since nib shape showed it"
+	}
+	return "since your last " + engine.Skim
 }
 
 // ReadLog reads files for what the agent expects of them, as plain lines shaped the way long program output is: past the limits a decider
@@ -47,20 +68,25 @@ func (s *Shell) ReadLog(ctx context.Context, key any, paths []string, expect str
 // readLog is one file's block: a head line of facts, then each window of its lines as shape leaves it.
 func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d decision, tools *engine.Context) (string, error) {
 	whole, resumed, rewritten := false, false, false
-	var mark logMark
+	// mark is where this read goes on from; previous is the earlier read's mark, rewritten or not, which the head line names.
+	var mark, previous logMark
 	file, err := s.engine.ReadLog(tools, entry, logLimit, func(f *engine.LogFile) int64 {
 		whole = true
 		sess.mu.Lock()
 		m, ok := sess.marks[f.Canonical]
 		sess.mu.Unlock()
+		// What nib shape showed counts for every agent, as nothing tells which one asked for it.
+		if shaped, found := s.shapedMark(f.Canonical); found && (!ok || shaped.offset > m.offset) {
+			m, ok = shaped, true
+		}
 		if !ok {
 			return 0
 		}
 		if f.Size < m.size || !bytes.HasPrefix(f.Head, m.head) {
-			rewritten = true
+			rewritten, previous = true, m
 			return 0
 		}
-		mark, resumed = m, true
+		mark, previous, resumed = m, m, true
 		return m.offset
 	})
 	if err != nil {
@@ -76,12 +102,7 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 	total := base + len(lines)
 	d.command = "cat " + file.Display
 	if whole {
-		next := logMark{size: file.Size, head: file.Head, lines: base, offset: file.From + int64(skipped)}
-		if end := bytes.LastIndexByte(raw, '\n'); end >= 0 {
-			next.lines += bytes.Count(raw[:end+1], []byte("\n"))
-			next.offset += int64(end + 1)
-		}
-		next.partial = len(raw) - int(next.offset-file.From-int64(skipped))
+		next := advanced(file, raw, skipped, base)
 		sess.mu.Lock()
 		if sess.marks == nil {
 			sess.marks = map[string]logMark{}
@@ -90,7 +111,7 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 		sess.mu.Unlock()
 		// A last line still being written was shown whole as it stood; shown again unchanged, it is nothing new.
 		if resumed && (len(raw) == 0 || len(raw) == mark.partial && next.lines == mark.lines) {
-			return fmt.Sprintf("[%s] %d lines, plain: nothing new since your last %s", file.Display, total, engine.Skim), nil
+			return fmt.Sprintf("[%s] %d lines, plain: nothing new %s", file.Display, total, previous.since()), nil
 		}
 	}
 	var out []string
@@ -108,9 +129,9 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 		}
 		out = append(out, fmt.Sprintf("[%s] lines %s of %d, plain", file.Display, strings.Join(parts, ", "), total))
 	case resumed:
-		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last %s", file.Display, base+1, total, total, engine.Skim))
+		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new %s", file.Display, base+1, total, total, previous.since()))
 	case rewritten:
-		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten since your last %s, so all of it", file.Display, total, engine.Skim))
+		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten %s, so all of it", file.Display, total, previous.since()))
 	default:
 		out = append(out, fmt.Sprintf("[%s] %d lines, plain", file.Display, total))
 	}

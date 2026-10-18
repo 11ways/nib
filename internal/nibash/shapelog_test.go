@@ -88,3 +88,69 @@ func TestShapeLogIsWhatNibashShowsOfTheSameOutput(t *testing.T) {
 		t.Fatalf("nib shape:\n%s\n\nnibash:\n%s", got, want)
 	}
 }
+
+// A request through the session's socket is shaped as nib shape shapes it alone, shows in the band while it runs, and a later skim of the
+// log by any agent goes on from what it showed.
+func TestShapeThroughTheServerIsNibShapesViewAndTheSkimGoesOnFromIt(t *testing.T) {
+	f := newFixture(t, map[string]string{"build.log": failedBuild()})
+	path := filepath.Join(f.directory, "build.log")
+	var during []server.ModelCall
+	model := pickText("error:")
+	choose := model.choose
+	model.choose = func(in decider.Input) decider.Choice {
+		during = f.shell.Status(func(any) (string, bool) { return "", false }, 0).Models
+		return choose(in)
+	}
+	f.shell.Deciding(model)
+	got, err := f.shell.Shape(context.Background(), path, "zenit-dev test", "run the tests", 1, f.tools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ShapeLog(context.Background(), []byte(failedBuild()), path, "zenit-dev test", "run the tests", 1, pickText("error:"), nil)
+	if got != want {
+		t.Fatalf("through the server:\n%s\n\nalone:\n%s", got, want)
+	}
+	if len(during) != 1 || during[0].Kind != "shape" || during[0].Model != "build.log" {
+		t.Fatalf("the band saw %+v while the log was shaped", during)
+	}
+	if calls := f.shell.Status(func(any) (string, bool) { return "", false }, 0).Models; len(calls) != 0 {
+		t.Fatalf("still running after it ended: %+v", calls)
+	}
+	appendTo(t, path, "retry 1\nretry 2\nBUILD FAILED again\n")
+	out := f.readLog("did the retry pass", "build.log")
+	if !strings.HasPrefix(out, "[build.log] lines 404-406 of 406, plain: new since nib shape showed it\nretry 1\n") {
+		t.Fatalf("skim after nib shape:\n%s", out)
+	}
+	if out := f.readLog("did the retry pass", "build.log"); out != "[build.log] 406 lines, plain: nothing new since your last skim" {
+		t.Fatalf("skim again:\n%s", out)
+	}
+}
+
+func TestShapeThroughTheServerFollowsItsSummarySwitchAndSandbox(t *testing.T) {
+	f := newFixture(t, map[string]string{"build.log": failedBuild()})
+	path := filepath.Join(f.directory, "build.log")
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Foo is missing.", Ranges: [][2]int{{2, 2}}}
+	}}
+	f.shell.Deciding(pickText("error:")).Summarizing(summary)
+	f.shell.SetSummaries(false)
+	out, err := f.shell.Shape(context.Background(), path, "", "why did it fail", 1, f.tools())
+	if err != nil || strings.Contains(out, "<summary>") || len(summary.asked) != 0 {
+		t.Fatalf("summaries off, asked %d, %v:\n%s", len(summary.asked), err, out)
+	}
+	f.shell.SetSummaries(true)
+	if out, _ := f.shell.Shape(context.Background(), path, "", "why did it fail", 1, f.tools()); !strings.HasPrefix(out, "<summary>Foo is missing.</summary>") {
+		t.Fatalf("summaries on:\n%s", out)
+	}
+	f.sandbox = true
+	outside := filepath.Join(t.TempDir(), "other.log")
+	if err := os.WriteFile(outside, []byte(failedBuild()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.shell.Shape(context.Background(), path, "", "why", 1, f.tools()); err != nil {
+		t.Fatalf("a log inside the roots under the sandbox: %v", err)
+	}
+	if out, err := f.shell.Shape(context.Background(), outside, "", "why", 1, f.tools()); err == nil {
+		t.Fatalf("a log outside the roots was shaped:\n%s", out)
+	}
+}

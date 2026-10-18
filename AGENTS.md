@@ -29,8 +29,8 @@ claude plugin validate mods/nibash && claude plugin test mods/nibash   # the Cla
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib shape` (a saved log shaped as nibash shows long output), `nib --version` |
-| `internal/server/` | MCP tool registration, model-facing descriptions and lean schemas, argument recovery with notes, roots and elicitation |
+| `cmd/nib/` | entrypoint: stdio server, `nib setup`, `nib hook`, `nib shape` (a saved log shaped as nibash shows long output, by the session's server when one answers on its socket), `nib --version` |
+| `internal/server/` | MCP tool registration, model-facing descriptions and lean schemas, argument recovery with notes, roots and elicitation, the session socket `nib shape` asks (`shapesock.go`) |
 | `internal/engine/` | reads (selectors, outlines, skip rules, budget, plain reads, file facts, changes since a tag), grep and replace previews, find, patch staging (checks, SUB, blocks, MV, CP), refusals and reapply tokens, row maps, what counts as repeated output (`Repeats`), atomic publication, writes, workspace checks, the API nibash's commands read files through, files `skim` reads, and that tool's name (`engine.Skim`, its one declaration: a rename is that edit plus the docs) |
 | `internal/syntax/` | tree-sitter parsing: the grammars by file extension (the one home of that mapping), each language's declaration rules, what a file declares (`path:Name` reads), where a block ends (`PUT N*:`), and the decoded-grammar cache limits |
 | `internal/nibash/` | the shell: per-session interpreter, classification of nib's own commands, record links between them and the rows nib commands inside a compound command send one in band through its pipe, the commands, the terminal sink and rendering, the cut, the deduplicated form a decision model and a summarizer read, and the assembly of a decider's choice, `skim` (files shaped like long output for what the agent expects, and how far each agent read each one), real programs in process groups, jobs, the sandbox |

@@ -238,7 +238,8 @@ func (s *Server) seenView(ctx *engine.Context, u *usageLog) *SeenView {
 
 // ModelCall is a decision or summary model being asked now; Started is Unix milliseconds.
 type ModelCall struct {
-	// Kind is "decider" or "summary", and Model what is asked: a model, or the summary entry.
+	// Kind is "decider" or "summary", and Model what is asked: a model, or the summary entry; or Kind is "shape", a nib shape request being
+	// shaped, and Model the log's file name.
 	Kind    string `json:"kind"`
 	Model   string `json:"model"`
 	Started int64  `json:"started"`

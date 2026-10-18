@@ -118,6 +118,13 @@ func main() {
 	defer stop()
 	options.Providers = startProviders(ctx, specs, directory, options.Sandbox && os.Getenv("NIB_PROVIDERS_SANDBOX") != "1")
 	s := newServer(options, choice.New(), choice.Summarizer())
+	// nib shape run anywhere under the program that started this server, as a build wrapper that program also started, asks this server.
+	if listener, err := server.ListenShape(os.Getppid()); err != nil {
+		fmt.Fprintln(os.Stderr, "nib: nib shape requests are not taken:", err)
+	} else if listener != nil {
+		go s.ServeShape(ctx, listener)
+		defer listener.Close()
+	}
 	err = s.Run(ctx, &mcp.StdioTransport{})
 	s.Close()
 	for _, p := range options.Providers {

@@ -76,6 +76,9 @@ type Shell interface {
 	Status(owns func(key any) (agent string, ok bool), tail int) ShellStatus
 	// SetSummaries turns the summaries of long output on or off for this server.
 	SetSummaries(on bool)
+	// Shape is what nibash shows of the log at path, another tool's run of command with description, ended with exit; the path is judged as
+	// a read's is, and the lines it shows count as every agent's skim of the log.
+	Shape(ctx context.Context, path, command, description string, exit int, tools *engine.Context) (string, error)
 }
 
 // ShellStatus is what nibash runs for one client: the commands still in their call and the jobs, oldest first.
@@ -88,7 +91,8 @@ type ShellStatus struct {
 	Tokens  *TokensView `json:"tokens,omitempty"`
 	Names   *NamesView  `json:"names,omitempty"`
 	Seen    *SeenView   `json:"seen,omitempty"`
-	// Models are the decision and summary models being asked now, and Summaries whether summaries are on.
+	// Models are the decision and summary models being asked now, and the nib shape requests being shaped; Summaries whether summaries are
+	// on.
 	Models    []ModelCall   `json:"models,omitempty"`
 	Summaries *SummaryState `json:"summaries,omitempty"`
 	// Calls are the hosted providers' tool calls running now, which a program outside nib may take long to answer.
@@ -187,6 +191,8 @@ type Server struct {
 	last map[string]string
 	// defined are the named directories agents defined with nibash's hash -d.
 	defined *names.Defined
+	// shapes is what the nib shape requests this server answered returned.
+	shapes usageLog
 }
 
 // originDepth bounds how far up a chain of OpenCode sessions that never called nib a session's start goes to start them first.
@@ -1222,7 +1228,7 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 		status.Trash = s.trashView(ctx)
 	}
 	if view == "tokens" {
-		status.Tokens = s.state(c.key).usage.tokens()
+		status.Tokens = s.state(c.key).usage.tokens().with(s.shapes.tokens())
 	}
 	if view == "seen" {
 		status.Seen = s.seenView(ctx, &s.state(c.key).usage)

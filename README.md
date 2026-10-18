@@ -752,6 +752,14 @@ configuration as the server. Its notes name `PATH` as the whole output, no copy 
 printed, since the wrapper states its own verdict. Rows are plain, never anchors. Bad arguments and an unreadable log
 exit 2 with one line on stderr; a decider choice nib would refuse to start with exits 1.
 
+When `nib shape` runs under the program that started a nib server, as zenit-dev and nib both run under one Claude Code,
+it asks that server, through a socket in nib's private runtime folder named after that program's process, and prints
+its answer. The log is then shaped with the session's state: `/nibash summaries off` applies, the mod's band shows a
+`shape` card naming the log while it runs, `/tokens` counts it under `nib shape`, and a later `skim` of the same log, by
+any agent since nothing tells which one asked, shows only what was added since. Under `NIB_SANDBOX=1` a log outside the
+roots is refused with exit 2. With no such server, or one that cannot be asked, `nib shape` shapes the log itself, the
+same way.
+
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
 exit status, the lines of a file `skim` reads and the rows between the kept start and end of each output long
 enough to be cut. That is whatever the program printed, so a long `env`, `printenv` or `sort .env` sends the secrets in
@@ -1157,6 +1165,10 @@ A call to a hosted provider's tool (`zemble_graph_callers`) that has run three s
 `zemble 0:04 graph_callers`, since the program behind it may start or index for minutes: nib lists the hosted calls
 running in `nibash_status` (`calls`; its own tools are not among them), and the mod, which asks nib while one runs,
 names a call only from its third second.
+
+A log another MCP server's tool hands nib through `nib shape`, a zenit-dev test run's, gets a card too,
+`shape 0:03 build.log`, beside the decider and summary cards it waits for: the mod asks nib while any other server's
+tool runs, since that tool may be the wrapper, and stops when nothing of nib's runs.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

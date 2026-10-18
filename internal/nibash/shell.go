@@ -52,6 +52,9 @@ type Shell struct {
 	modelMu      sync.Mutex
 	models       map[int]server.ModelCall
 	modelNext    int
+	// shaped is what nib shape requests showed of each log, by canonical path, which a later skim by any agent goes on from.
+	shapeMu sync.Mutex
+	shaped  map[string]logMark
 }
 
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and

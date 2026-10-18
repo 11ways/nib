@@ -522,3 +522,18 @@ numbers start at 1. The decision gets `--command` (default `cat PATH`), `--purpo
 `--exit`, so the models read what they would for the run itself. No `[exit N]` line is printed, since the tool states its
 own verdict; with no agent known, a recurring block's markers are always explained. The decider and summarizers come
 from the same environment and remembered choice the server reads (`deciderChoice` in `cmd/nib`).
+
+**The session's server.** Run under a nib server's own parent, `nib shape` hands the request to that server, so the
+session's state applies. Each stdio server listens on `session-<parent pid>.sock` in nib's runtime folder
+(`server.RuntimeDirectory`, also nibash's log folder), mode 0600 in a folder only the user may enter; the first server of
+a parent keeps the socket and later ones of the same parent skip it, and a socket a dead server left is replaced. `nib
+shape` walks its ancestors in `/proc`, nearest first, and asks the first whose socket answers; a missing, dead or unreadable
+socket, an older nib without one, or an answer it cannot read makes it shape the log itself. The request is one JSON line
+(log, purpose, command, exit) and the answer one JSON object; a refusal (an unreadable log, or under the sandbox one outside
+the roots the client's calls listed, none before any were) comes back with status 2 and is not shaped by the caller.
+
+The server shapes with `Shell.Shape`: the same `ShapeLog` with its own decider and its live summaries switch, a model
+call of kind `shape` named after the log while it runs, which the mod's band shows (the mod polls nib while any other MCP
+server's tool runs, since that tool may be the wrapper), and the result counted in the token report under `nib shape`.
+What it showed of the whole log becomes a skim mark every agent's next `skim` of the file goes on from, as the agent that
+asked is unknown; an agent's own later mark wins when it reaches further.

@@ -26,6 +26,8 @@ const views = atom({ plugin: 'nibash', key: 'views' } as const, {} as Views)
 const NIBASH = /^mcp__(.+)__nibash$/
 /** A hosted provider's tool of a nib server, as Claude Code names it: mcp__<server>__<provider>_<tool>. */
 const HOSTED = /^mcp__(.+?)__([a-z][a-z0-9-]*)_(.+)$/
+/** Any MCP server's tool, as Claude Code names it: mcp__<server>__<tool>. */
+const MCP_TOOL = /^mcp__(.+?)__(.+)$/
 
 /** The panes that show one list of nib's, each opened by the slash command of its name; the list is nibash_status's view of that name. */
 const VIEWS = {
@@ -269,7 +271,7 @@ export function rows(s: Status, ended: boolean | number, waiting: readonly strin
   for (const m of s.models ?? []) {
     out.push({
       key: `m:${m.kind}:${m.model}:${m.started}`,
-      label: m.kind === 'summary' ? 'summary' : 'decider',
+      label: m.kind === 'summary' || m.kind === 'shape' ? m.kind : 'decider',
       time: elapsed(s.at - m.started),
       title: m.model,
       tail: [],
@@ -487,9 +489,12 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const match = NIBASH.exec(e.tool)
     if (match === null) {
-      // A hosted provider's tool, mcp__nib__zemble_search: the program behind it may take long to start or to answer, which nib reports.
-      const hosted = HOSTED.exec(e.tool)
-      if (hosted === null || hosted[1] !== (await read($, server)) || e.tool.endsWith('__nibash_status')) return next(e)
+      // A hosted provider's tool, mcp__nib__zemble_search, may take long to start or to answer, and another MCP server's tool, a zenit-dev
+      // test run, may hand nib a log to shape through nib shape: nib reports both while they run. nib's own file tools answer at once.
+      const other = MCP_TOOL.exec(e.tool)
+      if (other === null || e.tool.endsWith('__nibash_status')) return next(e)
+      const own = other[1] === (await read($, server))
+      if (own && !HOSTED.test(e.tool)) return next(e)
       inFlight += 1
       watch($)
       try {

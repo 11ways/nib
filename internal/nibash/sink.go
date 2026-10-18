@@ -14,6 +14,7 @@ import (
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/js"
+	"github.com/11ways/nib/internal/server"
 )
 
 const (
@@ -605,13 +606,7 @@ type logDirectory struct {
 }
 
 func newLogDirectory() *logDirectory {
-	base := os.Getenv("XDG_RUNTIME_DIR")
-	if base == "" {
-		base = filepath.Join(os.TempDir(), fmt.Sprintf("nib-%d", os.Getuid()))
-	} else {
-		base = filepath.Join(base, "nib")
-	}
-	return &logDirectory{path: base}
+	return &logDirectory{path: server.RuntimeDirectory()}
 }
 
 // file is a new log file's path, creating the private directory first.

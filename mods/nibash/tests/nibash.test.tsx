@@ -409,18 +409,51 @@ describe('the band line for a hosted provider that takes long', () => {
     expect(asked.length).toBe(after)
   })
 
-  test("a tool of another server, and nib's own status tool, start no polling", async ($, on) => {
+  test("nib's own file tools and its status tool start no polling", async ($, on) => {
     const clock = mock.clock(on, { now: 43_000 })
     const asked: string[] = []
     on('mcp.call', async (_, e) => {
       asked.push(e.tool)
       return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [] } } }
     })
-    on('tool.call', { tool: 'mcp__other__zemble_search' }, async () => ({ result: 'done' }))
+    on('tool.call', { tool: 'mcp__nib__read' }, async () => ({ result: 'done' }))
     on('tool.call', { tool: 'mcp__nib__nibash_status' }, async () => ({ result: 'done' }))
-    await $.tool.call({ tool: 'mcp__other__zemble_search' })
+    await $.tool.call({ tool: 'mcp__nib__read' })
     await $.tool.call({ tool: 'mcp__nib__nibash_status' })
     await clock.settle()
     expect(asked).toEqual([])
+  })
+
+  test("another server's tool, a zenit-dev test, shows the log nib shapes for it while it runs", async ($, on) => {
+    const clock = mock.clock(on, { now: 43_000 })
+    const asked: string[] = []
+    let models: unknown[] = [{ kind: 'shape', model: 'build.log', started: 40_000 }]
+    on('mcp.call', async (_, e) => {
+      asked.push(e.tool)
+      return { value: { content: [], isError: false, structuredContent: { commands: [], jobs: [], models } } }
+    })
+    let release = () => {}
+    on('tool.call', { tool: 'mcp__zenit-dev__zd_test' }, async () => {
+      await new Promise<void>(resolve => (release = resolve))
+      return { result: 'done' }
+    })
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Box } = $.ui.resolve(e)
+      return <Box key="engine" />
+    })
+    const call = $.tool.call({ tool: 'mcp__zenit-dev__zd_test' })
+    await clock.settle()
+    expect(asked).toContain('nibash_status')
+    const band = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100 } as never })
+    expect((await band.find({ text: /shape/ }))?.text).toContain('shape 0:03 build.log')
+    release()
+    await call
+    models = []
+    await clock.advance(1_000)
+    await clock.advance(1_000)
+    expect(await band.find({ text: /shape/ })).toBeUndefined()
+    const after = asked.length
+    await clock.advance(5_000)
+    expect(asked.length).toBe(after)
   })
 })

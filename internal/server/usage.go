@@ -172,6 +172,17 @@ func (u *usageLog) tokens() *TokensView {
 	return view
 }
 
+// with adds other's agents, counts and largest results to v.
+func (v *TokensView) with(other *TokensView) *TokensView {
+	v.Chars += other.Chars
+	v.Calls += other.Calls
+	v.Agents = append(v.Agents, other.Agents...)
+	v.Largest = append(v.Largest, other.Largest...)
+	slices.SortStableFunc(v.Largest, func(a, b BigResult) int { return cmp.Compare(b.Chars, a.Chars) })
+	v.Largest = v.Largest[:min(len(v.Largest), bigResults)]
+	return v
+}
+
 // agentList are the agents that called, in the order they first did, the main agent as "main".
 func (u *usageLog) agentList() []string {
 	u.mu.Lock()
