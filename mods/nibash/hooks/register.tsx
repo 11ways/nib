@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, Status, TrashEntry, Views } from '../types'
+import type { Command, Job, Status, Tokens, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -22,6 +22,7 @@ const NIBASH = /^mcp__(.+)__nibash$/
 /** The panes that show one list of nib's, each opened by the slash command of its name; the list is nibash_status's view of that name. */
 const VIEWS = {
   trash: 'Show what this session moved to the trash, and put one back',
+  tokens: 'Show how many characters nib returned in this session, by agent and tool',
 } as const
 type ViewName = keyof typeof VIEWS
 const VIEW_NAMES = Object.keys(VIEWS) as ViewName[]
@@ -91,11 +92,54 @@ export function parseRestored(content: unknown): { done: boolean; message: strin
   return { done: restore.done, message: restore.message }
 }
 
+const isCount = (value: unknown): value is number => isNumber(value) && value >= 0
+
+/** The token report a nibash_status answer holds; undefined when it holds none in nib's shape. */
+export function parseTokens(content: unknown): Tokens | undefined {
+  const v = (content as { tokens?: Record<string, unknown> } | null)?.tokens
+  if (typeof v !== 'object' || v === null || !isCount(v.chars) || !isCount(v.calls) || !Array.isArray(v.agents) || !Array.isArray(v.largest)) return undefined
+  const agents: Tokens['agents'] = []
+  for (const a of v.agents as Record<string, unknown>[]) {
+    if (typeof a !== 'object' || a === null || typeof a.agent !== 'string' || !isCount(a.calls) || !isCount(a.chars) || !Array.isArray(a.tools)) return undefined
+    const tools: Tokens['agents'][number]['tools'] = []
+    for (const t of a.tools as Record<string, unknown>[]) {
+      if (typeof t !== 'object' || t === null || typeof t.tool !== 'string' || !isCount(t.calls) || !isCount(t.chars)) return undefined
+      tools.push({ tool: t.tool, calls: t.calls, chars: t.chars })
+    }
+    agents.push({ agent: a.agent, calls: a.calls, chars: a.chars, tools })
+  }
+  const largest: Tokens['largest'] = []
+  for (const b of v.largest as Record<string, unknown>[]) {
+    if (typeof b !== 'object' || b === null || typeof b.agent !== 'string' || typeof b.tool !== 'string' || !isCount(b.chars) || typeof b.call !== 'string') return undefined
+    largest.push({ agent: b.agent, tool: b.tool, chars: b.chars, call: b.call })
+  }
+  return { chars: v.chars, calls: v.calls, agents, largest }
+}
+
+/** The part of Views a view's answer fills; undefined when the answer holds that list in no shape of nib's. */
+export function parseView(name: ViewName, content: unknown): Partial<Views> | undefined {
+  switch (name) {
+    case 'trash': {
+      const trash = parseTrash(content)
+      return trash === undefined ? undefined : { trash }
+    }
+    case 'tokens': {
+      const tokens = parseTokens(content)
+      return tokens === undefined ? undefined : { tokens }
+    }
+  }
+}
+
 /** A moment as the time of day. */
 export function clock(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+/** A count with its thousands set apart. */
+export function count(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
 /** One row of the band or the pane: a running command or a job. */
@@ -224,11 +268,8 @@ async function refresh($: EngineInterface): Promise<void> {
       return
     }
     for (const name of open) {
-      const content = await ask($, name)
-      if (name === 'trash') {
-        const trash = parseTrash(content)
-        if (trash !== undefined) await update($, views, v => ({ ...v, trash }))
-      }
+      const got = parseView(name, await ask($, name))
+      if (got !== undefined) await update($, views, v => ({ ...v, ...got }))
     }
   } catch {
     // nib did not answer: the pane keeps what it has.
@@ -383,6 +424,45 @@ export const register: Register = on => {
               {entry.dir ? <Text dimColor> (directory)</Text> : null}
             </Text>
           </Box>
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'tokens' }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const t = (await read($, views)).tokens
+    if (t === undefined || t.calls === 0) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No tool call of nib has returned anything in this session yet.</Text>
+        </Box>
+      )
+    }
+    return (
+      <Box flexDirection="column">
+        <Text>
+          <Text color="cyan">{count(t.chars)}</Text> characters in {count(t.calls)} calls
+        </Text>
+        {t.agents.map(agent => (
+          <Box key={`agent:${agent.agent}`} flexDirection="column">
+            <Text wrap="truncate-end">
+              <Text color="cyan">{agent.agent}</Text> <Text dimColor>{count(agent.calls)} calls</Text> {count(agent.chars)}
+            </Text>
+            {agent.tools.map(tool => (
+              <Text key={`tool:${agent.agent}:${tool.tool}`} wrap="truncate-end">
+                {'  '}
+                {tool.tool} <Text dimColor>{count(tool.calls)} calls</Text> {count(tool.chars)}
+              </Text>
+            ))}
+          </Box>
+        ))}
+        {t.largest.length > 0 ? <Text dimColor>largest results</Text> : null}
+        {t.largest.map((big, index) => (
+          <Text key={`big:${index}`} wrap="truncate-end">
+            {'  '}
+            {count(big.chars)} {big.tool} <Text dimColor>{big.agent} {big.call}</Text>
+          </Text>
         ))}
       </Box>
     )

@@ -79,8 +79,9 @@ type ShellStatus struct {
 	Commands []RunningCommand `json:"commands"`
 	Jobs     []ShellJob       `json:"jobs"`
 	// Restore answers the restore asked for, and the views the lists asked for; the rest is left out.
-	Restore *Restored  `json:"restore,omitempty"`
-	Trash   *TrashView `json:"trash,omitempty"`
+	Restore *Restored   `json:"restore,omitempty"`
+	Trash   *TrashView  `json:"trash,omitempty"`
+	Tokens  *TokensView `json:"tokens,omitempty"`
 }
 
 // RunningCommand is a nibash call still running; times are Unix milliseconds.
@@ -126,6 +127,8 @@ type session struct {
 	order      []string
 	// shells are the subagents that called nibash, whose jobs end with the connection; the main agent's are not among them.
 	shells []string
+	// usage is what this client's calls returned and which of them run.
+	usage usageLog
 }
 
 // paused is a paused call's answers so far and the agent making it, with its worktree, whose record the first round took.
@@ -671,7 +674,7 @@ type action func(ctx *engine.Context, args arguments, notes *[]string, c *call) 
 // The roots a call depends on, those of the sandbox and of a write that may need confirming, are listed before any work, so a call that pauses
 // to ask for them has recorded nothing as seen; a confirmation pauses before an edit is staged.
 func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
-	return func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest) (res *mcp.CallToolResult, _ error) {
 		var notes []string
 		args := arguments{}
 		if len(request.Params.Arguments) > 0 {
@@ -680,6 +683,15 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 			}
 		}
 		c := s.open(request)
+		counted := true
+		end := s.state(c.key).usage.begin(c.agent, request.Params.Name, s.isHosted(request.Params.Name), request.Params.Arguments)
+		defer func() {
+			if counted {
+				end(res)
+			} else {
+				end(nil)
+			}
+		}()
 		if c.first {
 			if greeting := s.greeting(c); greeting != "" {
 				notes = append(notes, greeting)
@@ -699,6 +711,7 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 		var paused *engine.Paused
 		if errors.As(err, &paused) {
 			if q, ok := paused.Request.(question); ok {
+				counted = false
 				return s.pause(c, q), nil
 			}
 		}
@@ -1168,6 +1181,9 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 	}
 	if view == "trash" {
 		status.Trash = s.trashView(ctx)
+	}
+	if view == "tokens" {
+		status.Tokens = s.state(c.key).usage.tokens()
 	}
 	return engine.Result{Text: statusText(status, time.Now()), Structured: status}, nil
 }

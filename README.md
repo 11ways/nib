@@ -1011,6 +1011,10 @@ Such a pane asks `nibash_status` for its list (`view`) every two seconds while i
 nib already holds. `/trash` lists what this server moved to the trash, whichever agent moved it, as `trash list` does,
 with a `restore` button per entry: it asks nib to put the path back through the code behind `trash restore`, which
 refuses a path where a file is now and never replaces it, and the pane shows nib's answer.
+`/tokens` reports the characters of text this server's tools returned in the session, which is the unit nib's output
+rules count in: in all, per agent and per tool with its calls, and the eight largest results with the start of the
+arguments that asked for each. nib counts them where it builds a result, `nibash_status` itself and the rounds of a call
+that paused to ask a question left out; the mod adds nothing.
 
 `nib setup --user` installs it: the binary carries the mod, writes it to `~/.local/share/nib/mods/nibash` (in
 `$XDG_DATA_HOME` when set; replaced whole when this nib's differs, so updating nib updates it) and adds that folder to

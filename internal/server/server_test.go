@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -1027,5 +1028,43 @@ func TestAForkHoldsWhatItsParentWasShownSinceTheParentsLastDrop(t *testing.T) {
 	d.mu.Unlock()
 	if got := text(c.call(t, r.by(hookstate.Agent{ID: "f2", Spawned: true, Forked: true, At: time.Now()}, readCall(path+":1-5")))); strings.Contains(got, "[lines") {
 		t.Fatalf("a fork of a compacted parent: %s", got)
+	}
+}
+
+func TestStatusCountsWhatEachAgentsCallsReturned(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	path := filepath.Join(directory, "a.txt")
+	file(t, path, "one\ntwo\nthree\n")
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	c := connect(t, Options{Directory: directory, Shell: &fakeShell{}, Agent: r.take}, []string{directory}, nil, false)
+	read := c.call(t, readCall(path))
+	sub := c.call(t, r.as("a1", &mcp.CallToolParams{Name: "nibash", Arguments: map[string]any{"command": "pwd"}}))
+	c.call(t, &mcp.CallToolParams{Name: "nibash_status"})
+	tokens := func() map[string]any {
+		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "tokens"}})
+		view, _ := result.StructuredContent.(map[string]any)["tokens"].(map[string]any)
+		return view
+	}
+	view := tokens()
+	readChars, subChars := utf8.RuneCountInString(text(read)), utf8.RuneCountInString(text(sub))
+	if view["calls"] != float64(2) || view["chars"] != float64(readChars+subChars) {
+		t.Fatalf("nibash_status itself must not be counted: %#v", view)
+	}
+	agents, _ := view["agents"].([]any)
+	if len(agents) != 2 || agents[0].(map[string]any)["agent"] != "main" || agents[1].(map[string]any)["agent"] != "agent:a1" {
+		t.Fatalf("agents: %#v", agents)
+	}
+	tools, _ := agents[0].(map[string]any)["tools"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["tool"] != "read" || tools[0].(map[string]any)["calls"] != float64(1) || tools[0].(map[string]any)["chars"] != float64(readChars) {
+		t.Fatalf("main's tools: %#v", tools)
+	}
+	largest, _ := view["largest"].([]any)
+	if len(largest) != 2 || largest[0].(map[string]any)["chars"].(float64) < largest[1].(map[string]any)["chars"].(float64) || !strings.Contains(largest[0].(map[string]any)["call"].(string), "a.txt") && largest[0].(map[string]any)["tool"] == "read" {
+		t.Fatalf("largest: %#v", largest)
+	}
+	// A later call adds to the same row.
+	c.call(t, readCall(path))
+	if again := tokens(); again["calls"] != float64(3) {
+		t.Fatalf("a third call: %#v", again)
 	}
 }

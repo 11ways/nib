@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { elapsed, parse, parseRestored, parseTrash, rows, structuredText } from '../hooks/register'
+import { count, elapsed, parse, parseRestored, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
 
 const go = { agent: 'main', command: 'go test ./...', description: 'Run all Go tests', started: 1_000, tail: ['ok  internal/engine'] }
 const bench = { id: 1, agent: 'agent:a1', command: 'bun bench/run.ts', started: 0, running: true, log: '/run/nib/job-1.log', tail: ['run 1 of 3', 'run 2 of 3'] }
@@ -163,5 +163,47 @@ describe('the trash pane', () => {
     expect(await pane.find({ key: 'restore:/work/gone.txt' })).toBeUndefined()
     expect(await pane.find({ key: 'restore:/work/old' })).toBeDefined()
     expect(toasts).toEqual(['restored gone.txt'])
+  })
+})
+
+/** Opens a view pane with its slash command, nib answering every ask with answer, and mounts it. */
+async function openView($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], name: string, answer: unknown) {
+  mock.clock(on, { now: 43_000 })
+  let up = false
+  on('mcp.call', async () => ({ value: { content: [], isError: false, structuredContent: answer } }))
+  on('ui.panes', async () => ({ value: up ? [{ id: name, title: name, isShown: true, isFocused: true, isPlaced: true }] : [] }))
+  on('ui.open', async () => { up = true; return { value: { isPlaced: true } } })
+  await $.command.run({ command: name })
+  return $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'Pane', requestId: name, props: { title: name, isFocused: false } as never })
+}
+
+describe('the tokens pane', () => {
+  const report = {
+    chars: 12_345,
+    calls: 3,
+    agents: [
+      { agent: 'main', calls: 2, chars: 12_000, tools: [{ tool: 'read', calls: 1, chars: 9_000 }, { tool: 'grep', calls: 1, chars: 3_000 }] },
+      { agent: 'agent:a1', calls: 1, chars: 345, tools: [{ tool: 'nibash', calls: 1, chars: 345 }] },
+    ],
+    largest: [{ agent: 'main', tool: 'read', chars: 9_000, call: '{"paths":["big.go"]}' }],
+  }
+
+  test('nib answers are read in nib shape only', () => {
+    expect(count(1234567)).toBe('1,234,567')
+    expect(count(12)).toBe('12')
+    expect(parseTokens({ tokens: report })).toEqual(report)
+    expect(parseTokens({ tokens: { ...report, calls: 'three' } })).toBeUndefined()
+    expect(parseTokens({ tokens: { ...report, agents: [{ agent: 'main' }] } })).toBeUndefined()
+    expect(parseTokens({ commands: [], jobs: [] })).toBeUndefined()
+  })
+
+  test('/tokens shows the characters by agent and tool, and the largest results', async ($, on) => {
+    const pane = await openView($, on, 'tokens', { commands: [], jobs: [], tokens: report })
+    for (const text of [/12,345/, /agent:a1/, /grep.*3,000/, /9,000 read/]) expect(await pane.find({ text })).toBeDefined()
+  })
+
+  test('with nothing returned yet the pane says so', async ($, on) => {
+    const pane = await openView($, on, 'tokens', { commands: [], jobs: [], tokens: { chars: 0, calls: 0, agents: [], largest: [] } })
+    expect(await pane.find({ text: /No tool call of nib has returned anything/ })).toBeDefined()
   })
 })

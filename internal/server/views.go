@@ -87,6 +87,16 @@ func (s *Server) restore(ctx *engine.Context, path string) *Restored {
 // when is a Unix millisecond moment as the local time of day.
 func when(ms int64) string { return time.UnixMilli(ms).Format("15:04:05") }
 
+// isHosted says whether tool is one a hosted provider offers, named after the provider.
+func (s *Server) isHosted(tool string) bool {
+	for _, p := range s.options.Providers {
+		if strings.HasPrefix(tool, p.Name+"_") {
+			return true
+		}
+	}
+	return false
+}
+
 // viewLines are the lists a status carries as the model reads them, one row each, for a client that shows only the text.
 func viewLines(status ShellStatus) []string {
 	var lines []string
@@ -97,6 +107,15 @@ func viewLines(status ShellStatus) []string {
 		lines = append(lines, fmt.Sprintf("trash: %d entries", len(t.Entries)))
 		for _, e := range t.Entries {
 			lines = append(lines, fmt.Sprintf("  | %s  %s", when(e.When), e.Shown))
+		}
+	}
+	if t := status.Tokens; t != nil {
+		lines = append(lines, fmt.Sprintf("tokens: %d characters returned by %d calls", t.Chars, t.Calls))
+		for _, a := range t.Agents {
+			lines = append(lines, fmt.Sprintf("  | [%s] %d calls, %d characters", a.Agent, a.Calls, a.Chars))
+			for _, tool := range a.Tools {
+				lines = append(lines, fmt.Sprintf("  |   %s: %d calls, %d characters", tool.Tool, tool.Calls, tool.Chars))
+			}
 		}
 	}
 	return lines
