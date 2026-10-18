@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { count, elapsed, parse, parseRestored, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
+import { count, elapsed, parse, parseNames, parseRestored, parseTokens, parseTrash, rows, structuredText } from '../hooks/register'
 
 const go = { agent: 'main', command: 'go test ./...', description: 'Run all Go tests', started: 1_000, tail: ['ok  internal/engine'] }
 const bench = { id: 1, agent: 'agent:a1', command: 'bun bench/run.ts', started: 0, running: true, log: '/run/nib/job-1.log', tail: ['run 1 of 3', 'run 2 of 3'] }
@@ -173,8 +173,11 @@ async function openView($: Parameters<Parameters<typeof test>[1]>[0], on: Parame
   on('mcp.call', async () => ({ value: { content: [], isError: false, structuredContent: answer } }))
   on('ui.panes', async () => ({ value: up ? [{ id: name, title: name, isShown: true, isFocused: true, isPlaced: true }] : [] }))
   on('ui.open', async () => { up = true; return { value: { isPlaced: true } } })
-  await $.command.run({ command: name })
-  return $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'Pane', requestId: name, props: { title: name, isFocused: false } as never })
+  const ran = await $.command.run({ command: name })
+  const pane = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'Pane', requestId: name, props: { title: name, isFocused: false } as never })
+  // The first ask may still be on its way when the pane is drawn; the surface draws again when it lands, a test does so itself.
+  await pane.redraw()
+  return pane
 }
 
 describe('the tokens pane', () => {
@@ -205,5 +208,23 @@ describe('the tokens pane', () => {
   test('with nothing returned yet the pane says so', async ($, on) => {
     const pane = await openView($, on, 'tokens', { commands: [], jobs: [], tokens: { chars: 0, calls: 0, agents: [], largest: [] } })
     expect(await pane.find({ text: /No tool call of nib has returned anything/ })).toBeDefined()
+  })
+})
+
+describe('the names pane', () => {
+  const agents = [
+    { agent: 'main', names: [{ name: 'core', directory: 'packages/core', source: 'server', uses: 4 }, { name: 'bewidgets', directory: 'zenit/widgets', source: 'automatic', uses: 1_200 }] },
+    { agent: 'agent:a1', names: [] },
+  ]
+
+  test('nib answers are read in nib shape only', () => {
+    expect(parseNames({ names: { agents } })).toEqual(agents)
+    expect(parseNames({ names: { agents: [{ agent: 'main', names: [{ name: 'x', directory: 'y', source: 'defined', uses: -1 }] }] } })).toBeUndefined()
+    expect(parseNames({ names: {} })).toBeUndefined()
+  })
+
+  test('/names lists each agent with where its names came from and how often they printed', async ($, on) => {
+    const pane = await openView($, on, 'names', { commands: [], jobs: [], names: { agents } })
+    for (const text of [/main/, /~core = packages\/core/, /automatic, 1,200 paths/, /agent:a1/, /no names/]) expect(await pane.find({ text })).toBeDefined()
   })
 })

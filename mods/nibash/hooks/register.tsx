@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Command, Job, Status, Tokens, TrashEntry, Views } from '../types'
+import type { Command, Job, NameList, Status, Tokens, TrashEntry, Views } from '../types'
 
 /** The pane's id, and the slash command that opens it. */
 const PANE = 'nibash'
@@ -23,6 +23,7 @@ const NIBASH = /^mcp__(.+)__nibash$/
 const VIEWS = {
   trash: 'Show what this session moved to the trash, and put one back',
   tokens: 'Show how many characters nib returned in this session, by agent and tool',
+  names: 'Show the named directories each agent has, where each came from and how often it was used',
 } as const
 type ViewName = keyof typeof VIEWS
 const VIEW_NAMES = Object.keys(VIEWS) as ViewName[]
@@ -116,6 +117,23 @@ export function parseTokens(content: unknown): Tokens | undefined {
   return { chars: v.chars, calls: v.calls, agents, largest }
 }
 
+/** The named directories a nibash_status answer lists, per agent; undefined when it lists none in nib's shape. */
+export function parseNames(content: unknown): NameList | undefined {
+  const v = (content as { names?: { agents?: unknown } } | null)?.names
+  if (typeof v !== 'object' || v === null || !Array.isArray(v.agents)) return undefined
+  const agents: NameList = []
+  for (const a of v.agents as Record<string, unknown>[]) {
+    if (typeof a !== 'object' || a === null || typeof a.agent !== 'string' || !Array.isArray(a.names)) return undefined
+    const rows: NameList[number]['names'] = []
+    for (const n of a.names as Record<string, unknown>[]) {
+      if (typeof n !== 'object' || n === null || typeof n.name !== 'string' || typeof n.directory !== 'string' || typeof n.source !== 'string' || !isCount(n.uses)) return undefined
+      rows.push({ name: n.name, directory: n.directory, source: n.source, uses: n.uses })
+    }
+    agents.push({ agent: a.agent, names: rows })
+  }
+  return agents
+}
+
 /** The part of Views a view's answer fills; undefined when the answer holds that list in no shape of nib's. */
 export function parseView(name: ViewName, content: unknown): Partial<Views> | undefined {
   switch (name) {
@@ -126,6 +144,10 @@ export function parseView(name: ViewName, content: unknown): Partial<Views> | un
     case 'tokens': {
       const tokens = parseTokens(content)
       return tokens === undefined ? undefined : { tokens }
+    }
+    case 'names': {
+      const names = parseNames(content)
+      return names === undefined ? undefined : { names }
     }
   }
 }
@@ -248,7 +270,6 @@ function watch($: EngineInterface): void {
 }
 
 let viewTimer: Timer | undefined
-let viewAsking = false
 
 /** Asks nib for a list, and for a restore when given; the structured answer, undefined when nib gave none in its shape. */
 async function ask($: EngineInterface, view: ViewName, extra: Record<string, unknown> = {}): Promise<unknown> {
@@ -258,8 +279,6 @@ async function ask($: EngineInterface, view: ViewName, extra: Record<string, unk
 
 /** Asks nib again for the list of every open view pane, and lets the timer go once none is open. */
 async function refresh($: EngineInterface): Promise<void> {
-  if (viewAsking) return
-  viewAsking = true
   try {
     const open = (await $.ui.panes()).map(pane => pane.id).filter((id): id is ViewName => (VIEW_NAMES as string[]).includes(id))
     if (open.length === 0) {
@@ -273,8 +292,6 @@ async function refresh($: EngineInterface): Promise<void> {
     }
   } catch {
     // nib did not answer: the pane keeps what it has.
-  } finally {
-    viewAsking = false
   }
 }
 
@@ -463,6 +480,33 @@ export const register: Register = on => {
             {'  '}
             {count(big.chars)} {big.tool} <Text dimColor>{big.agent} {big.call}</Text>
           </Text>
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'names' }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const list = (await read($, views)).names ?? []
+    if (list.length === 0) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No agent has called nib yet.</Text>
+        </Box>
+      )
+    }
+    return (
+      <Box flexDirection="column">
+        {list.map(agent => (
+          <Box key={`agent:${agent.agent}`} flexDirection="column">
+            <Text color="cyan">{agent.agent}</Text>
+            {agent.names.length === 0 ? <Text dimColor>{'  '}no names</Text> : null}
+            {agent.names.map(name => (
+              <Text key={`name:${agent.agent}:${name.name}`} wrap="truncate-end">
+                {'  '}~{name.name} = {name.directory} <Text dimColor>{name.source}, {count(name.uses)} paths</Text>
+              </Text>
+            ))}
+          </Box>
         ))}
       </Box>
     )

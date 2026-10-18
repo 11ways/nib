@@ -10,6 +10,9 @@ export type Status = { commands: Command[]; jobs: Job[]; at: number }
 /** A path nib moved to the trash that is still there; path is absolute and what a restore takes. */
 export type TrashEntry = { path: string; shown: string; when: number; dir?: boolean }
 
+/** The named directories of each agent, as nib lists them; source is server, defined, automatic or inherited. */
+export type NameList = { agent: string; names: { name: string; directory: string; source: string; uses: number }[] }[]
+
 /** What nib's tools returned in this session, in characters of text: by agent and tool, and the largest results. */
 export type Tokens = {
   chars: number
@@ -19,7 +22,7 @@ export type Tokens = {
 }
 
 /** The lists the view panes draw, each as nib last gave it; note is nib's answer to the last restore. */
-export type Views = { trash?: TrashEntry[]; tokens?: Tokens; note?: string }
+export type Views = { trash?: TrashEntry[]; tokens?: Tokens; names?: NameList; note?: string }
 
 declare module 'claude-code' {
   interface PluginState {

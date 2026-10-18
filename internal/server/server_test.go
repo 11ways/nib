@@ -1068,3 +1068,36 @@ func TestStatusCountsWhatEachAgentsCallsReturned(t *testing.T) {
 		t.Fatalf("a third call: %#v", again)
 	}
 }
+
+func TestStatusListsEachAgentsNamedDirectoriesWithTheirUses(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	core := filepath.Join(directory, "packages", "core", "src")
+	path := filepath.Join(core, "a.txt")
+	file(t, path, "one\n")
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	table := &names.Table{Entries: []names.Entry{{Name: "core", Directory: core}}, Base: directory}
+	c := connect(t, Options{Directory: directory, Shell: &fakeShell{}, Names: table, Agent: r.take}, []string{directory}, nil, false)
+	c.call(t, readCall(path))
+	c.call(t, r.as("a1", readCall(path)))
+	c.call(t, r.as("a1", readCall(path)))
+	result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "names"}})
+	view, _ := result.StructuredContent.(map[string]any)["names"].(map[string]any)
+	agents, _ := view["agents"].([]any)
+	if len(agents) != 2 {
+		t.Fatalf("names view: %#v", view)
+	}
+	for i, want := range []struct {
+		agent string
+		uses  float64
+	}{{"main", 1}, {"agent:a1", 2}} {
+		got := agents[i].(map[string]any)
+		rows, _ := got["names"].([]any)
+		if got["agent"] != want.agent || len(rows) != 1 {
+			t.Fatalf("agent %d: %#v", i, got)
+		}
+		row := rows[0].(map[string]any)
+		if row["name"] != "core" || row["source"] != "server" || row["directory"] != filepath.Join("packages", "core", "src") || row["uses"].(float64) < want.uses {
+			t.Fatalf("%s's name: %#v", want.agent, row)
+		}
+	}
+}

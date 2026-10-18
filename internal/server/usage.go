@@ -171,3 +171,10 @@ func (u *usageLog) tokens() *TokensView {
 	}
 	return view
 }
+
+// agentList are the agents that called, in the order they first did, the main agent as "main".
+func (u *usageLog) agentList() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return slices.Clone(u.agents)
+}

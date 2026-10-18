@@ -118,5 +118,53 @@ func viewLines(status ShellStatus) []string {
 			}
 		}
 	}
+	if n := status.Names; n != nil {
+		for _, a := range n.Agents {
+			lines = append(lines, fmt.Sprintf("names of [%s]: %d", a.Agent, len(a.Names)))
+			for _, name := range a.Names {
+				lines = append(lines, fmt.Sprintf("  | ~%s = %s (%s, %d paths)", name.Name, name.Directory, name.Source, name.Uses))
+			}
+		}
+	}
 	return lines
+}
+
+// NamesView is the named directories each agent that called sees.
+type NamesView struct {
+	Agents []AgentNames `json:"agents"`
+}
+
+// AgentNames are one agent's named directories, nib's own first.
+type AgentNames struct {
+	Agent string    `json:"agent"`
+	Names []NameRow `json:"names"`
+}
+
+// NameRow is one named directory.
+type NameRow struct {
+	Name string `json:"name"`
+	// Directory reads from the server's directory when under it.
+	Directory string `json:"directory"`
+	// Source is server (nib.json, detected source roots, names kept from earlier sessions), defined (by the agent with hash -d),
+	// automatic (made by nib) or inherited (from the agent that started this one).
+	Source string `json:"source"`
+	// Uses counts the paths nib printed under the name.
+	Uses int `json:"uses"`
+}
+
+// namesView lists the named directories of every agent that called, as each of them sees them.
+func (s *Server) namesView(ctx *engine.Context, u *usageLog) *NamesView {
+	view := &NamesView{Agents: []AgentNames{}}
+	for _, agent := range u.agentList() {
+		row := AgentNames{Agent: agent, Names: []NameRow{}}
+		session := s.engineSession("")
+		if agent != "main" {
+			session = s.engineSession(agent)
+		}
+		for _, d := range s.options.Names.For(s.defined, session).Describe() {
+			row.Names = append(row.Names, NameRow{Name: d.Name, Directory: shown(ctx.Directory, d.Directory), Source: d.Source, Uses: d.Uses})
+		}
+		view.Agents = append(view.Agents, row)
+	}
+	return view
 }

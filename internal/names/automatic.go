@@ -70,7 +70,7 @@ func (d *Defined) Announced(agent string) []string {
 	}
 	var notes []string
 	for _, m := range names.made {
-		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano()})
+		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano(), "automatic"})
 		if inFull() {
 			notes = append(notes, note(m.Name, m.prefix, m.count))
 		} else {

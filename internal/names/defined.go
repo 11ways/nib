@@ -26,6 +26,8 @@ type Defined struct {
 	// automatic is set by Automatic: nib names the directories shown paths keep running through, and keeps names in file for base.
 	automatic  bool
 	file, base string
+	// uses counts, per agent, the paths printed under each name, the server's own included.
+	uses map[string]map[string]int
 }
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
@@ -56,6 +58,8 @@ type made struct {
 type definition struct {
 	Entry
 	at int64
+	// kind is where the agent got the name: "defined" by itself, "automatic" made by nib, "inherited" from the agent that started it.
+	kind string
 }
 
 // NewDefined makes an empty set.
@@ -76,6 +80,7 @@ func (d *Defined) Inherit(agent, parent string, asOf time.Time) {
 	to := &defined{}
 	for _, entry := range from.list {
 		if entry.at < moment {
+			entry.kind = "inherited"
 			to.list = append(to.list, entry)
 		}
 	}
@@ -95,7 +100,7 @@ func (d *Defined) define(agent string, entry Entry) error {
 		return fmt.Errorf("this agent has made %d definitions, the most nib keeps", DefinedLimit)
 	}
 	names.own++
-	names.list = append(names.list, definition{entry, d.Now().UnixNano()})
+	names.list = append(names.list, definition{entry, d.Now().UnixNano(), "defined"})
 	d.learnLocked(entry)
 	return nil
 }
@@ -191,6 +196,7 @@ func (v *View) Display(canonical string) (string, bool) {
 	shown, ok := table.Display(canonical)
 	if ok {
 		v.defined.mention(v.agent, table, shown)
+		v.defined.use(v.agent, shown)
 	}
 	return shown, ok
 }
