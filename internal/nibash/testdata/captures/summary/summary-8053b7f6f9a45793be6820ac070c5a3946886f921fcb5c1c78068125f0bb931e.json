@@ -1,0 +1,1 @@
+"{\"summary\": \"The only undefined-name finding is F821 at src/zemble/dedup/report.py:30:9: Undefined name `undefined_helper_name`. The run otherwise reports 2286 errors across the tree, dominated by style rules (PLC0415, COM812, CPY001, D401, TRY003/EM101/EM102), and ends with 454 fixable via --fix.\", \"ranges\": [[705, 705], [2289, 2290], [1, 2]]}"

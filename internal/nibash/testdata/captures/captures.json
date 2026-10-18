@@ -152,12 +152,7 @@
     "needs": [
       "^E   AssertionError: chunk starts at line",
       "test_chunk_boundaries_keep_decorators FAILED"
-    ],
-    "loses": {
-      "summary": [
-        19
-      ]
-    }
+    ]
   },
   {
     "name": "pytest-two-fail",
@@ -234,7 +229,12 @@
     "needs": [
       "Skip rebuilds that move nothing and share reused vector blocks",
       "^commit e6a3304945597de51dc7020fc47bec49e3973ea1"
-    ]
+    ],
+    "loses": {
+      "summary": [
+        429
+      ]
+    }
   },
   {
     "name": "git-log-zenit",

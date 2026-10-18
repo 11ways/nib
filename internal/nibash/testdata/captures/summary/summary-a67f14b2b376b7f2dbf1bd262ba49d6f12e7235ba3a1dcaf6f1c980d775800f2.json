@@ -1,0 +1,1 @@
+"{\"summary\": \"ClientSession.CallTool is defined at ./mcp/client.go:1284 as func (cs *ClientSession) CallTool(ctx context.Context, params *CallToolParams) (*CallToolResult, error). A design-doc signature also appears at ./design/design.md:665.\", \"ranges\": [[1284, 1284], [1317, 1317], [122, 122]]}"

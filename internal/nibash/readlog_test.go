@@ -69,7 +69,7 @@ func TestALogPastTheSummaryLimitsLeadsWithASummaryOfIt(t *testing.T) {
 	f.shell.Deciding(pickText("FAIL")).Summarizing(summary)
 	out := f.readLog("which tests failed and why", "test.log")
 	rows := strings.Split(out, "\n")
-	if rows[0] != "[test.log] 200 lines, plain" || rows[1] != "<summary>TestFoo failed.</summary>" || !strings.Contains(out, "\nline 98\nline 99\nFAIL TestFoo: want 1, got 2\nline 101\nline 102\n") {
+	if rows[0] != "[test.log] 200 lines, plain" || rows[1] != "<summary>TestFoo failed.</summary>" || !strings.Contains(out, "\nline 99\nFAIL TestFoo: want 1, got 2\nline 101\n[skim: log lines 102-200 left out]\n") {
 		t.Fatalf("read:\n%s", out)
 	}
 	if !strings.HasSuffix(out, "; whole file: test.log]") || len(summary.asked) != 1 || summary.asked[0].Purpose != "which tests failed and why" {
@@ -82,7 +82,7 @@ func TestALogPastTheSummaryLimitsLeadsWithASummaryOfIt(t *testing.T) {
 	}
 	out = f.readLog("which tests failed and why", "test.log")
 	if len(summary.asked) != 2 || summary.asked[1].Base != 200 || len(summary.asked[1].Log) != 200 ||
-		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last "+engine.Skim+"\n<summary>TestBar timed out.</summary>\n["+engine.Skim+": log lines 201-297 left out]\nline 298\nline 299\nFAIL TestBar: timeout\nline 301\nline 302\n") {
+		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last "+engine.Skim+"\n<summary>TestBar timed out.</summary>\n["+engine.Skim+": log lines 201-298 left out]\nline 299\nFAIL TestBar: timeout\nline 301\n["+engine.Skim+": log lines 302-400 left out]\n") {
 		t.Fatalf("asked %+v:\n%s", summary.asked, out)
 	}
 }

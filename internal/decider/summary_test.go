@@ -169,6 +169,19 @@ func TestASummaryFallsThroughTheListAndKeepsOnlyRangesInWhatItRead(t *testing.T)
 	if none.Failure != "x/one: its answer is not JSON; y/two: its answer is not JSON" || none.Text != "" {
 		t.Fatalf("failure %+v", none)
 	}
+	// A summary that answers on its own points at no line; ranges that all miss what it read still fail.
+	f.answer = func(int, map[string]any) (int, string) { return 200, `{"summary": "TestParse fails.", "ranges": []}` }
+	alone := summarizerFor(t, server, "x/one", "").Summarize(context.Background(), in)
+	if alone.Failure != "" || alone.Text != "TestParse fails." || len(alone.Ranges) != 0 || alone.Dropped != 0 {
+		t.Fatalf("no ranges %+v", alone)
+	}
+	f.answer = func(int, map[string]any) (int, string) {
+		return 200, `{"summary": "TestParse fails.", "ranges": [[5, 9]]}`
+	}
+	missed := summarizerFor(t, server, "x/one", "").Summarize(context.Background(), in)
+	if missed.Failure != "x/one: none of its ranges lies in the lines it read" {
+		t.Fatalf("missed %+v", missed)
+	}
 }
 
 func TestASummarizerReadsOnlyTheExcerptAndAnswersAreCached(t *testing.T) {

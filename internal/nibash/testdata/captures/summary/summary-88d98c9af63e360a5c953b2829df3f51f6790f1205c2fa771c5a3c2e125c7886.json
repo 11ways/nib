@@ -1,0 +1,1 @@
+"{\"summary\": \"The build failed compiling package github.com/11ways/nib/internal/decider with two errors in internal/decider/openrouter.go: line 138:6 declares an unused variable `unused`, and line 138:22 cannot use the untyped int constant 3 as a string value in a variable declaration. All other compile, asm, and gcc steps shown succeeded.\", \"ranges\": [[5132, 5134]]}"

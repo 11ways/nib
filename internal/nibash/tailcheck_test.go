@@ -105,7 +105,7 @@ func TestManyChosenLinesTheTailLeftOutBecomeASummaryOrTheirStart(t *testing.T) {
 	out := f.call(server.ShellCall{Command: build, Description: "run the build"})
 	rows := strings.Split(out, "\n")
 	if !strings.HasSuffix(rows[5], "; a summary of the whole output, then the lines it points at that the tail left out:]") ||
-		rows[6] != "<summary>Foo is missing.</summary>" || !slices.Equal(rows[7:], []string{"compiling", "error: missing symbol Foo", "1", "2"}) {
+		rows[6] != "<summary>Foo is missing.</summary>" || !slices.Equal(rows[7:], []string{"compiling", "error: missing symbol Foo", "1"}) {
 		t.Fatalf("summary:\n%s", out)
 	}
 	// The summarizer reads the whole log, the tail's lines too; a passage in the tail is not shown again.

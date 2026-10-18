@@ -1,0 +1,1 @@
+"{\"summary\": \"Line 702 (97294870b, 2026-09-24) is the commit stating new-app writes auth.* into default.dry instead of the retired settings/auth.dry. Nearby lines 82 and 557 describe settings/local.dry handling, but the log shows no commit explicitly about new-app stopping writing settings/auth.dry.\", \"ranges\": [[702, 702], [82, 82], [557, 557]]}"

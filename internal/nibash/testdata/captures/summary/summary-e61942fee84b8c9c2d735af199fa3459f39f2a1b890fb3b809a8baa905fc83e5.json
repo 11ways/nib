@@ -1,0 +1,1 @@
+"{\"summary\": \"The expand package fails: TestBracesOfEmptyWord panics with \\\"index out of range [0] with length 0\\\" at expand/braces_test.go:303, and the package reports FAIL. The pattern and shell packages both pass (ok mvdan.cc/sh/v3/pattern, ok mvdan.cc/sh/v3/shell), and the overall run ends with FAIL.\", \"ranges\": [[8, 19], [24, 24], [356, 357], [450, 452]]}"

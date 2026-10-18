@@ -1,0 +1,1 @@
+"{\"summary\": \"One test failed: tests/test_chunker.py::test_chunk_boundaries_keep_decorators, where the assertion at tests/test_chunker.py:172 failed with \\\"chunk starts at line 1, expected the decorator line\\\" (assert 1 == 0). The other 195 tests passed, with one pydantic_settings IncompleteFieldDefinitionWarning.\",\"ranges\":[[207,210],[19,19],[370,371]]}"

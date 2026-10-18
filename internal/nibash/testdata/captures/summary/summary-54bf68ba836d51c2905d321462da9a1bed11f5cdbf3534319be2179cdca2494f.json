@@ -1,0 +1,1 @@
+"{\"summary\": \"The build failed because the worker target errored: line 1206 reports unsupported format \\\"cjs\\\" in config/build.json (supported: esm, iife). The other targets (core, patch, server, cli, browser) completed with done lines, and line 3013 reports 1 of 6 targets failed. The many unused-import warnings are not errors.\", \"ranges\": [[1205, 1207], [3012, 3013]]}"

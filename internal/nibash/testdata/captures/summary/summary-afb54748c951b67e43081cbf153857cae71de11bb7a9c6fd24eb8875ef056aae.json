@@ -1,0 +1,1 @@
+"{\"summary\": \"The install failed because the package diff-sequences-nonexistent-pkg-zz could not be resolved: its registry request returned 404 Not Found and bun reported \\\"diff-sequences-nonexistent-pkg-zz@^1.0.0 failed to resolve\\\". All other manifests resolved, downloaded and extracted.\", \"ranges\": [[2652, 2654], [1190, 1190], [6, 6], [178, 181]]}"

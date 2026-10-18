@@ -290,11 +290,12 @@ func summarized(rows []row, s decider.Summary, log saved) []row {
 }
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
-// a share of summaryRows; a passage longer than its share shows its start and end, with the read of what it leaves out in between. shown
-// counts the passages' rows.
+// a share of summaryRows; a passage longer than its share drops its context lines first, then shows the start and end of the lines pointed
+// at, with the read of what it leaves out in between. shown counts the passages' rows.
 func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
+	var pointed [][2]int
 	for _, r := range s.Ranges {
 		var add []int
 		for i, row := range rows {
@@ -305,13 +306,22 @@ func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown
 		}
 		if len(add) > 0 {
 			passages = append(passages, add)
+			pointed = append(pointed, r)
 		}
 	}
 	shares := shared(passages, summaryRows, summaryShare)
 	keep := make([]bool, len(rows))
-	notes := map[int]string{}
+	notes := map[int]passageNote{}
 	for k, add := range passages {
 		share := shares[k]
+		// Context rows sit at a passage's edges; they go before any line the summary pointed at.
+		outside := func(i int) bool { return rows[i].last < pointed[k][0] || rows[i].first > pointed[k][1] }
+		for len(add) > share && outside(add[0]) {
+			add = add[1:]
+		}
+		for len(add) > share && outside(add[len(add)-1]) {
+			add = add[:len(add)-1]
+		}
 		if share >= len(add) {
 			for _, i := range add {
 				keep[i] = true
@@ -319,17 +329,16 @@ func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown
 			shown += len(add)
 			continue
 		}
-		head := (share + 1) / 2
-		for _, i := range append(slices.Clone(add[:head]), add[len(add)-(share-head):]...) {
+		for _, i := range add[:share] {
 			keep[i] = true
 		}
 		shown += share
-		if first, last := logLines(rowsAt(rows, add[head:len(add)-(share-head)])); first > 0 {
-			note := "log " + log.span(first, last) + " left out; the middle of this passage"
+		if first, last := logLines(rowsAt(rows, add[share:])); first > 0 {
+			note := "log " + log.span(first, last) + " left out; the rest of this passage"
 			if log.path != "" {
 				note += fmt.Sprintf(": read %s:%d-%d plain:true", log.path, log.base+first, log.base+last)
 			}
-			notes[add[head]] = log.note(note)
+			notes[add[share]] = passageNote{text: log.note(note), end: add[len(add)-1] + 1}
 		}
 	}
 	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes, log)...)
@@ -371,9 +380,15 @@ func summaryText(text string) string {
 	return strings.Join(strings.Fields(summaryTag.ReplaceAllString(text, " ")), " ")
 }
 
-// gapped is the rows keep marks, with a row naming the log lines of each run left out between them, or the note given for the run's first
-// row.
-func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
+// passageNote stands for a passage's rows from where it is given up to end, the index after the passage's last row.
+type passageNote struct {
+	text string
+	end  int
+}
+
+// gapped is the rows keep marks, with a row naming the log lines of each run left out between them; a run that starts at a note gets the
+// note for the rows the note covers and a row naming the rest.
+func gapped(rows []row, keep []bool, notes map[int]passageNote, log saved) []row {
 	var out []row
 	for i := 0; i < len(rows); {
 		if keep[i] {
@@ -385,11 +400,12 @@ func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
 		for j < len(rows) && !keep[j] {
 			j++
 		}
-		text, ok := notes[i]
-		if !ok {
-			text = log.note(log.leftOut(rows[i:j]))
+		if n, ok := notes[i]; ok && n.end > i {
+			out = append(out, row{text: n.text, header: -1})
+			i = min(n.end, j)
+			continue
 		}
-		out = append(out, row{text: text, header: -1})
+		out = append(out, row{text: log.note(log.leftOut(rows[i:j])), header: -1})
 		i = j
 	}
 	return out

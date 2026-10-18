@@ -37,10 +37,11 @@ const (
 	excerptScore   = 0.3
 	excerptContext = 10
 	excerptLines   = 600
-	// A summary shows every passage it points at, each widened by summaryContext lines, sharing summaryRows rows, at least summaryShare each.
-	summaryContext = 2
-	summaryRows    = 80
-	summaryShare   = 6
+	// A summary shows the lines it points at, each widened by summaryContext lines, sharing summaryRows rows, at least summaryShare each; it
+	// points only at lines the agent must read as printed, so these stay few.
+	summaryContext = 1
+	summaryRows    = 30
+	summaryShare   = 3
 	// Output within the budget that reports listProblems or more problem lines, listPerKind or more of each kind, is shown whole rather
 	// than summarized (problemList).
 	listProblems = 10

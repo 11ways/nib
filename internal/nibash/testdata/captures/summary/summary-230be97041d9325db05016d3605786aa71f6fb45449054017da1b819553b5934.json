@@ -1,0 +1,1 @@
+"{\"summary\": \"The output lists installed pacman packages with versions. Go is installed as go 2:1.27.1-1 (line 122) and ripgrep as ripgrep 15.2.0-1 (line 547). No errors appear.\", \"ranges\": [[122, 122], [547, 547]]}"

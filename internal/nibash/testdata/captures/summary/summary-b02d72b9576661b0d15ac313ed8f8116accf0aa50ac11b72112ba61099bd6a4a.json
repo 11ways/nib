@@ -1,0 +1,1 @@
+"{\"summary\":\"The Go build fails: internal/engine/edit.go:888 has a `:=` with no new variables and assigns a func to an int, so lines 892 and 897 then fail calling `kept` as a function. The bun test run reports 40 pass and 201 fail, with the first failures in the edit tool tests.\",\"ranges\":[[1,5],[6,9],[207,208]]}"

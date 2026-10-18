@@ -1,0 +1,1 @@
+"{\"summary\": \"bring_current is defined at line 603 and every line of it is attributed to commit 93a3e044 (Jelle De Loecker, 2026-10-14), so that commit last changed it. It loops calling self.rebuild(cache_key, java_changed=False, changed_paths=None) and retries after _QUIET_SECONDS while the result is _STILL_CHANGING.\", \"ranges\": [[603, 615]]}"

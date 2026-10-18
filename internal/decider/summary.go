@@ -31,7 +31,7 @@ const (
 	maxRanges     = 5
 	maxRangeLines = 60
 	// summaryVersion changes with the prompt, so cached answers to another prompt are not reused.
-	summaryVersion = 3
+	summaryVersion = 4
 )
 
 // The values an entry's reasoning option takes; "off" is the default, "default" sends none and leaves it to the model.
@@ -299,8 +299,8 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 	if in.TimedOut {
 		status = "none: the command was still running at its timeout"
 	}
-	text := "You condense the output of a shell command for a coding agent that ran it. The agent reads only your answer and the lines you point " +
-		"at, so a wrong statement costs it a wrong fix.\n" +
+	text := "You condense the output of a shell command for a coding agent that ran it. The agent reads only your answer and the few lines you " +
+		"point at, so a wrong statement costs it a wrong fix.\n" +
 		"The agent's description of why it ran the command: " + purpose + "\n"
 	if in.Expect != "" {
 		text += "What the agent expected or wanted to find out: " + in.Expect + "\n"
@@ -311,8 +311,9 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
 		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
 		"lines or entries; the agent gets exact counts from the shell.\n" +
-		"ranges: up to 5 line ranges that matter most for the description, most important first, each at most 30 lines; every error or cause " +
-		"the summary names needs a range holding its line, since the agent sees only those lines."
+		"ranges: only the lines the agent must read as printed, most important first, up to 5 ranges of at most 10 lines each: the line of " +
+		"each error, failure or cause the summary names, and a line whose exact text the agent needs, such as a path, a stack frame or a " +
+		"value the summary cites. Point at no line only for context; when the summary answers the description on its own, ranges is []."
 	if in.Expect != "" {
 		text += "\nLead with what contradicts the expectation; if the output meets it, one short sentence saying so is the whole summary."
 	}
@@ -346,7 +347,7 @@ func output(in SummaryInput) string {
 var fence = regexp.MustCompile("^```(?:json)?\\s*|\\s*```$")
 
 // check reads a reply, whose ranges count from base+1, and keeps the ranges inside the log that touch a line the entry read, counted from
-// the log's start; an answer with no summary, or no range left, fails.
+// the log's start; an answer with no summary fails, and so does one whose ranges were all unusable, but an empty list is an answer.
 func check(reply string, log []string, shown []int, base int) (Summary, string) {
 	var a answer
 	if json.Unmarshal([]byte(fence.ReplaceAllString(strings.TrimSpace(reply), "")), &a) != nil {
@@ -371,7 +372,7 @@ func check(reply string, log []string, shown []int, base int) (Summary, string) 
 		}
 		got.Ranges = append(got.Ranges, [2]int{first, last})
 	}
-	if len(got.Ranges) == 0 {
+	if len(got.Ranges) == 0 && got.Dropped > 0 {
 		return got, "none of its ranges lies in the lines it read"
 	}
 	return got, ""

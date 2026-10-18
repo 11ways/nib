@@ -662,13 +662,15 @@ model reads is numbered by log line, each row cut to 300 characters: an output o
 decider is asked unless the summary fails; a longer one goes after the decider has chosen, as the excerpt of its picks:
 the first 30 and last 100 deduplicated entries and the decider's picks rated 0.3 or more, best first (a pick mostly like
 what is already in waits for the rest, so a failure repeated for every test class cannot fill it), each widened by 10
-lines, up to 600 entries. It answers with a summary of at most 3 sentences and up to 5 ranges of log lines; nib keeps
-the ranges inside the log, of at most 60 lines, that touch a line the model read; an answer with no range left, not
-JSON, or failed falls to the next entry, and when every entry fails the decider's cut stands with `no summary` in its
-note. A checked summary takes the place of the decider's cut: `<summary>...</summary>` (its text on one line, without
-the model's name or any summary tags of its own), then the real log rows of every range with 2 lines around each, the
-ranges sharing 80 rows (a range that fits an even split of what is left shows whole; a longer one shows its start and
-end and, between them, `[nibash: log lines A-B left out; the middle of this passage: read LOG:A-B plain:true]`), each
+lines, up to 600 entries. It answers with a summary of at most 3 sentences and up to 5 ranges of the log lines the agent
+must read as printed (an error, a stack frame, a value the summary cites), or none when the summary answers the
+description on its own; nib keeps the ranges inside the log, of at most 60 lines, that touch a line the model read; an
+answer whose ranges all miss, not JSON, or failed falls to the next entry, and when every entry fails the decider's cut
+stands with `no summary` in its note. A checked summary takes the place of the decider's cut: `<summary>...</summary>`
+(its text on one line, without the model's name or any summary tags of its own), then the real log rows of every range
+with 1 line around each, the ranges sharing 30 rows (a range that fits an even split of what is left shows whole; a
+longer one drops its surrounding lines first, then shows its start and
+`[nibash: log lines A-B left out; the rest of this passage: read LOG:A-B plain:true]`), each
 other gap named as above, and a closing note. Summaries are not asked for when the decider judged that the description
 needs every line, nor for a successful run without a description. The prompt tells the model to state only what the
 lines show and to leave counts to the shell. Answers are cached like decisions, checked again whenever used. On the 19

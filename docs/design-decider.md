@@ -363,14 +363,16 @@ whole and the decider is asked only when the summary fails; a longer one is deci
 and last 100 entries and the decider's picks rated 0.3 or more, widened by 10 lines, in `novelFirst` order, up to 600
 entries) goes to `Summarize`, numbered by log line, each row cut to 300 characters. The answer is a summary and up to 5
 ranges of line numbers, nothing quoted: the research's quoted lines all matched the log, so copying them only cost
-tokens. `check` keeps the ranges inside the log, of at most 60 lines, that touch a line the entry read; an answer with
-no range left fails, and the next entry is asked within the same deadline. A checked summary replaces the decider's cut
-with a `<summary>` element (its text on one line, the model's name left out, summary tags in the text removed), the real
-rows of every range (2 lines around each; the ranges share `summaryRows`, 80: by `shared`, one that fits an even split
-of what is left shows whole and the longer ones split the rest, at least 6 rows each, showing their start and end with a
-named read of their middle), named gaps, and a closing note with nib's own counts; the agent sees fewer rows than any
-decider shows, and nothing in it is the model's but the `<summary>` element. When every entry fails, the decider's cut
-stands with `no summary` in its note.
+tokens. The ranges are only the lines the agent must read as printed (an error, a stack frame, a value the summary
+cites), and none when the summary answers the description on its own. `check` keeps the ranges inside the log, of at
+most 60 lines, that touch a line the entry read; an answer whose ranges all miss fails (an empty list does not), and the
+next entry is asked within the same deadline. A checked summary replaces the decider's cut with a `<summary>` element
+(its text on one line, the model's name left out, summary tags in the text removed), the real rows of every range (1
+line around each; the ranges share `summaryRows`, 30: by `shared`, one that fits an even split of what is left shows
+whole and the longer ones split the rest, at least 3 rows each, dropping their surrounding lines first and then showing
+their start with a named read of the rest), named gaps, and a closing note with nib's own counts; the agent sees fewer
+rows than any decider shows, and nothing in it is the model's but the `<summary>` element. When every entry fails, the
+decider's cut stands with `no summary` in its note.
 
 Picks enter the excerpt best first, so the cap, not the 0.3 score, decides what a long log loses: at 400 lines the
 captures lost go-build-x's error (its block ranked past the cap) and git-log-stat's commit (a 0.49 block ranked 14th),
@@ -446,6 +448,19 @@ captures: 40 rows shared lost needed lines in the middle of long passages in fou
 but `pytest-v-fail` (whose `FAILED` progress line the summary leaves out while it shows the failure block), with 2,291
 rows over all cases at 80 and 2,375 at 100. Over the 28 captures that are not counts or lists, the summary keeps every
 needed line in 26 (was 25), the decision model alone in 27.
+
+Summaries then got leaner (`summaryVersion` 4). In real sessions a summary that answered the description still came
+with up to 80 rows of the stretches it pointed at, so the prompt now asks only for the lines the agent must read as
+printed, or none, and the rows shrank to 30 shared, 1 line of context each. A passage longer than its share now drops
+its context lines first and shows its start rather than its start and end: at 20 rows with start and end, gradle-browser
+lost `What went wrong` (24228), whose range was wider than its share; showing the start lost go-test-panic's line 19 at
+20 rows and nothing at 30. Over the captures the summary keeps what it kept before, pytest-v-fail's `FAILED` line now
+too and javac-errors 6 of 16 needed lines (was 3), except git-log-p's `commit` line (429): the summary quotes its hash
+but points at the commit's subject, the model's choice. Rows shown dropped from 22-80 per summarized capture to 5-30
+(build-log 1,560 bytes to 908, git-diff-big 5,120 to 1,619, gradle-browser 8,859 to 3,562). Two real outputs from a
+zenit-workspace session, three runs each: a 150-line `sqlite3` listing went from 4.7-8.2 KB to 2.8-3.4 KB with the same
+findings (the 1970 timestamps, the largest lock waits); a 124-line task listing went from 1.9-2.1 KB to 1.2-2.1 KB, and
+one of the three new summaries no longer said that no timing lines were shown.
 
 The dedup ratio (log lines over entries) also moves when a summary starts: past 1.5 the 150-line and 12 KB limits are
 divided by ratio/1.5, floored at 50 lines and 3 KB (`summaryDue`). The recorded set holds no small repetitive output

@@ -1,0 +1,1 @@
+"{\"summary\": \"The expand and shell packages pass (lines 261-262, 690-691), but the pattern package fails: TestRegexpQuotesBrackets reports Regexp([!a]) = \\\"(?s)[^a]\\\", want \\\"[^a]x\\\" (line 268), and the package ends with FAIL (lines 596-597). TestRegexp itself passes (line 485).\", \"ranges\": [[268, 269], [596, 597], [485, 485]]}"
