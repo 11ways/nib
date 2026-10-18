@@ -20,15 +20,12 @@ const providersLine = "Tools named %s are hosted by nib: code they show prints a
 
 // Schemas are lean: nib reads and checks arguments itself, so they only tell the model what to send.
 
-// readSchema is the read tool's schema, with expect only where a decision model or a summarizer reads it.
-func readSchema(expect bool) string {
-	arg := ""
-	if expect {
-		arg = `"expect":{"description":"For logs: what to learn; long ones return the lines that answer it or a summary, rereads only what was added","type":"string"},`
-	}
-	return `{"type":"object","properties":{"paths":{"description":"Required: files or directories, each optionally with a :selector, or path#TAG","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},` + arg +
-		`"maxLineLength":{"description":"Default 2000","type":"integer"},"plain":{"description":"For logs and files you will not edit: no numbers or tags, color codes stripped, long lines shortened, repeats collapsed; any size","type":"boolean"},"collapse":{"description":"Plain only: false keeps repeated lines","type":"boolean"},"info":{"description":"One line of facts per file (tag, lines, size, line endings, age) instead of its content","type":"boolean"},"full":{"description":"Print rows you saw instead of [lines A-B ...] markers","type":"boolean"}}}`
-}
+const readSchema = `{"type":"object","properties":{"paths":{"description":"Required: files or directories, each optionally with a :selector, or path#TAG","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"maxLineLength":{"description":"Default 2000","type":"integer"},"plain":{"description":"For logs and files you will not edit: no numbers or tags, color codes stripped, long lines shortened, repeats collapsed; any size","type":"boolean"},"collapse":{"description":"Plain only: false keeps repeated lines","type":"boolean"},"info":{"description":"One line of facts per file (tag, lines, size, line endings, age) instead of its content","type":"boolean"},"full":{"description":"Print rows you saw instead of [lines A-B ...] markers","type":"boolean"}}}`
+
+const skimSchema = `{"type":"object","properties":{"paths":{"description":"Files, each optionally with a read selector like run.log:-500","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"expect":{"description":"What you need to learn, like did all tests pass; if not, which failed and why","type":"string"}},"required":["paths","expect"]}`
+
+// skimDescription is the skim tool's description; it never names the tool, whose name is engine.Skim.
+const skimDescription = "Read any long text file you want answers from, not to edit: logs, test reports, data dumps, generated output. Lines come back plain, never edit anchors. Up to 150 lines or 12 KB prints whole; a longer one comes back as the lines that answer expect, or a <summary> and the lines it points at. A whole file read again with this tool shows only the lines added since."
 
 const grepSchema = `{"type":"object","properties":{"pattern":{"description":"Regex; with literal:true a plain string","type":"string"},"paths":{"description":"Files or directories; a file may carry a read selector like log.txt:100-250. Default the project","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]},"glob":{"description":"Like *.ts or !*.test.ts, or a list","anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},"ignoreCase":{"type":"boolean"},"literal":{"type":"boolean"},"before":{"description":"Context lines before each match; default 1, at most 20","type":"integer"},"after":{"description":"Context lines after each match; default 1, at most 20. Past 40 context lines in all, definitions get them first","type":"integer"},"mode":{"description":"matches (default); files: matching paths only; count: matches per file; both list paths as find does","type":"string"},"noIgnore":{"description":"Also search ignored files","type":"boolean"},"maxLineLength":{"description":"Default 512","type":"integer"},"skip":{"description":"Files to skip, for the next page","type":"integer"},"replace":{"description":"Replacement with $1 or ${name}; previews the changes and returns a token for edit","type":"string"}},"required":["pattern"]}`
 

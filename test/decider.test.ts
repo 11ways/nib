@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { binary } from "./support/engine"
+import { skimName } from "./support/tools"
 
 const directories: string[] = []
 const clients: Client[] = []
@@ -95,22 +96,23 @@ describe("deciders", () => {
       expect(JSON.stringify(requests)).not.toContain("line 500")
       expect(out).toContain("\n1500\nroutes: /v1/payments -> upstream payments-v2 (0 hosts)\nerror: pool exhausted\n1501\n")
       expect(out).toMatch(/\n\[nibash: \d+ rows shown of 3,002 log lines; typesafe\/jev-1\.14 and keywords chose the middle for your description; whole output: \S+\]\n\[exit 1\]$/)
-      // A read with expect is the same for a log file: the model reads its lines with expect as the purpose, and notes name the file.
-      expect(JSON.stringify(tools.find((tool) => tool.name === "read")!.inputSchema)).toContain('"expect"')
+      // skim is the same for a log file: the model reads its lines with expect as the purpose, and notes name the file; read never takes expect.
+      const skim = skimName(tools as never)
+      expect(JSON.stringify(tools.find((tool) => tool.name === "read")!.inputSchema)).not.toContain('"expect"')
       const lines = [...Array.from({ length: 1500 }, (_, index) => String(index + 1)), "routes: /v1/payments -> upstream payments-v2 (0 hosts)", "error: pool exhausted", ...Array.from({ length: 1500 }, (_, index) => String(index + 1501))]
       await writeFile(path.join(directory, "run.log"), lines.join("\n") + "\n")
       requests.length = 0
-      const read = await client.callTool({ name: "read", arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }
+      const read = await client.callTool({ name: skim, arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }
       const log = read.content[0]!.text
       expect(requests.length).toBeGreaterThan(0)
       expect(requests[0].body.state.purpose).toBe("why do payments fail")
       expect(log).toStartWith("[run.log] 3002 lines, plain\n1\n")
       expect(log).toContain("\n1500\nroutes: /v1/payments -> upstream payments-v2 (0 hosts)\nerror: pool exhausted\n1501\n")
-      expect(log).toMatch(/\n\[read: \d+ rows shown of 3,002 log lines; typesafe\/jev-1\.14 and keywords chose the middle for what you expect; whole file: run\.log\]$/)
+      expect(log).toMatch(new RegExp(`\\n\\[${skim}: \\d+ rows shown of 3,002 log lines; typesafe/jev-1\\.14 and keywords chose the middle for what you expect; whole file: run\\.log\\]$`))
       // Read again, a log that did not grow is nothing new, and the model is not asked.
       requests.length = 0
-      const again = await client.callTool({ name: "read", arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }
-      expect(again.content[0]!.text).toBe("[run.log] 3002 lines, plain: nothing new since your last read")
+      const again = await client.callTool({ name: skim, arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }
+      expect(again.content[0]!.text).toBe(`[run.log] 3002 lines, plain: nothing new since your last ${skim}`)
       expect(requests).toHaveLength(0)
     } finally {
       server.stop(true)

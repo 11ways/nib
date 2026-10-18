@@ -260,7 +260,7 @@ func New(options Options) *Server {
 	destructive := true
 	writes := &mcp.ToolAnnotations{DestructiveHint: &destructive}
 	always := mcp.Meta{"anthropic/alwaysLoad": true}
-	s.AddTool(&mcp.Tool{Name: "read", Description: readDescription, InputSchema: json.RawMessage(readSchema(options.Shell != nil && options.Shell.Expects())), Annotations: readOnly, Meta: always}, s.handle(s.read, false))
+	s.AddTool(&mcp.Tool{Name: "read", Description: readDescription, InputSchema: json.RawMessage(readSchema), Annotations: readOnly, Meta: always}, s.handle(s.read, false))
 	s.AddTool(&mcp.Tool{Name: "grep", Description: grepDescription, InputSchema: json.RawMessage(grepSchema), Annotations: readOnly, Meta: always}, s.handle(s.grep, false))
 	s.AddTool(&mcp.Tool{Name: "find", Description: findDescription, InputSchema: json.RawMessage(findSchema), Annotations: readOnly, Meta: always}, s.handle(s.find, false))
 	s.AddTool(&mcp.Tool{Name: "edit", Description: EditDescription, InputSchema: json.RawMessage(editSchema), Annotations: writes, Meta: always}, s.handle(s.edit, true))
@@ -268,6 +268,7 @@ func New(options Options) *Server {
 	if options.Shell != nil {
 		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema(options.Shell.Expects())), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
 		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), OutputSchema: json.RawMessage(statusOutputSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
+		s.AddTool(&mcp.Tool{Name: engine.Skim, Description: skimDescription, InputSchema: json.RawMessage(skimSchema), Annotations: readOnly, Meta: always}, s.handle(s.skim, false))
 	}
 	for _, p := range options.Providers {
 		for _, tool := range p.Tools {
@@ -898,9 +899,9 @@ func quoteList(items []string) string {
 
 var readAliases = []string{"filePath", "file_path", "path", "file"}
 
-// readPaths are read's paths, also from arguments in another read tool's shape: a path under another name, with offset (taken as the first line)
-// and limit. A note then shows nib's own shape for the same read.
-func readPaths(args arguments, notes *[]string) ([]string, error) {
+// readPaths are tool's paths (read's or skim's), also from arguments in another read tool's shape: a path under another name, with offset
+// (taken as the first line) and limit. A note then shows nib's own shape for the same read.
+func readPaths(tool string, args arguments, notes *[]string) ([]string, error) {
 	if args.has("paths") {
 		return args.list("paths", notes)
 	}
@@ -912,7 +913,7 @@ func readPaths(args arguments, notes *[]string) ([]string, error) {
 		}
 	}
 	if name == "" {
-		return nil, errors.New(`read needs paths, a list like ["src/a.ts", "src/b.ts:120-180"]`)
+		return nil, fmt.Errorf(`%s needs paths, a list like ["src/a.ts", "src/b.ts:120-180"]`, tool)
 	}
 	file, _, _ := args.text(name)
 	offset, _ := args.number("offset", math.MinInt32)
@@ -938,7 +939,7 @@ func readPaths(args arguments, notes *[]string) ([]string, error) {
 	if len(used) == 1 {
 		verb = "was"
 	}
-	*notes = append(*notes, fmt.Sprintf("[read takes paths, like %s; %s %s read that way]", quoteList([]string{entry}), strings.Join(used, ", "), verb))
+	*notes = append(*notes, fmt.Sprintf("[%s takes paths, like %s; %s %s read that way]", tool, quoteList([]string{entry}), strings.Join(used, ", "), verb))
 	return []string{entry}, nil
 }
 
@@ -980,8 +981,8 @@ func grepMode(value string, notes *[]string) (string, error) {
 	return mode, nil
 }
 
-func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {
-	paths, err := readPaths(args, notes)
+func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, _ *call) (engine.Result, error) {
+	paths, err := readPaths("read", args, notes)
 	if err != nil {
 		return engine.Result{}, err
 	}
@@ -1005,25 +1006,26 @@ func (s *Server) read(ctx *engine.Context, args arguments, notes *[]string, c *c
 	if err != nil {
 		return engine.Result{}, err
 	}
-	expect, _, err := args.text("expect")
-	if err != nil {
-		return engine.Result{}, err
-	}
-	if expect = strings.TrimSpace(expect); expect != "" {
-		if s.options.Shell == nil {
-			*notes = append(*notes, "[expect needs nibash, which this server does not offer, so it was left out]")
-		} else {
-			if info || full || hasCollapse || maxLineLength != nil {
-				return engine.Result{}, errors.New("expect reads files as plain lines for a model to choose from, so it takes no info, full, collapse or maxLineLength")
-			}
-			return s.options.Shell.ReadLog(ctx.Ctx, s.shell(c), paths, expect, ctx)
-		}
-	}
 	readArgs := engine.ReadArgs{Paths: paths, MaxLineLength: maxLineLength, Plain: plain, Info: info, Full: full}
 	if hasCollapse {
 		readArgs.Collapse = &collapse
 	}
 	return s.engine.Read(ctx, readArgs)
+}
+
+func (s *Server) skim(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {
+	paths, err := readPaths(engine.Skim, args, notes)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	expect, _, err := args.text("expect")
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if expect = strings.TrimSpace(expect); expect == "" {
+		return engine.Result{}, fmt.Errorf("%s needs expect: what you need to learn from the file, which decides the lines it returns", engine.Skim)
+	}
+	return s.options.Shell.ReadLog(ctx.Ctx, s.shell(c), paths, expect, ctx)
 }
 
 func (s *Server) grep(ctx *engine.Context, args arguments, notes *[]string, _ *call) (engine.Result, error) {

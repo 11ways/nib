@@ -114,9 +114,8 @@ cases against 25; the summary arm kept 27 either way (pytest-v-fail gained, go-b
 shorter (6,381 characters against 8,394) and 5% fewer bytes shown, apart from javac-errors, a list, which the decision
 model then judged to need every line and cut instead of summarizing.
 
-`read` takes an `expect` of its own where nibash offers one: a file read with it goes through the same shaping as a long
-output, its `expect` the purpose, and a repeated whole read shows only what the file gained (`docs/design-decider.md`,
-section 18).
+The `skim` tool reads files through the same shaping as a long output, its `expect` the purpose, and a repeated whole
+skim shows only what the file gained (`docs/design-decider.md`, section 18).
 
 The tool description says plainly:
 - this is nibash, a bash interpreter (mvdan/sh, bash dialect);

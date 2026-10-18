@@ -633,47 +633,56 @@ func TestStatusListsTheTrashAndRestoresFromIt(t *testing.T) {
 	}
 }
 
-func TestReadWithExpectGoesToTheShellAndIsOfferedOnlyWhereAModelReadsIt(t *testing.T) {
+func TestSkimGoesToTheShellAndIsOfferedOnlyWithNibash(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	file(t, filepath.Join(directory, "a.log"), "one\ntwo\n")
-	schema := func(shell *fakeShell) string {
+	schemas := func(shell Shell) map[string]string {
 		c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
 		listed, err := c.session.ListTools(context.Background(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		found := map[string]string{}
 		for _, tool := range listed.Tools {
-			if tool.Name == "read" {
-				data, _ := json.Marshal(tool.InputSchema)
-				return string(data)
-			}
+			data, _ := json.Marshal(tool.InputSchema)
+			found[tool.Name] = string(data)
 		}
-		t.Fatal("no read tool")
-		return ""
+		return found
 	}
-	if got := schema(&fakeShell{}); strings.Contains(got, "expect") {
-		t.Fatalf("expect is offered only where a model reads it: %s", got)
+	if got := schemas(nil); got[engine.Skim] != "" || strings.Contains(got["read"], "expect") {
+		t.Fatalf("without nibash there is no "+engine.Skim+", and read never takes expect: %v", got)
 	}
 	shell := &fakeShell{expects: true}
-	if got := schema(shell); !strings.Contains(got, `"expect"`) {
-		t.Fatalf("expect must be offered where a model reads it: %s", got)
+	got := schemas(shell)
+	if !strings.Contains(got[engine.Skim], `"required":["paths","expect"]`) || strings.Contains(got["read"], "expect") {
+		t.Fatalf(engine.Skim+" takes paths and expect, and read stays as it was: %v", got)
 	}
 	c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
-	if got := text(c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": " did it pass "}})); got != "log" {
-		t.Fatalf("a read with expect goes to the shell, got %q", got)
+	if got := text(c.call(t, &mcp.CallToolParams{Name: engine.Skim, Arguments: map[string]any{"paths": []string{"a.log"}, "expect": " did it pass "}})); got != "log" {
+		t.Fatalf(engine.Skim+" goes to the shell, got %q", got)
 	}
 	if want := []string{" [a.log] did it pass"}; !slices.Equal(shell.logs, want) {
 		t.Fatalf("shell got %q, want %q", shell.logs, want)
 	}
-	if got := text(c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}}})); !strings.Contains(got, "1:one") {
-		t.Fatalf("a read without expect is read's own, got %q", got)
+	if bad := c.call(t, &mcp.CallToolParams{Name: engine.Skim, Arguments: map[string]any{"paths": []string{"a.log"}}}); !bad.IsError || !strings.Contains(text(bad), engine.Skim+" needs expect") {
+		t.Fatalf(engine.Skim+" without expect must be refused, got %q", text(bad))
 	}
-	if bad := c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": "x", "info": true}}); !bad.IsError || !strings.Contains(text(bad), "takes no info") {
-		t.Fatalf("expect with info must be refused, got %q", text(bad))
+	if got := text(c.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": "x"}})); !strings.Contains(got, "1:one") || len(shell.logs) != 1 {
+		t.Fatalf("read never goes to the shell, got %q", got)
 	}
-	alone := connect(t, Options{Directory: directory}, []string{directory}, nil, false)
-	if got := text(alone.call(t, &mcp.CallToolParams{Name: "read", Arguments: map[string]any{"paths": []string{"a.log"}, "expect": "x"}})); !strings.Contains(got, "1:one") || !strings.Contains(got, "expect needs nibash") {
-		t.Fatalf("without nibash expect is left out with a note, got %q", got)
+	if bad := c.call(t, &mcp.CallToolParams{Name: engine.Skim, Arguments: map[string]any{"expect": "x"}}); !bad.IsError || !strings.HasPrefix(text(bad), engine.Skim+" needs paths") {
+		t.Fatalf("skim without paths must be refused under its own name, got %q", text(bad))
+	}
+}
+
+// The docs spell the tool's name literally; this keeps them on engine.Skim, so a rename that misses them fails here.
+func TestTheReadmeListsSkimUnderItsName(t *testing.T) {
+	data, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\n| `"+engine.Skim+"` | `paths[]`, `expect` |") {
+		t.Fatalf("README's tool table has no row for %s", engine.Skim)
 	}
 }
 

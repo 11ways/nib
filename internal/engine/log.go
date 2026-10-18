@@ -9,6 +9,9 @@ import (
 	"os"
 )
 
+// Skim is the name of the tool that reads files through ReadLog for what the agent expects of them; every use of the name derives from it.
+const Skim = "skim"
+
 // LogHead is how much of a file's start a LogFile carries, enough to tell a log that grew from one rewritten since.
 const LogHead = 4096
 

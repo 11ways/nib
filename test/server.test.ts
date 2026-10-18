@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { binary } from "./support/engine"
+import { skimName } from "./support/tools"
 
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))) })
@@ -71,18 +72,22 @@ describe("MCP server", () => {
     expect(size).toBeLessThanOrEqual(8200)
   })
 
-  test("with nibash, seven tools: the shell's description and the whole set stay within their budgets", async () => {
+  test("with nibash, eight tools: the shell's description and the whole set stay within their budgets", async () => {
     const { client } = await connect(await workspace(), { env: { NIB_SHELL: "1" } })
     const { tools } = await client.listTools()
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "nibash", "nibash_status", "read", "write"])
+    const skim = skimName(tools as never)
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "nibash", "nibash_status", "read", skim, "write"].sort())
     const nibash = tools.find((tool) => tool.name === "nibash")!
     expect(nibash.description!.length).toBeLessThanOrEqual(2048)
+    const readLog = tools.find((tool) => tool.name === skim)!
+    expect(readLog.annotations?.readOnlyHint).toBe(true)
+    expect(readLog.description!.length).toBeLessThanOrEqual(2048)
     expect(nibash.description).toStartWith("Run a command in nibash, nib's shell")
     expect(client.getInstructions()).toContain("so do nibash's own commands when their output comes to you")
     const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
-    // The shell adds about 1.8K characters to the five file tools, its status tool included, and that tool's three arguments for the
-    // mod's panes another 0.3K; the cap leaves little room to grow, and every character costs every session.
-    expect(size).toBeLessThanOrEqual(10300)
+    // The shell adds about 1.8K characters to the five file tools, its status tool included, that tool's three arguments for the mod's
+    // panes another 0.3K, and the skim tool 706; the cap leaves little room to grow, and every character costs every session.
+    expect(size).toBeLessThanOrEqual(11006)
   })
 
   test("nibash's file views anchor edits through MCP, and its program output is plain", async () => {

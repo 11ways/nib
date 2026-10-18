@@ -52,9 +52,10 @@ export type Budget = { timeout: number; maxToolCalls: number }
  * harness process, and so one nib server, through all prompts of a job instead of resuming the conversation in a new process per prompt; 5 ran nib
  * as its Go binary, and in the shell series gave nib mode nibash in place of the harness's shell; 6 moved OpenCode to v2: its permission names,
  * nib's tools offered directly instead of through code mode, the model's first call made only once nib's server is connected, and HOME isolated;
- * 7 gave nibash a decider, named explicitly in NIB_DECIDER (keywords by default), with notes on cut output by log line and long rows cut.
+ * 7 gave nibash a decider, named explicitly in NIB_DECIDER (keywords by default), with notes on cut output by log line and long rows cut; 8
+ * offered nib's skim tool beside nibash.
  */
-export const SETUP = 7
+export const SETUP = 8
 const BINARY = path.join(import.meta.dir, ".cache", "nib")
 let built: Promise<string> | undefined
 

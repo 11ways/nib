@@ -204,11 +204,11 @@ type decision struct {
 	expect     string
 	exit       int
 	timedOut   bool
-	// read says the purpose is a read's expect, not a call's description.
+	// read says the purpose is skim's expect, not a call's description.
 	read bool
 }
 
-// asked names the purpose in notes: the call's description, or what a read expects.
+// asked names the purpose in notes: the call's description, or what skim expects.
 func (d decision) asked() string {
 	if d.read {
 		return "what you expect"
@@ -629,7 +629,7 @@ func (l *logDirectory) file(kind string) (string, error) {
 }
 
 // saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds. A
-// file read with expect is its own log, whose notes say read and number its lines from base on: the log's line N is the file's base+N.
+// file read with skim is its own log, whose notes name skim and number its lines from base on: the log's line N is the file's base+N.
 type saved struct {
 	path         string
 	lines, holds int
@@ -640,7 +640,7 @@ type saved struct {
 // note is a row of nib's own about the log.
 func (l saved) note(text string) string {
 	if l.file {
-		return "[read: " + text + "]"
+		return "[" + engine.Skim + ": " + text + "]"
 	}
 	return "[nibash: " + text + "]"
 }

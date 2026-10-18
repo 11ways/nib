@@ -469,18 +469,19 @@ lines, as in bash, so the rest was never printed, and reading on would change wh
 status of the program before the pipe is not a trigger: the interpreter keeps only the pipeline's status, `tail`'s,
 and matching a real program to the pipe a `tail` reads is not reliable, so the call's own status is what counts.
 
-## 18. Reading a log with expect
+## 18. skim: answers from long files
 
-An agent that wants what a test or build log says, rather than lines to edit, reads it with `read`'s `expect`, the
-one-sentence purpose a decider and a summarizer need. The server offers the argument only where `Shell.Expects` (a
-decision model or a summarizer), as for nibash's own `expect`, and hands such a read to `Shell.ReadLog`, so the
-schema of a server without one stays as it was and a read without `expect` never reaches this path.
+An agent that wants what a long file says (a test or build log, a report, a data dump), rather than lines to edit,
+reads it with the `skim` tool, whose required `expect` is the one-sentence purpose a decider and a summarizer need. The
+server offers `skim` wherever it offers nibash and hands each call to `Shell.ReadLog`; `read` never takes `expect`, so a
+read always gives rows to edit from. The tool's name is declared once, as `engine.Skim`; the registration, the notes
+and the tests derive from it, so a rename is that one Go edit plus the docs.
 
 `engine.ReadLog` resolves each path as read does (sandbox, links, named directories, selectors) and returns the file's
 bytes from an offset on, at most `logLimit`, and the ranges a selector chose; an open range runs to the end. nibash
 turns them into plain lines (`plainLines`, as for program output), collapses exact repeats (`plainItems`, the same
 code `collect` uses) and calls `fit`, the function `render` calls, so the limits, `shape`, `choose`, the summary and
-every note are nibash's own. Only three things differ, all carried by `saved`: notes say `read` instead of `nibash`,
+every note are nibash's own. Only three things differ, all carried by `saved`: notes say `skim` instead of `nibash`,
 the log is the file itself (`whole file: PATH`, `read PATH:A-B plain:true`), and `base` shifts the numbers notes and cut
 rows print. The decision model reads rows without numbers; the summarizer reads them under the file's own numbers
 (`SummaryInput.Base`), its prompt saying which (`Output: lines 501-600 of a file`), and its ranges are taken back to the

@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/engine"
 )
 
-// readLog reads paths with expect as the read tool's expect does, for the fixture's agent.
+// readLog reads paths with expect as the skim tool does, for the fixture's agent.
 func (f *fixture) readLog(expect string, paths ...string) string {
 	f.t.Helper()
 	result, err := f.shell.ReadLog(context.Background(), "session", paths, expect, f.tools())
@@ -52,7 +53,7 @@ func TestALongLogReadWithExpectGetsTheLinesTheModelChoseForIt(t *testing.T) {
 	if rows[0] != "[build.log] 450 lines, plain" || !strings.Contains(out, "\nerror: missing symbol Foo\n") {
 		t.Fatalf("read:\n%s", out)
 	}
-	if !regexp.MustCompile(`\n\[read: \d+ rows shown of 450 log lines; m and keywords chose the middle for what you expect; whole file: build.log\]$`).MatchString(out) {
+	if !regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 450 log lines; m and keywords chose the middle for what you expect; whole file: build.log\]$`).MatchString(out) {
 		t.Fatalf("closing note:\n%s", out)
 	}
 	if len(model.asked) != 1 || model.asked[0].Purpose != "did the build pass" || model.asked[0].Command != "cat build.log" {
@@ -81,7 +82,7 @@ func TestALogPastTheSummaryLimitsLeadsWithASummaryOfIt(t *testing.T) {
 	}
 	out = f.readLog("which tests failed and why", "test.log")
 	if len(summary.asked) != 2 || summary.asked[1].Base != 200 || len(summary.asked[1].Log) != 200 ||
-		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last read\n<summary>TestBar timed out.</summary>\n[read: log lines 201-297 left out]\nline 298\nline 299\nFAIL TestBar: timeout\nline 301\nline 302\n") {
+		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last "+engine.Skim+"\n<summary>TestBar timed out.</summary>\n["+engine.Skim+": log lines 201-297 left out]\nline 298\nline 299\nFAIL TestBar: timeout\nline 301\nline 302\n") {
 		t.Fatalf("asked %+v:\n%s", summary.asked, out)
 	}
 }
@@ -103,11 +104,11 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 		t.Fatalf("first read:\n%s", out)
 	}
 	appendTo(t, path, numbered(11, 12)+"half a li")
-	expect(t, f.readLog("progress", "run.log"), "[run.log] lines 11-13 of 13, plain: new since your last read\nline 11\nline 12\nhalf a li")
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 13 lines, plain: nothing new since your last read")
+	expect(t, f.readLog("progress", "run.log"), "[run.log] lines 11-13 of 13, plain: new since your last "+engine.Skim+"\nline 11\nline 12\nhalf a li")
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 13 lines, plain: nothing new since your last "+engine.Skim)
 	appendTo(t, path, "ne\n"+strings.Repeat("x", 2100)+"\n")
 	out := f.readLog("progress", "run.log")
-	if !strings.HasPrefix(out, "[run.log] lines 13-14 of 14, plain: new since your last read\nhalf a line\n[line 14, chars 1-2000 of 2100]|xxx") ||
+	if !strings.HasPrefix(out, "[run.log] lines 13-14 of 14, plain: new since your last "+engine.Skim+"\nhalf a line\n[line 14, chars 1-2000 of 2100]|xxx") ||
 		!strings.HasSuffix(out, "[cut rows: N is the row's line in the whole file; read run.log:N with maxLineLength to see one whole]") {
 		t.Fatalf("a finished line and a cut row number by the file:\n%s", out)
 	}
@@ -116,7 +117,7 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	f.shell.Deciding(model)
 	appendTo(t, path, numbered(15, 199)+"error: disk full\n"+numbered(201, 600))
 	out = f.readLog("did it fail", "run.log")
-	if !strings.HasPrefix(out, "[run.log] lines 15-600 of 600, plain: new since your last read\nline 15\n") || !strings.Contains(out, "\n[read: log lines 45-") ||
+	if !strings.HasPrefix(out, "[run.log] lines 15-600 of 600, plain: new since your last "+engine.Skim+"\nline 15\n") || !strings.Contains(out, "\n["+engine.Skim+": log lines 45-") ||
 		!strings.Contains(out, "\nerror: disk full\n") || !strings.Contains(out, " rows shown of 586 log lines;") {
 		t.Fatalf("long addition:\n%s", out)
 	}
@@ -125,7 +126,7 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	}
 	// A selector reads those lines, and leaves where the next read goes on alone.
 	expect(t, f.readLog("progress", "run.log:2-3"), "[run.log] lines 2-3 of 600, plain\nline 2\nline 3")
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 600 lines, plain: nothing new since your last read")
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 600 lines, plain: nothing new since your last "+engine.Skim)
 }
 
 func TestALogRewrittenSinceTheLastReadIsReadWhole(t *testing.T) {
@@ -134,12 +135,12 @@ func TestALogRewrittenSinceTheLastReadIsReadWhole(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.directory, "run.log"), []byte("fresh\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 1 lines, plain: rewritten since your last read, so all of it\nfresh")
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 1 lines, plain: rewritten since your last "+engine.Skim+", so all of it\nfresh")
 	// Same size or larger but another start counts as rewritten too.
 	if err := os.WriteFile(filepath.Join(f.directory, "run.log"), []byte("again\nand more\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 2 lines, plain: rewritten since your last read, so all of it\nagain\nand more")
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 2 lines, plain: rewritten since your last "+engine.Skim+", so all of it\nagain\nand more")
 }
 
 func TestSeveralLogsReadInOneCallAndAMissingOneIsNotedInItsPlace(t *testing.T) {

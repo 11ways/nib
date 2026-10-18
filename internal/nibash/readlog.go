@@ -10,7 +10,7 @@ import (
 	"github.com/11ways/nib/internal/engine"
 )
 
-// logMark is how far an agent read a file with expect: its size and start then, and the whole lines read, which end at offset; partial is
+// logMark is how far an agent read a file with skim: its size and start then, and the whole lines read, which end at offset; partial is
 // how many bytes of a last line without its line break were shown after them.
 type logMark struct {
 	size    int64
@@ -90,7 +90,7 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 		sess.mu.Unlock()
 		// A last line still being written was shown whole as it stood; shown again unchanged, it is nothing new.
 		if resumed && (len(raw) == 0 || len(raw) == mark.partial && next.lines == mark.lines) {
-			return fmt.Sprintf("[%s] %d lines, plain: nothing new since your last read", file.Display, total), nil
+			return fmt.Sprintf("[%s] %d lines, plain: nothing new since your last %s", file.Display, total, engine.Skim), nil
 		}
 	}
 	var out []string
@@ -108,9 +108,9 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 		}
 		out = append(out, fmt.Sprintf("[%s] lines %s of %d, plain", file.Display, strings.Join(parts, ", "), total))
 	case resumed:
-		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last read", file.Display, base+1, total, total))
+		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last %s", file.Display, base+1, total, total, engine.Skim))
 	case rewritten:
-		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten since your last read, so all of it", file.Display, total))
+		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten since your last %s, so all of it", file.Display, total, engine.Skim))
 	default:
 		out = append(out, fmt.Sprintf("[%s] %d lines, plain", file.Display, total))
 	}
@@ -126,9 +126,9 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry string, d deci
 	}
 	if file.Short {
 		if whole {
-			out = append(out, fmt.Sprintf("[read: stopped after %d MiB, at line %d; the next read with expect goes on from there]", logLimit>>20, total))
+			out = append(out, fmt.Sprintf("[%s: stopped after %d MiB, at line %d; the next %[1]s goes on from there]", engine.Skim, logLimit>>20, total))
 		} else {
-			out = append(out, fmt.Sprintf("[read: only the first %d MiB of the file were read]", logLimit>>20))
+			out = append(out, fmt.Sprintf("[%s: only the first %d MiB of the file were read]", engine.Skim, logLimit>>20))
 		}
 	}
 	if echoed {

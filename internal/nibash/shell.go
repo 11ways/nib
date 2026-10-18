@@ -134,7 +134,7 @@ type session struct {
 	active map[*call]running
 	// busy are the held files a call's start found changing without the agent, which count as changing until they rest for busyFor.
 	busy map[string]bool
-	// marks are how far the agent read each file with expect, by canonical path.
+	// marks are how far the agent read each file with skim, by canonical path.
 	marks map[string]logMark
 }
 
