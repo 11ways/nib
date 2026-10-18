@@ -369,6 +369,10 @@ func (c *call) wait(ctx context.Context, args []string) error {
 			return ctx.Err()
 		}
 	}
+	if status == 0 {
+		// The interpreter takes a zero exit status given as an error for an internal error.
+		return nil
+	}
 	return interp.ExitStatus(status)
 }
 
