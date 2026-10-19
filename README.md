@@ -674,8 +674,9 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
 - **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`; a `head` of a file
   nib does not hold stops reading, so it says nothing); `head` after a nib
   grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s
-  after `head` stops reading); `tail` of a program's output keeps all of it in a log and names it with the lines left
-  out (`[4,762 earlier lines in <log>]`); with a decision model or a summarizer, those lines may be checked first
+  after `head` stops reading); `tail` of a program's output that leaves 10 lines or more out keeps all of it in a log
+  and names it with the lines left out (`[4,762 earlier lines in <log>]`; fewer, which the agent cut on purpose, get no
+  note); with a decision model or a summarizer, those lines may be checked first
   ([below](#long-output-and-deciders)).
 - **Byte counts.** `head -c N` and `tail -c N` (or `+N`) print exactly the bytes the system programs print, as lines: a
   line they print whole is the file's row, and the line cut at the edge shows as `[line 4012, chars 61-75 of 75]|...`,

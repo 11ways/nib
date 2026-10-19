@@ -13,6 +13,9 @@ const (
 	// summarizer is configured.
 	tailAdded      = 30
 	tailAddedBytes = 8 * 1024
+	// tailNoted is the fewest lines an agent's own tail must leave out before nib saves them and says so: a few the agent cut on purpose are
+	// not worth a note naming a log.
+	tailNoted = 10
 )
 
 // tailed is a tail at the model's end that left lines of a real program's output out: the whole output, saved to a log, and how many of its

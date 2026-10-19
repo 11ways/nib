@@ -303,6 +303,14 @@ func TestOutputIsShapedAndCutWithALog(t *testing.T) {
 	}
 }
 
+func TestATailLeavingOutFewLinesSaysNothingOfThem(t *testing.T) {
+	f := newFixture(t, nil)
+	expect(t, f.run("seq 1 12 | tail -10"), "3\n4\n5\n6\n7\n8\n9\n10\n11\n12")
+	if out := f.run("seq 1 100 | tail -10"); !strings.HasPrefix(out, "91\n") || !strings.Contains(out, "\n[90 earlier lines in ") {
+		t.Fatalf("got %s", out)
+	}
+}
+
 func TestJobsRunDetachedAndReportWhenDone(t *testing.T) {
 	f := newFixture(t, nil)
 	out := f.run("sleep 0.2 &\necho $!")

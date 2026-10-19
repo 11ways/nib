@@ -419,7 +419,7 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 	for _, r := range kept {
 		inv.out.emit(r)
 	}
-	if inv.in.all != nil && total > len(kept) && !p.from {
+	if inv.in.all != nil && total-len(kept) >= tailNoted && !p.from {
 		raw := inv.in.all.String()
 		inv.out.sink.addTail(&tailed{raw: raw, log: inv.call.logs.save(raw), total: total, shown: len(kept)})
 	}

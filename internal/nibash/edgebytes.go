@@ -175,7 +175,7 @@ func (p *edgePlan) bytesOfStdin(inv *invocation) int {
 		if all[from-1] != '\n' {
 			whole--
 		}
-		if lines > whole {
+		if lines-whole >= tailNoted {
 			raw := string(all)
 			inv.out.sink.addTail(&tailed{raw: raw, log: inv.call.logs.save(raw), total: lines, shown: whole})
 		}

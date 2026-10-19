@@ -98,12 +98,13 @@ func TestHeadAndTailCountingBytesKeepTheRowsTheyShowWholeAndNameWhatTheyCut(t *t
 	}
 	// Program output and a nib command's output both reach -c as the bytes a program writes.
 	for command, want := range map[string]string{
-		"printf 'abc\\ndef\\nghi' | tail -c 6": "ef\nghi\n[2 earlier lines in ",
+		"printf 'abc\\ndef\\nghi' | tail -c 6": "ef\nghi",
 		"printf 'abc\\ndef\\n' | head -c 5":    "abc\nd",
-		"cat a.txt | tail -c 8":                "a gamma\n[2 earlier lines in ",
+		"cat a.txt | tail -c 8":                "a gamma",
 		"{ echo x; cat a.txt; } | head -c 4":   "x\nAL",
 	} {
-		if out := f.run(command); !strings.HasPrefix(out, want) || strings.Contains(out, "#") {
+		// Two lines left out are too few for a note.
+		if out := f.run(command); !strings.HasPrefix(out, want) || strings.Contains(out, "#") || strings.Contains(out, "earlier line") {
 			t.Errorf("%s: got %s", command, out)
 		}
 	}
