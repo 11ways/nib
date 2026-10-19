@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -192,7 +193,7 @@ func TestModesLinksUnreadableFilesAndForeignHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	Setup(Options{Directory: directory, Command: nib})
-	if info, _ := os.Stat(filepath.Join(directory, ".mcp.json")); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(filepath.Join(directory, ".mcp.json")); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", info.Mode())
 	}
 	if info, _ := os.Lstat(filepath.Join(directory, ".claude/settings.local.json")); info.Mode()&os.ModeSymlink == 0 {
@@ -207,7 +208,8 @@ func TestModesLinksUnreadableFilesAndForeignHooks(t *testing.T) {
 	if err := os.Chmod(filepath.Join(unreadable, ".mcp.json"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getuid() != 0 {
+	// Windows has no mode that makes a file unreadable to its owner.
+	if os.Getuid() != 0 && runtime.GOOS != "windows" {
 		if report := Setup(Options{Directory: unreadable, Command: nib}); report[0] != ".mcp.json: left untouched, since it cannot be read (EACCES)" {
 			t.Fatalf("got %v", report)
 		}

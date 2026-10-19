@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/11ways/nib/internal/opencode"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // logins are where an opencode: summarizer finds a provider's login, read only: OpenCode 2's databases, then the auth.json older versions
@@ -200,8 +201,17 @@ func readOpenCode(out []byte, usage *Usage) (reply, reported string) {
 // runGroup runs cmd in a process group of its own, killed whole when its context ends, so a server it started cannot keep the call
 // waiting.
 func runGroup(cmd *exec.Cmd) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	platform.Prepare(cmd)
+	cmd.Cancel = func() error { return platform.SignalGroup(cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := platform.Join(cmd); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	defer platform.Release(cmd.Process.Pid)
+	return cmd.Wait()
 }

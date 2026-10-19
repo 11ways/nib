@@ -1,6 +1,7 @@
 package names
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -297,7 +298,7 @@ func TestLearnedNamesThatSaveNothingInTheBaseAreNeitherKeptNorLoaded(t *testing.
 	}
 	// A file written before this rule holds such a name; loading leaves it out.
 	used := fmt.Sprint(time.Now().Unix())
-	data := `{"base": "` + root + `", "names": [{"Name": "pninternal", "Directory": "` + internal + `", "runs": 2, "used": ` + used + `}, {"Name": "bewidgets", "Directory": "` + widgets + `", "runs": 2, "used": ` + used + `}]}`
+	data := `{"base": ` + quoted(root) + `, "names": [{"Name": "pninternal", "Directory": ` + quoted(internal) + `, "runs": 2, "used": ` + used + `}, {"Name": "bewidgets", "Directory": ` + quoted(widgets) + `, "runs": 2, "used": ` + used + `}]}`
 	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -435,4 +436,10 @@ func TestAFileFromBeforeSessionsWereCountedKeepsOnlyNamesNibMakesAsOneSession(t 
 	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"begadgets2", gadgets}) {
 		t.Fatalf("carried %v", next.Entries)
 	}
+}
+
+// quoted is text as a JSON string, so a Windows path's backslashes stay what they are.
+func quoted(text string) string {
+	data, _ := json.Marshal(text)
+	return string(data)
 }

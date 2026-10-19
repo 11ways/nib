@@ -23,7 +23,7 @@ func seen(v *Version) []int {
 }
 
 func TestStoreDeduplicatesUnionsAndEvictsLeastRecentlyUsed(t *testing.T) {
-	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 40})
+	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 30})
 	store.Record("s", "a", view("one"), []int{1}, nil)
 	store.Record("s", "a", view("two"), []int{2}, nil)
 	store.Record("s", "a", view("one"), []int{3}, nil)
@@ -50,7 +50,7 @@ func TestStoreDeduplicatesUnionsAndEvictsLeastRecentlyUsed(t *testing.T) {
 }
 
 func TestAnEvictedHistoryIsRememberedAsForgotten(t *testing.T) {
-	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 40})
+	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 30})
 	store.Record("a", "/f", view("x"), []int{1}, nil)
 	if store.Forgotten("a", "/f") {
 		t.Fatal("a history never evicted is not forgotten")
@@ -78,7 +78,7 @@ func TestEmptySeenRestrictsAndNilLeavesUnrestricted(t *testing.T) {
 }
 
 func TestCopyGivesAnotherSessionItsOwnCopy(t *testing.T) {
-	store := NewStoreWith(Limits{Paths: 8, Versions: 2, Units: 1 << 40})
+	store := NewStoreWith(Limits{Paths: 8, Versions: 2, Units: 1 << 30})
 	store.Record("parent", "a", view("one"), []int{1}, []int{9})
 	store.Record("parent", "a", view("two"), []int{2}, nil)
 	store.Record("other", "c", view("c"), []int{1}, nil)
@@ -109,7 +109,7 @@ func TestCopyGivesAnotherSessionItsOwnCopy(t *testing.T) {
 }
 
 func TestCopyEvictsByRecency(t *testing.T) {
-	store := NewStoreWith(Limits{Paths: 3, Versions: 1, Units: 1 << 40})
+	store := NewStoreWith(Limits{Paths: 3, Versions: 1, Units: 1 << 30})
 	store.Record("parent", "old", view("old"), []int{1}, nil)
 	store.Record("other", "x", view("x"), []int{1}, nil)
 	store.Copy("parent", "fork", time.Time{})
@@ -156,7 +156,7 @@ func (c *clock) read() time.Time { return c.now }
 
 func TestCopyAsOfTakesOnlyWhatWasSeenBefore(t *testing.T) {
 	at := &clock{time.Unix(100, 0)}
-	store := NewStoreWith(Limits{Paths: 8, Versions: 4, Units: 1 << 40})
+	store := NewStoreWith(Limits{Paths: 8, Versions: 4, Units: 1 << 30})
 	store.Now = at.read
 	store.Record("parent", "a", view("one"), []int{1, 2}, []int{9})
 	store.Record("parent", "unrestricted", view("u"), nil, nil)

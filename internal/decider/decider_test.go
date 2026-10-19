@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -374,7 +375,7 @@ func TestAnswersAreCachedWithoutTheOutputAndCheckedWhenRead(t *testing.T) {
 	info, _ := os.Stat(dir)
 	path := filepath.Join(dir, entries[0].Name())
 	fileInfo, _ := os.Stat(path)
-	if info.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && (info.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600) {
 		t.Fatalf("modes %v %v", info.Mode(), fileInfo.Mode())
 	}
 	data, _ := os.ReadFile(path)

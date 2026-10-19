@@ -10,9 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 // Origin is where a session comes from: its parent session, whether it is a fork of it (which copies its history) or a subagent's child
@@ -24,15 +27,12 @@ type Origin struct {
 }
 
 // Databases are the database files OpenCode run with this environment may use, the likeliest first: OPENCODE_DB when set, relative to
-// OpenCode's data folder, else opencode.db there and then the per-channel ones.
+// OpenCode's data folder ($XDG_DATA_HOME/opencode or ~/.local/share/opencode, on every OS), else opencode.db there and then the
+// per-channel ones.
 func Databases(getenv func(string) string) []string {
-	data := getenv("XDG_DATA_HOME")
+	data := platform.DataHome(getenv)
 	if data == "" {
-		home := getenv("HOME")
-		if home == "" {
-			return nil
-		}
-		data = filepath.Join(home, ".local", "share")
+		return nil
 	}
 	folder := filepath.Join(data, "opencode")
 	if name := getenv("OPENCODE_DB"); name != "" {
@@ -193,8 +193,13 @@ func credential(path, provider string) (Login, bool) {
 	return Login{Kind: stored.Type, Key: stored.Key}, true
 }
 
-// open opens a database read-only, so nib never writes to OpenCode's data.
+// open opens a database read-only, so nib never writes to OpenCode's data. A file URI holds the path with slashes and a leading one, so a
+// Windows path C:\x reads file:///C:/x.
 func open(path string) (*sql.DB, error) {
-	location := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
+	slashed := filepath.ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	location := url.URL{Scheme: "file", Path: slashed, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
 	return sql.Open("sqlite", location.String())
 }

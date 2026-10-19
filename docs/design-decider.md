@@ -540,14 +540,17 @@ numbers start at 1. The decision gets `--command` (default `cat PATH`), `--purpo
 own verdict; with no agent known, a recurring block's markers are always explained. The decider and summarizers come
 from the same environment and remembered choice the server reads (`deciderChoice` in `cmd/nib`).
 
-**The session's server.** Run under a nib server's own parent, `nib shape` hands the request to that server, so the
-session's state applies. Each stdio server listens on `session-<parent pid>.sock` in nib's runtime folder
-(`server.RuntimeDirectory`, also nibash's log folder), mode 0600 in a folder only the user may enter; the first server of
-a parent keeps the socket and later ones of the same parent skip it, and a socket a dead server left is replaced. `nib
-shape` walks its ancestors in `/proc`, nearest first, and asks the first whose socket answers; a missing, dead or unreadable
+**The session's server.** Run in a nib server's Claude Code session or under one of its nibash programs, `nib shape`
+hands the request to that server, so the session's state applies. Each stdio server listens on a socket in nib's
+runtime folder (`server.RuntimeDirectory`, also nibash's log folder) named after Claude Code's session,
+`session-claude-<CLAUDE_CODE_SESSION_ID>.sock`, which every program of that session sees in its environment, or else
+after the server's own process; mode 0600 in a folder only the user may enter. The first server of a session keeps the
+socket and later ones skip it, and a socket a dead server left is replaced. The server names its socket to the programs
+nibash starts in `NIB_SHAPE_SOCKET`. `nib shape` asks the session's socket, then that one; a missing, dead or unreadable
 socket, an older nib without one, or an answer it cannot read makes it shape the log itself. The request is one JSON line
-(log, purpose, command, exit) and the answer one JSON object; a refusal (an unreadable log, or under the sandbox one outside
-the roots the client's calls listed, none before any were) comes back with status 2 and is not shaped by the caller.
+(log, purpose, command, exit) and the answer one JSON object; a refusal (an unreadable log, or under the sandbox one
+outside the roots the client's calls listed, none before any were) comes back with status 2 and is not shaped by the
+caller.
 
 The server shapes with `Shell.Shape`: the same `ShapeLog` with its own decider and its live summaries switch, a model
 call of kind `shape` named after the log while it runs, which the mod's band shows (the mod polls nib while any other MCP

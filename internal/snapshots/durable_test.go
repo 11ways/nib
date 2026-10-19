@@ -3,6 +3,7 @@ package snapshots
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -30,6 +31,10 @@ func TestKeepDropsOldFilesAndNeedsAPrivateFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Fatalf("a recent file must stay: %v", err)
+	}
+	// Windows keeps no permission bits a folder could let others in by; its folders are judged by their owner.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	open := filepath.Join(t.TempDir(), "open")
 	if err := os.MkdirAll(open, 0o755); err != nil {

@@ -3,6 +3,7 @@ package trash
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,7 +36,7 @@ func TestEntriesFollowTheSpecificationAndNamesStayUnique(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "[Trash Info]\nPath=" + dir + "/xx/a%20b%25.txt\nDeletionDate=2026-10-18T09:30:05\n"
+	want := "[Trash Info]\nPath=" + escape(filepath.ToSlash(dir)) + "/xx/a%20b%25.txt\nDeletionDate=2026-10-18T09:30:05\n"
 	if string(info) != want {
 		t.Fatalf("got %q, want %q", info, want)
 	}
@@ -64,13 +65,13 @@ func TestAcrossFilesystemsWithoutTheirOwnTrashACheckedCopyGoesHome(t *testing.T)
 	if data, err := os.ReadFile(filepath.Join(entry.File, "sub", "f.txt")); err != nil || string(data) != "f\n" {
 		t.Fatalf("copy: %q %v", data, err)
 	}
-	if link, err := os.Readlink(filepath.Join(entry.File, "link")); err != nil || link != "sub/f.txt" {
+	if link, err := os.Readlink(filepath.Join(entry.File, "link")); err != nil || link != filepath.FromSlash("sub/f.txt") {
 		t.Fatalf("link: %q %v", link, err)
 	}
 	if _, err := c.Restore(tree, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(filepath.Join(tree, "sub", "f.txt")); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(filepath.Join(tree, "sub", "f.txt")); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("restored: %v %v", info, err)
 	}
 	if len(c.Entries()) != 0 {

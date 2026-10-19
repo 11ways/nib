@@ -6,8 +6,9 @@ agents write, and the file lines its own `cat`, `grep`, `head`, `sed -n` and fri
 It works with any MCP client and is meant to replace a client's built-in file tools and shell. The format follows
 current [oh-my-pi](https://github.com/can1357/oh-my-pi) hashline (a whole-file 4-hex tag plus plain line numbers).
 
-nib is one Go binary. It needs `rg` (ripgrep) on `PATH` for `grep`, `find` and nibash's recursive searches, and `bwrap`
-for programs in sandbox mode. The tests and the benchmark are TypeScript on Bun.
+nib is one Go binary for Linux, macOS, the BSDs and Windows ([Platforms](#platforms)). It needs `rg` (ripgrep) on `PATH`
+for `grep`, `find` and nibash's recursive searches, and `bwrap` (Linux) for programs in sandbox mode. The tests and the
+benchmark are TypeScript on Bun.
 
 ```sh
 ./install.sh           # build and install to ~/.local/bin; GOBIN overrides
@@ -451,9 +452,9 @@ REM
   with one, the same hunk adds a blank line). A read that shows such a file's last line ends with
   `[no final newline; PUT >$: with a lone + row adds one]`, and an edit that rewrites its last line without changing
   anything says the same. Publication stages a complete file and atomically replaces the target, preserving POSIX
-  ownership and mode, not ACLs or extended attributes. Hardlinked targets are refused. Linux pins parent directories
-  through `/proc/self/fd`; neither this nor the path/inode rechecks are a compare-and-swap against arbitrary concurrent
-  writers.
+  ownership and mode, not ACLs or extended attributes. Hardlinked targets are refused. The parent directory is pinned as
+  an open root, so a path to it that changes meanwhile cannot redirect the write; neither this nor the path/inode
+  rechecks are a compare-and-swap against arbitrary concurrent writers.
 
 ### write
 
@@ -488,14 +489,14 @@ interpreter in the project directory: no `cd`, variable, `export` or function ca
 directory that moved or vanished since can never break a later command, and calls run in parallel, none waiting behind
 another. What does carry over is an agent's jobs, kept per client session, per Claude Code subagent where nib's hook
 tells them apart, and per OpenCode session ([below](#the-hook)), and its named directories, which live in nib, not in
-the shell. Every program is a real process in its own process group. A command still running when the call's `timeout`
-ends (default 2 minutes, at most 10) is never stopped: the call returns the output so far and the command goes on as a
-job, its whole output, from the start, in the job's log. A call that only waits (`wait`, `wait %2`) gets 10 minutes
-unless it asks for less, and then stops waiting rather than go on as a job that waits for jobs, with a note naming
-the jobs, `[job %2 still running after 10m0s; wait %2 again]`, which run on. Only the client cancelling a call that
-still waits, `kill`, or the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Standard input
-is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and `TERM=dumb` keep programs from waiting on
-a terminal.
+the shell. Every program is a real process in its own process group (a job object on Windows). A command still
+running when the call's `timeout` ends (default 2 minutes, at most 10) is never stopped: the call returns the output so
+far and the command goes on as a job, its whole output, from the start, in the job's log. A call that only waits
+(`wait`, `wait %2`) gets 10 minutes unless it asks for less, and then stops waiting rather than go on as a job that
+waits for jobs, with a note naming the jobs, `[job %2 still running after 10m0s; wait %2 again]`, which run on. Only
+the client cancelling a call that still waits, `kill`, or the end of the connection stops a program (SIGTERM, then
+SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and
+`TERM=dumb` keep programs from waiting on a terminal.
 
 - **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections), `cut -c`
   (character selections) and `wc` run as nib's own when their output goes to the model or into another of them and
@@ -570,11 +571,12 @@ a terminal.
   else the program prints is ever regrouped. Names in a directory's own listing carry no folder, so those print as the
   program printed them.
 - **Deletes go to the trash.** `rm`, `unlink`, `git rm`, `git clean` and `find -delete` move what they delete to the
-  freedesktop.org trash (`$XDG_DATA_HOME/Trash`, which file managers and `gio trash` read) instead of deleting it,
-  wherever their output goes and with nothing excepted. This is the one place where nibash's own commands differ from
-  the system programs in what they do, not only in the form of their output. `rm` keeps coreutils' options
-  (`-r -R -f -d -v -i -I --interactive --one-file-system --preserve-root`, abbreviated long options and bundles),
-  messages, prompts and exit status; a prompt reads stdin, so with nibash's empty stdin `-i` answers no.
+  user's trash (on Linux and the BSDs the freedesktop.org trash, `$XDG_DATA_HOME/Trash`, which file managers and
+  `gio trash` read; macOS and Windows in [Platforms](#platforms)) instead of deleting it, wherever their output goes
+  and with nothing excepted. This is the one place where nibash's own commands differ from the system programs in what
+  they do, not only in the form of their output. `rm` keeps coreutils' options (`-r -R -f -d -v -i -I --interactive
+  --one-file-system --preserve-root`, abbreviated long options and bundles), messages, prompts and exit status; a
+  prompt reads stdin, so with nibash's empty stdin `-i` answers no.
   `--no-preserve-root` and options it lacks are refused, never handed to the system `rm`; `--help` and `--version` are
   the system program's. A directory goes to the trash whole, `-v` still naming each entry. `git rm` first makes a dry
   run with the same words, which refuses what git would refuse, trashes the files it lists, then lets git update the
@@ -641,7 +643,7 @@ a terminal.
 With `NIB_SANDBOX=1`, nib's own commands, redirects, `source`, globs and `cd` are confined to the roots like the file
 tools, and real programs run in bwrap: the system read-only, an empty home except the `PATH` entries under it and the
 directories in `NIB_SANDBOX_BIND`, the roots writable, a private `/tmp` and no network unless `NIB_SANDBOX_NETWORK=1`.
-Without bwrap, programs are refused in sandbox mode. `NIB_SHELL=0` turns nibash off.
+With no bwrap, as on every OS but Linux, nib refuses to start in sandbox mode unless `NIB_SHELL=0` turns nibash off.
 
 #### Long output and deciders
 
@@ -787,13 +789,14 @@ configuration as the server. Its notes name `PATH` as the whole output, no copy 
 printed, since the wrapper states its own verdict. Rows are plain, never anchors. Bad arguments and an unreadable log
 exit 2 with one line on stderr; a decider choice nib would refuse to start with exits 1.
 
-When `nib shape` runs under the program that started a nib server, as zenit-dev and nib both run under one Claude Code,
-it asks that server, through a socket in nib's private runtime folder named after that program's process, and prints
-its answer. The log is then shaped with the session's state: `/nibash summaries off` applies, the mod's band shows a
-`shape` card naming the log while it runs, `/tokens` counts it under `nib shape`, and a later `skim` of the same log, by
-any agent since nothing tells which one asked, shows only what was added since. Under `NIB_SANDBOX=1` a log outside the
-roots is refused with exit 2. With no such server, or one that cannot be asked, `nib shape` shapes the log itself, the
-same way.
+When `nib shape` runs in the same Claude Code session as a nib server, as zenit-dev and nib both do, or under a program
+nibash started, it asks that server, through a socket in nib's private runtime folder named after the session
+(`CLAUDE_CODE_SESSION_ID`, which every program of the session sees) or named to nibash's programs in
+`NIB_SHAPE_SOCKET`, and prints its answer. The log is then shaped with the session's state: `/nibash summaries off`
+applies, the mod's band shows a `shape` card naming the log while it runs, `/tokens` counts it under `nib shape`, and a
+later `skim` of the same log, by any agent since nothing tells which one asked, shows only what was added since. Under
+`NIB_SANDBOX=1` a log outside the roots is refused with exit 2. With no such server, or one that cannot be asked,
+`nib shape` shapes the log itself, the same way.
 
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
 exit status, the lines of a file `skim` reads and the rows between the kept start and end of each output long
@@ -1081,6 +1084,40 @@ Any other MCP client that launches stdio servers can run nib too: the command is
 (or with `NIB_DIRECTORY` set to it). Relative paths resolve against that directory. The tools are `read`, `grep`,
 `find`, `edit`, `write` and `nibash`; the server also sends usage instructions in its MCP `instructions` field.
 `nib --version` prints the version.
+
+### Platforms
+
+nib builds and runs on Linux, macOS, the BSDs (FreeBSD, NetBSD, OpenBSD) and Windows. Each mechanism an OS provides its
+own way sits in `internal/platform`, with one implementation for Unix and one for Windows, and nothing reads `/proc`.
+What differs:
+
+- **Folders.** nib keeps its files where Claude Code and OpenCode keep theirs, under the home folder on every OS
+  (`USERPROFILE` on Windows): settings in `~/.config/nib`, learned names and seen lines in `~/.local/state/nib`, the mod
+  in `~/.local/share/nib`, the hook's state in `~/.cache/nib/hook`. The `XDG_*` variables move them wherever they are
+  set. Sockets and logs go to `$XDG_RUNTIME_DIR/nib`, else a folder of the user's own under the temporary folder.
+- **Pinned writes.** An edit's target directory is opened as an `os.Root`, so staging, the rename or exclusive link
+  and the checks all happen in that directory even if the path to it changes. A move into the trash renames from the
+  open directory on Unix; on Windows, which has no rename relative to an open directory, by path right after the
+  directory is checked again. Windows cannot always replace a file that is open, so nib closes its own handle on the
+  target just before the rename. Owners are preserved where the OS has POSIX owners; on Windows a read-only file is
+  not replaced.
+- **Private folders.** A folder counts as private on Unix when the user owns it and group and others have no access,
+  on Windows when its owner is the user's security identifier.
+- **Trash.** Linux and the BSDs use the freedesktop.org trash. macOS moves deletions to `~/.Trash`, where Finder shows
+  them, with the `.trashinfo` records in `~/.local/share/nib/trash-info` (with `XDG_DATA_HOME` set, the freedesktop
+  trash under it). Windows uses a trash in the freedesktop layout at `~/.local/share/Trash`, since the Recycle Bin
+  cannot be filled and emptied entry by entry reliably from outside the shell. `trash list` and `trash restore` work
+  the same everywhere, and a file on another filesystem than the trash is copied in, checked and then removed.
+- **Processes.** A program runs in its own process group on Unix. On Windows it starts suspended, joins a job object
+  of its own and then runs, so a timeout or `kill` ends everything it started. Windows has no signals: `kill` knows
+  `HUP`, `INT`, `QUIT`, `KILL` and `TERM` there, each ending the job with the status a shell gives (128 plus the
+  signal's number).
+- **Sandbox.** `NIB_SANDBOX=1` runs nibash's programs in bwrap, which exists on Linux only; elsewhere nib refuses to
+  start with it unless `NIB_SHELL=0` turns nibash off.
+- **nibash on Windows** runs the programs on `PATH`, so the commands agents use (`git`, `rg`, coreutils) come from an
+  install such as Git for Windows. Process substitution needs FIFOs and is Unix only, and the files a command names are
+  tracked by Unix paths only. nib prints paths with forward slashes on every OS, which Windows accepts too, so a
+  `~name/` path or a header path an agent sends back resolves.
 
 ### The hook
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/11ways/nib/internal/hookstate"
 	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/opencode"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // client is a session of the SDK's own client, on its latest protocol (2026-07-28 or later), against a server in memory.
@@ -1024,10 +1026,17 @@ func TestWhatAnAgentSawOutlivesARestart(t *testing.T) {
 	if err != nil || len(saved) != 1 {
 		t.Fatalf("one file per session: %v %v", saved, err)
 	}
-	for _, name := range []string{filepath.Join(state, "seen"), filepath.Join(state, "seen", saved[0].Name())} {
-		info, err := os.Stat(name)
-		if want := map[bool]os.FileMode{true: 0o700, false: 0o600}[info != nil && info.IsDir()]; err != nil || info.Mode().Perm() != want {
-			t.Fatalf("%s must be private: %v %v", name, info, err)
+	// Windows keeps no permission bits; its folders are judged by their owner.
+	if runtime.GOOS == "windows" {
+		if !platform.PrivateDirectory(filepath.Join(state, "seen")) {
+			t.Fatal("the seen folder must be private")
+		}
+	} else {
+		for _, name := range []string{filepath.Join(state, "seen"), filepath.Join(state, "seen", saved[0].Name())} {
+			info, err := os.Stat(name)
+			if want := map[bool]os.FileMode{true: 0o700, false: 0o600}[info != nil && info.IsDir()]; err != nil || info.Mode().Perm() != want {
+				t.Fatalf("%s must be private: %v %v", name, info, err)
+			}
 		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(state, "seen", saved[0].Name())); strings.Contains(string(data), "line 1 of the file") {
@@ -1248,7 +1257,7 @@ func TestStatusListsEachAgentsNamedDirectoriesWithTheirUses(t *testing.T) {
 			t.Fatalf("agent %d: %#v", i, got)
 		}
 		row := rows[0].(map[string]any)
-		if row["name"] != "core" || row["source"] != "server" || row["directory"] != filepath.Join("packages", "core", "src") || row["uses"].(float64) < want.uses {
+		if row["name"] != "core" || row["source"] != "server" || row["directory"] != "packages/core/src" || row["uses"].(float64) < want.uses {
 			t.Fatalf("%s's name: %#v", want.agent, row)
 		}
 	}

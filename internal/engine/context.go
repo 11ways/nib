@@ -230,15 +230,15 @@ func (ctx *Context) display(canonical string) string {
 		base = ctx.Directory
 	}
 	if relative, ok := inside(base, canonical); ok {
-		return relative
+		return filepath.ToSlash(relative)
 	}
-	return canonical
+	return filepath.ToSlash(canonical)
 }
 
 // inside is the path of canonical relative to root when it lies strictly below it.
 func inside(root, canonical string) (string, bool) {
 	relative, err := filepath.Rel(root, canonical)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, "../") || filepath.IsAbs(relative) {
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return "", false
 	}
 	return relative, true
@@ -247,7 +247,7 @@ func inside(root, canonical string) (string, bool) {
 // within reports whether canonical is root or lies below it.
 func within(root, canonical string) bool {
 	relative, err := filepath.Rel(root, canonical)
-	return err == nil && (relative == "." || (relative != ".." && !strings.HasPrefix(relative, "../") && !filepath.IsAbs(relative)))
+	return err == nil && (relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)))
 }
 
 // relativeDisplay is a listed path relative to the server's directory when inside it, as grep and find print paths ripgrep returned.
@@ -262,7 +262,7 @@ func (ctx *Context) relativeDisplay(name string) string {
 		if relative == "." {
 			return ""
 		}
-		return relative
+		return filepath.ToSlash(relative)
 	}
-	return name
+	return filepath.ToSlash(name)
 }

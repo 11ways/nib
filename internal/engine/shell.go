@@ -7,9 +7,9 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/snapshots"
 )
 
@@ -165,11 +165,11 @@ func (ctx *Context) Refused(path string) (string, error) { return outsideSandbox
 // Roots are the workspace roots, canonicalized.
 func (ctx *Context) WorkspaceRoots() ([]string, error) { return workspaceRoots(ctx) }
 
-// Facts is the size and modification time of a file, for noticing that a command changed it.
+// Facts is the size and modification and change times of a file, for noticing that a command changed it.
 type Facts struct {
 	Size  int64
-	MTime syscall.Timespec
-	CTime syscall.Timespec
+	MTime int64
+	CTime int64
 }
 
 // Stat is a file's facts; ok is false when it is not a regular file.
@@ -178,8 +178,7 @@ func Stat(path string) (Facts, bool) {
 	if err != nil || !info.Mode().IsRegular() {
 		return Facts{}, false
 	}
-	s := statOf(info)
-	return Facts{info.Size(), s.Mtim, s.Ctim}, true
+	return Facts{info.Size(), info.ModTime().UnixNano(), platform.ChangeTime(info)}, true
 }
 
 // Snapshot reads a file nib can hold as one version and records it; known lines are those the agent wrote, all of them when every is set.
@@ -210,7 +209,7 @@ func (e *Engine) Snapshot(ctx *Context, canonical string, every bool) (snapshots
 // it; it reads the file only when it was modified after the session first held that version.
 func (e *Engine) Drifted(ctx *Context, canonical string, facts Facts) bool {
 	latest := e.Latest(ctx, canonical)
-	if latest == nil || !time.Unix(facts.MTime.Unix()).After(latest.At()) {
+	if latest == nil || !time.Unix(0, facts.MTime).After(latest.At()) {
 		return false
 	}
 	file, err := os.OpenFile(canonical, os.O_RDONLY|nonblock, 0)

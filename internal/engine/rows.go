@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -277,7 +278,7 @@ func mapLines(lines []string, from, to int, options mapOptions) []int {
 		last--
 	}
 	var picked []int
-	previous := -1 << 60
+	previous := math.MinInt / 2
 	if options.after != nil {
 		previous = *options.after
 	}

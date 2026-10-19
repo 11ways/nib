@@ -89,7 +89,7 @@ func TestUserSetupInstallsTheNibashModOnce(t *testing.T) {
 			t.Fatalf("missing %s: %v", file, err)
 		}
 	}
-	equal(t, readJSON(t, filepath.Join(home, "claude/settings.json"))["env"], map[string]any{pluginDirsVariable: "/elsewhere/mod:" + folder})
+	equal(t, readJSON(t, filepath.Join(home, "claude/settings.json"))["env"], map[string]any{pluginDirsVariable: "/elsewhere/mod" + string(os.PathListSeparator) + folder})
 	// The same mod is left alone, types the engine laid beside it included; a changed one is replaced whole.
 	writeFile(t, filepath.Join(folder, ".claude-plugin/types/claude-code/index.d.ts"), "// laid by the engine")
 	if report := Setup(options); strings.Contains(strings.Join(report, "\n"), "nibash mod") {

@@ -166,7 +166,7 @@ func TestDatabasesAreWhereOpenCodeKeepsThem(t *testing.T) {
 	}) {
 		t.Fatalf("got %v", got)
 	}
-	if got := Databases(env(map[string]string{"HOME": "/home/u"})); !slices.Equal(got, []string{"/home/u/.local/share/opencode/opencode.db"}) {
+	if got := Databases(env(map[string]string{"HOME": "/home/u"})); !slices.Equal(got, []string{filepath.FromSlash("/home/u/.local/share/opencode/opencode.db")}) {
 		t.Fatalf("got %v", got)
 	}
 	if got := Databases(env(map[string]string{"XDG_DATA_HOME": data, "OPENCODE_DB": "custom.db"})); !slices.Equal(got, []string{filepath.Join(folder, "custom.db")}) {

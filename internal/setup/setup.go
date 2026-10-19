@@ -20,6 +20,7 @@ import (
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/hook"
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/providers"
 )
 
@@ -90,7 +91,8 @@ func Command() []string {
 var plainWord = regexp.MustCompile(`^[\w./@:+-]+$`)
 
 func quote(word string) string {
-	if plainWord.MatchString(word) {
+	// A Windows path's backslashes are plain there, as no shell on Windows reads them as escapes.
+	if plainWord.MatchString(word) || filepath.Separator == '\\' && plainWord.MatchString(strings.ReplaceAll(word, `\`, "/")) {
 		return word
 	}
 	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
@@ -681,8 +683,8 @@ func Setup(options Options) []string {
 	}
 	var report []string
 	tilde := func(file string) string {
-		if strings.HasPrefix(file, home+"/") {
-			return "~/" + strings.TrimPrefix(file, home+"/")
+		if rest, ok := strings.CutPrefix(file, home+string(filepath.Separator)); ok {
+			return "~/" + filepath.ToSlash(rest)
 		}
 		return file
 	}
@@ -750,7 +752,7 @@ func Setup(options Options) []string {
 	display := func(file string) string {
 		if !options.User {
 			if relative, err := filepath.Rel(options.Directory, file); err == nil && !strings.HasPrefix(relative, "..") {
-				return relative
+				return filepath.ToSlash(relative)
 			}
 		}
 		return tilde(file)
@@ -1058,7 +1060,7 @@ func writeConfig(file string, json object, existed bool) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0o777); err != nil {
 		return err
 	}
-	mode := os.FileMode(0o666 &^ umask())
+	mode := os.FileMode(0o666 &^ platform.Umask)
 	if existed {
 		info, err := os.Stat(file)
 		if err != nil {
@@ -1069,7 +1071,7 @@ func writeConfig(file string, json object, existed bool) error {
 	suffix := make([]byte, 8)
 	_, _ = rand.Read(suffix)
 	staged := filepath.Join(filepath.Dir(file), "."+filepath.Base(file)+".nib-"+hex.EncodeToString(suffix))
-	handle, err := os.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	handle, err := os.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL|platform.NoFollow, 0o600)
 	if err != nil {
 		return err
 	}
@@ -1088,12 +1090,6 @@ func writeConfig(file string, json object, existed bool) error {
 		os.Remove(staged)
 	}
 	return err
-}
-
-func umask() int {
-	mask := syscall.Umask(0)
-	syscall.Umask(mask)
-	return mask
 }
 
 func runClaude(dir string, args []string) (int, string) {

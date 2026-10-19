@@ -161,7 +161,7 @@ func (v *View) In(directory string) *View {
 	moved := &Table{Base: canonical}
 	for _, entry := range v.static.Entries {
 		relative, err := filepath.Rel(v.static.Base, entry.Directory)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, "../") {
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			moved.Entries = append(moved.Entries, entry)
 			continue
 		}

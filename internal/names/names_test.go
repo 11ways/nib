@@ -46,7 +46,7 @@ func TestJvmSourceRootsAreNamedByModuleAndSet(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 	for name, path := range want {
-		if got[name] != path {
+		if filepath.ToSlash(got[name]) != path {
 			t.Fatalf("~%s = %q, want %q", name, got[name], path)
 		}
 	}

@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/snapshots"
 )
 
@@ -114,14 +114,26 @@ func allowed(ctx *Context, canonical string) (bool, error) {
 	return false, nil
 }
 
-// confined fails unless the open file lies inside the sandbox; the path it was opened by may have changed since it was judged.
+// confined fails unless the open file lies inside the sandbox; the path it was opened by may have changed since it was judged, so it is
+// resolved again and must still name the file that is open.
 func confined(ctx *Context, file *os.File, opened string) error {
 	if !ctx.Sandbox {
 		return nil
 	}
-	real, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
+	real, err := realpath(opened)
 	if err != nil {
 		return err
+	}
+	at, err := os.Stat(real)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(at, info) {
+		return errors.New("Path changed during operation; read again")
 	}
 	ok, err := allowed(ctx, real)
 	if err != nil {
@@ -210,36 +222,42 @@ func authorizeWrite(ctx *Context, canonical, action string) error {
 	return ctx.Authorize(ctx.Ctx, canonical, action)
 }
 
-// parent is a target's directory pinned by an open descriptor, addressed through /proc/self/fd.
+// parent is a target's directory pinned as an open root, so every operation on its entry, name ("." for the directory itself), happens in
+// that directory even if the path to it changes; check fails once the path no longer names it.
 type parent struct {
 	directory string
-	location  string
+	root      *os.Root
+	self      *os.File
+	name      string
 	check     func() error
-	sync      func() error
 }
-
-func statOf(info os.FileInfo) *syscall.Stat_t { return info.Sys().(*syscall.Stat_t) }
 
 func inParent[T any](t *target, run func(p *parent) (T, error)) (T, error) {
 	var zero T
 	directory := filepath.Dir(t.canonical)
-	handle, err := os.OpenFile(directory, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return zero, err
 	}
-	defer handle.Close()
-	info, err := handle.Stat()
+	defer root.Close()
+	self, err := root.Open(".")
 	if err != nil {
 		return zero, err
 	}
-	pinned := fmt.Sprintf("/proc/self/fd/%d", handle.Fd())
-	location := pinned + "/."
-	if base := filepath.Base(t.canonical); base != "" && base != "/" {
-		location = filepath.Join(pinned, base)
+	defer self.Close()
+	info, err := self.Stat()
+	if err != nil {
+		return zero, err
+	}
+	name := filepath.Base(t.canonical)
+	if t.canonical == directory {
+		name = "."
 	}
 	p := &parent{
-		directory: pinned,
-		location:  location,
+		directory: directory,
+		root:      root,
+		self:      self,
+		name:      name,
 		check: func() error {
 			if err := t.check(); err != nil {
 				return err
@@ -248,13 +266,11 @@ func inParent[T any](t *target, run func(p *parent) (T, error)) (T, error) {
 			if err != nil {
 				return err
 			}
-			link, err := os.Readlink(pinned)
-			if statOf(current).Dev != statOf(info).Dev || statOf(current).Ino != statOf(info).Ino || err != nil || link != directory {
+			if !os.SameFile(current, info) {
 				return errors.New("Parent directory changed; read again")
 			}
 			return nil
 		},
-		sync: func() error { return handle.Sync() },
 	}
 	if err := p.check(); err != nil {
 		return zero, err
@@ -262,27 +278,41 @@ func inParent[T any](t *target, run func(p *parent) (T, error)) (T, error) {
 	return run(p)
 }
 
-func checkDescriptor(file *os.File, location, canonical string) error {
+// open opens the pinned entry for reading, without waiting on a FIFO.
+func (p *parent) open() (*os.File, error) {
+	return p.root.OpenFile(p.name, os.O_RDONLY|platform.NonBlock, 0)
+}
+
+// sync makes the pinned directory's entries durable.
+func (p *parent) sync() error { return platform.SyncDirectory(p.self) }
+
+// checkDescriptor fails unless the pinned entry name and the path canonical both still name the open file.
+func checkDescriptor(file *os.File, p *parent, name, canonical string) error {
 	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
-	current, err := os.Lstat(location)
+	pinned, err := p.root.Lstat(name)
 	if err != nil {
 		return err
 	}
-	link, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
-	if statOf(current).Dev != statOf(info).Dev || statOf(current).Ino != statOf(info).Ino || err != nil || link != canonical {
+	current, err := os.Lstat(canonical)
+	if err != nil || !os.SameFile(pinned, info) || !os.SameFile(current, info) {
 		return errors.New("File descriptor path changed; read again")
 	}
 	return nil
 }
+
+// rawMode is a file's permission bits, setuid, setgid and sticky included, as chmod takes them.
+func rawMode(info os.FileInfo) uint32 { return platform.RawMode(info) }
 
 type publishOptions struct {
 	replace  os.FileInfo
 	mode     uint32
 	hasMode  bool
 	validate func() error
+	// release closes the caller's own handle on the file a replacement goes over, where an open file cannot be replaced (Windows).
+	release func()
 }
 
 func randomName() string {
@@ -291,15 +321,11 @@ func randomName() string {
 	return hex.EncodeToString(b)
 }
 
-// processUmask is read once at startup, before any goroutine creates files, since reading it means setting it.
-var processUmask = func() int {
-	mask := syscall.Umask(0)
-	syscall.Umask(mask)
-	return mask
-}()
+// processUmask is the file creation mask new files are made with.
+var processUmask = platform.Umask
 
-// publish stages bytes beside canonical and renames them over it (replace) or links them into place exclusively.
-// Linux pins the parent; neither is a sandbox or external CAS.
+// publish stages bytes beside canonical and renames them over it (replace) or links them into place exclusively, all inside the pinned
+// parent; neither is a sandbox or external CAS.
 func publish(p *parent, canonical string, data []byte, ctx *Context, options publishOptions) (err error) {
 	if err := p.check(); err != nil {
 		return err
@@ -308,8 +334,7 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 		return err
 	}
 	name := ".nib-" + randomName() + ".tmp"
-	location := filepath.Join(p.directory, name)
-	file, err := os.OpenFile(location, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	file, err := p.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -317,7 +342,7 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 	defer func() {
 		// Never sweep temp-name patterns or remove a replacement someone else put at our unique name.
 		cleanup := func() error {
-			current, lerr := os.Lstat(location)
+			current, lerr := p.root.Lstat(name)
 			if lerr != nil {
 				if missing(lerr) {
 					return nil
@@ -328,8 +353,10 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 			if serr != nil {
 				return serr
 			}
-			if statOf(current).Dev == statOf(owned).Dev && statOf(current).Ino == statOf(owned).Ino {
-				return os.Remove(location)
+			if os.SameFile(current, owned) {
+				// Closed first, as Windows removes an open file only once its last handle is gone.
+				file.Close()
+				return p.root.Remove(name)
 			}
 			return nil
 		}
@@ -353,7 +380,7 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 		return err
 	}
 	stagedCanonical := filepath.Join(filepath.Dir(canonical), name)
-	if err = checkDescriptor(file, location, stagedCanonical); err != nil {
+	if err = checkDescriptor(file, p, name, stagedCanonical); err != nil {
 		return err
 	}
 	for written := 0; written < len(data); {
@@ -374,17 +401,18 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 		return err
 	}
 	if options.replace != nil {
-		want := statOf(options.replace)
-		if want.Uid != statOf(info).Uid || want.Gid != statOf(info).Gid {
-			if err = file.Chown(int(want.Uid), int(want.Gid)); err != nil {
-				return err
+		if uid, gid, ok := platform.Owner(options.replace); ok {
+			if have, haveGid, _ := platform.Owner(info); have != uid || haveGid != gid {
+				if err = file.Chown(uid, gid); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	// Replacement preserves POSIX ownership and mode, not ACLs or extended attributes.
 	mode := uint32(0o666 &^ processUmask)
 	if options.replace != nil {
-		mode = statOf(options.replace).Mode & 0o7777
+		mode = rawMode(options.replace)
 	} else if options.hasMode {
 		mode = options.mode
 	}
@@ -402,16 +430,19 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 	if err = p.check(); err != nil {
 		return err
 	}
-	if err = checkDescriptor(file, location, stagedCanonical); err != nil {
+	if err = checkDescriptor(file, p, name, stagedCanonical); err != nil {
 		return err
 	}
 	if err = ctx.checkAbort(); err != nil {
 		return err
 	}
 	if options.replace != nil {
-		err = os.Rename(location, p.location)
+		if options.release != nil && platform.OpenFilesBlockReplace {
+			options.release()
+		}
+		err = p.root.Rename(name, p.name)
 	} else {
-		err = os.Link(location, p.location)
+		err = p.root.Link(name, p.name)
 	}
 	if err != nil {
 		return err
@@ -421,19 +452,7 @@ func publish(p *parent, canonical string, data []byte, ctx *Context, options pub
 }
 
 // fileMode turns raw permission bits, setuid, setgid and sticky included, into an os.FileMode.
-func fileMode(bits uint32) os.FileMode {
-	mode := os.FileMode(bits & 0o777)
-	if bits&syscall.S_ISUID != 0 {
-		mode |= os.ModeSetuid
-	}
-	if bits&syscall.S_ISGID != 0 {
-		mode |= os.ModeSetgid
-	}
-	if bits&syscall.S_ISVTX != 0 {
-		mode |= os.ModeSticky
-	}
-	return mode
-}
+func fileMode(bits uint32) os.FileMode { return platform.FileMode(bits) }
 
 // changedWhileReading is a file that changed while it was read, such as a log still being written; grep falls back to ripgrep's rows for it.
 type changedWhileReading struct{}
@@ -443,6 +462,7 @@ func (changedWhileReading) Error() string { return "File changed while reading; 
 type held struct {
 	bytes []byte
 	info  os.FileInfo
+	links uint64
 }
 
 func snapshot(file *os.File, limit int) (*held, error) {
@@ -469,11 +489,14 @@ func snapshot(file *os.File, limit int) (*held, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, a := statOf(before), statOf(after)
-	if int64(length) != before.Size() || b.Mtim != a.Mtim || b.Ctim != a.Ctim {
+	if int64(length) != before.Size() || !before.ModTime().Equal(after.ModTime()) || platform.ChangeTime(before) != platform.ChangeTime(after) {
 		return nil, changedWhileReading{}
 	}
-	return &held{bytes: buffer[:length], info: after}, nil
+	links, err := platform.Links(file, after)
+	if err != nil {
+		return nil, err
+	}
+	return &held{bytes: buffer[:length], info: after, links: links}, nil
 }
 
 const bom = "\xef\xbb\xbf"
@@ -576,4 +599,4 @@ type wrapped struct {
 func (e *wrapped) Error() string { return e.message }
 func (e *wrapped) Unwrap() error { return e.cause }
 
-const nonblock = syscall.O_NONBLOCK
+const nonblock = platform.NonBlock

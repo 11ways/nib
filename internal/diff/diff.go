@@ -1,7 +1,10 @@
 // Package diff ports jsdiff's diffArrays (Myers with jsdiff's diagonal pruning and tie-breaking), so line maps match the TypeScript nib exactly.
 package diff
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Change is one run of a diff: lines kept, added to the new side, or removed from the old one.
 type Change struct {
@@ -33,7 +36,7 @@ func Arrays(old, new []string, timeout time.Duration) (changes []Change, ok bool
 	if best[0].oldPos+1 >= oldLen && newPos+1 >= newLen {
 		return build(best[0].last, new, old), true
 	}
-	minDiagonal, maxDiagonal := -1<<62, 1<<62
+	minDiagonal, maxDiagonal := math.MinInt/2, math.MaxInt/2
 	for editLength <= maxEditLength && !time.Now().After(deadline) {
 		for diagonal := max(minDiagonal, -editLength); diagonal <= min(maxDiagonal, editLength); diagonal += 2 {
 			removePath, addPath := best[diagonal-1], best[diagonal+1]

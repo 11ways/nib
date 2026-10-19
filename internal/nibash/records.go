@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // record is one line as a stage passes it on: text is what the stage would print (with grep's own prefixes), origin the file line it shows,
@@ -72,26 +72,18 @@ func (l *link) finish() { l.once.Do(func() { close(l.done) }) }
 // links is a call's registry of links, keyed by the pipe both ends share.
 type links struct {
 	mu    sync.Mutex
-	byKey map[[2]uint64]*link
-}
-
-func pipeKey(file *os.File) ([2]uint64, bool) {
-	var st syscall.Stat_t
-	if err := syscall.Fstat(int(file.Fd()), &st); err != nil || st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
-		return [2]uint64{}, false
-	}
-	return [2]uint64{st.Dev, st.Ino}, true
+	byKey map[string]*link
 }
 
 func (l *links) get(file *os.File) *link {
-	key, ok := pipeKey(file)
+	key, ok := platform.PipeKey(file)
 	if !ok {
 		return nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.byKey == nil {
-		l.byKey = map[[2]uint64]*link{}
+		l.byKey = map[string]*link{}
 	}
 	found := l.byKey[key]
 	if found == nil {

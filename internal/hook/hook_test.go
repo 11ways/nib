@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,8 @@ func call(directory, tool string, input map[string]any) string {
 func TestReadBecomesNibReadAndOtherToolsPass(t *testing.T) {
 	directory := t.TempDir()
 	readme := filepath.Join(directory, "README.md")
+	// A file outside the session's folder, as /etc/hosts is on Unix.
+	outside := filepath.Join(filepath.VolumeName(directory)+string(filepath.Separator), "etc", "hosts")
 	cases := [][2]string{
 		{call(directory, "Read", map[string]any{"file_path": readme, "offset": 10.0, "limit": 20.0}), `mcp__nib__read {"paths":["README.md:10+20"]}`},
 		{call(directory, "Read", map[string]any{"file_path": readme, "limit": 5.0}), `mcp__nib__read {"paths":["README.md:1-5"]}`},
@@ -30,7 +33,7 @@ func TestReadBecomesNibReadAndOtherToolsPass(t *testing.T) {
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "logs/run.txt")}), `mcp__nib__read {"paths":["logs/run.txt"],"plain":true}`},
 		// A Go package named log holds code, which keeps its numbers.
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "src/log/logger.go")}), `mcp__nib__read {"paths":["src/log/logger.go"]}`},
-		{call(directory, "Read", map[string]any{"file_path": "/etc/hosts"}), `mcp__nib__read {"paths":["/etc/hosts"]}`},
+		{call(directory, "Read", map[string]any{"file_path": outside}), `mcp__nib__read {"paths":["` + filepath.ToSlash(outside) + `"]}`},
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "a.pdf")}), ""},
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "a.ipynb")}), ""},
 		// Older setups registered the hook for these too; with nibash and deny rules they are not the hook's to refuse.
@@ -73,12 +76,15 @@ func TestAResendRunsAndStateMustBePrivate(t *testing.T) {
 	if Run([]byte("not json"), state) != "" {
 		t.Fatal("bad input must pass")
 	}
-	open := filepath.Join(directory, ".open")
-	if err := os.Mkdir(open, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := Run(input("s1", map[string]any{"file_path": "a.ts"}), open); got != "" {
-		t.Fatalf("state others can write must turn refusals off, got %q", got)
+	// Windows keeps no permission bits a folder could let others in by; its folders are judged by their owner.
+	if runtime.GOOS != "windows" {
+		open := filepath.Join(directory, ".open")
+		if err := os.Mkdir(open, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := Run(input("s1", map[string]any{"file_path": "a.ts"}), open); got != "" {
+			t.Fatalf("state others can write must turn refusals off, got %q", got)
+		}
 	}
 	private := filepath.Join(directory, ".private")
 	if err := os.Mkdir(private, 0o700); err != nil {
@@ -125,7 +131,10 @@ func TestNibToolCallsAreFiledForSubagentsAndNeverRefused(t *testing.T) {
 	if got := agents.Take("toolu_read"); got != (hookstate.Agent{}) {
 		t.Fatalf("only MCP calls are filed, got %+v", got)
 	}
-	// A state folder others can enter files nothing, and the call still passes.
+	// A state folder others can enter files nothing, and the call still passes; Windows has no such folder.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	open := filepath.Join(t.TempDir(), "open")
 	if err := os.Mkdir(open, 0o755); err != nil {
 		t.Fatal(err)
@@ -149,9 +158,9 @@ func TestASubagentIsFiledWithItsParent(t *testing.T) {
 		"a3f5b656e725f8dc1": `{"agentType":"fork","isFork":true,"description":"fork probe","toolUseId":"toolu_01WkMMezPxWeDix8eW2wzJ8c","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"inherit","finished":true}`,
 		"a30cd37a40afff1e9": `{"agentType":"fork","isFork":true,"description":"nested fork","toolUseId":"toolu_017RLR5dvnUJ9grghEhsKCwB","parentAgentId":"a83334bbe36e1e7ac","spawnDepth":2,"requestShape":"foreground","requestNonInteractive":true,"model":"inherit","finished":true}`,
 		"a83334bbe36e1e7ac": `{"agentType":"general-purpose","launchedWithDefaults":true,"description":"sub probe","toolUseId":"toolu_01NeFzhEw5GoZvXGDPExHSLC","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"finished":true}`,
-		"a5cdeb96678c0dc2c": `{"agentType":"general-purpose","worktreePath":"` + worktree + `","spawnedWithWorktree":true,"worktreeBranch":"worktree-agent-a5cdeb96678c0dc2c","description":"web_act: no scroll when visible","toolUseId":"toolu_016N4K69XZDzPi67xGyLivgm","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"opus"}`,
-		"a5cdeb96678c0dc2d": `{"agentType":"general-purpose","worktreePath":"` + filepath.Join(worktree, "gone") + `","spawnedWithWorktree":true,"spawnDepth":1}`,
-		"a5cdeb96678c0dc2e": `{"agentType":"general-purpose","worktreePath":"` + worktree + `","spawnDepth":1}`,
+		"a5cdeb96678c0dc2c": `{"agentType":"general-purpose","worktreePath":` + quoted(worktree) + `,"spawnedWithWorktree":true,"worktreeBranch":"worktree-agent-a5cdeb96678c0dc2c","description":"web_act: no scroll when visible","toolUseId":"toolu_016N4K69XZDzPi67xGyLivgm","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"opus"}`,
+		"a5cdeb96678c0dc2d": `{"agentType":"general-purpose","worktreePath":` + quoted(filepath.Join(worktree, "gone")) + `,"spawnedWithWorktree":true,"spawnDepth":1}`,
+		"a5cdeb96678c0dc2e": `{"agentType":"general-purpose","worktreePath":` + quoted(worktree) + `,"spawnDepth":1}`,
 		"a0000000000000001": `{"agentType":"fork","isFork":true,"spawnDepth":2}`,
 		"a0000000000000002": `{"agentType":"fork","isFork":true,"parentAgentId":"../x","spawnDepth":2}`,
 	}
@@ -379,4 +388,10 @@ func TestAForkInheritsItsParentsDropsBeforeItsSpawn(t *testing.T) {
 			t.Errorf("%+v: got %v %v, want %v", c.agent, got, known, c.want)
 		}
 	}
+}
+
+// quoted is text as a JSON string, so a Windows path's backslashes stay what they are.
+func quoted(text string) string {
+	data, _ := json.Marshal(text)
+	return string(data)
 }

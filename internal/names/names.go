@@ -221,7 +221,8 @@ func (t *Table) Expand(input string) (string, bool) {
 	if t == nil || !strings.HasPrefix(input, "~") {
 		return "", false
 	}
-	name, rest, _ := strings.Cut(input[1:], "/")
+	// On Windows a path may come with either separator; nib prints names with a slash.
+	name, rest, _ := strings.Cut(filepath.ToSlash(input[1:]), "/")
 	for _, entry := range t.Entries {
 		if entry.Name == name {
 			if rest == "" {
@@ -253,13 +254,13 @@ func (t *Table) Display(canonical string) (string, bool) {
 	if best == "" || len(best) >= len(plain(t.Base, canonical)) {
 		return "", false
 	}
-	return best, true
+	return filepath.ToSlash(best), true
 }
 
 // plain is how canonical prints without names: relative to base when strictly below it, else whole.
 func plain(base, canonical string) string {
 	if base != "" {
-		if relative, err := filepath.Rel(base, canonical); err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, "../") {
+		if relative, err := filepath.Rel(base, canonical); err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return relative
 		}
 	}
@@ -292,6 +293,7 @@ func (t *Table) Lines(room int) []string {
 		if relative, err := filepath.Rel(t.Base, entry.Directory); err == nil && !strings.HasPrefix(relative, "..") {
 			shown = relative
 		}
+		shown = filepath.ToSlash(shown)
 		line := fmt.Sprintf("~%s = %s", entry.Name, shown)
 		if len(line)+1 > room {
 			break

@@ -19,10 +19,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/11ways/nib/internal/hookstate"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // Matcher is a hook registration: the event, the matcher setup writes, and what it must select for the hook to be registered for its job (a
@@ -210,7 +210,7 @@ func lookOnly(path string) bool {
 		return true
 	}
 	if !edited[strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))] {
-		for _, segment := range strings.Split(path, "/") {
+		for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
 			if segment == "log" || segment == "logs" {
 				return true
 			}
@@ -220,18 +220,18 @@ func lookOnly(path string) bool {
 	return err == nil && info.Size() > taggedLimit
 }
 
-// shown is a path as the agent should pass it to nib: relative to the session's folder when inside it.
+// shown is a path as the agent should pass it to nib: relative to the session's folder when inside it, with slashes as nib prints paths.
 func shown(path, session string) string {
 	relative, err := filepath.Rel(session, path)
 	switch {
 	case err != nil:
-		return path
+		return filepath.ToSlash(path)
 	case relative == ".":
 		return "."
-	case relative == ".." || strings.HasPrefix(relative, "../"):
-		return path
+	case relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)):
+		return filepath.ToSlash(path)
 	}
-	return relative
+	return filepath.ToSlash(relative)
 }
 
 func whole(value any) (int, bool) {
@@ -308,7 +308,11 @@ func firstTime(session, call, directory string) bool {
 	if name == "" {
 		name = "session"
 	}
-	file, err := os.OpenFile(filepath.Join(directory, name+".txt"), os.O_RDWR|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
+	path := filepath.Join(directory, name+".txt")
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return false
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND|platform.NoFollow, 0o600)
 	if err != nil {
 		return false
 	}

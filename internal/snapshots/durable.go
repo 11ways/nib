@@ -10,8 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 const (
@@ -230,7 +231,10 @@ func (d *durable) write(writes map[string][]byte) {
 // loadSaved reads a saved file, an empty one when there is none or it cannot be read; a link is never followed.
 func loadSaved(name string) *savedFile {
 	empty := &savedFile{Paths: map[string]*savedPath{}}
-	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if info, err := os.Lstat(name); err != nil || !info.Mode().IsRegular() {
+		return empty
+	}
+	file, err := os.OpenFile(name, os.O_RDONLY|platform.NoFollow, 0)
 	if err != nil {
 		return empty
 	}
@@ -275,11 +279,4 @@ func stampAt(set map[int]bool, at map[int]int64, line int, moment int64) (map[in
 }
 
 // private is true for a real folder of this user's own that no one else may enter.
-func private(dir string) bool {
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && int(st.Uid) == os.Getuid()
-}
+func private(dir string) bool { return platform.PrivateDirectory(dir) }

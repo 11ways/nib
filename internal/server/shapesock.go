@@ -10,12 +10,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/hookstate"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // ShapeRequest is what nib shape asks the session's server: the log, the run's description, its exit status and the command that wrote it.
@@ -42,26 +44,49 @@ const (
 	shapeAgent = "nib shape"
 )
 
+// ShapeSocketEnv names the socket of the nib server whose programs see it, which nib shape asks after the session's.
+const ShapeSocketEnv = "NIB_SHAPE_SOCKET"
+
 // RuntimeDirectory is nib's private runtime folder: nibash's logs and the session sockets nib shape finds a server by.
 func RuntimeDirectory() string {
-	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
+	if base := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(base) {
 		return filepath.Join(base, "nib")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("nib-%d", os.Getuid()))
+	return platform.TempFolder()
 }
 
-// SocketPath is the socket of the nib server the process pid started, which nib shape run under that process asks.
-func SocketPath(pid int) string {
-	return filepath.Join(RuntimeDirectory(), fmt.Sprintf("session-%d.sock", pid))
+// SocketPath is the socket of the nib server known by key.
+func SocketPath(key string) string { return filepath.Join(RuntimeDirectory(), "session-"+key+".sock") }
+
+// ShapeKey is the key this server's socket is known by: Claude Code's session, which the session's other programs (another MCP server,
+// a Bash command, a hook) see in their environment too, else this process.
+func ShapeKey(getenv func(string) string) string {
+	if session := getenv("CLAUDE_CODE_SESSION_ID"); hookstate.IsID(session) {
+		return "claude-" + session
+	}
+	return fmt.Sprintf("nib-%d", os.Getpid())
 }
 
-// ListenShape listens on the socket of the process that started this server, parent; nil when the runtime folder is not private or another
-// live server of the same parent holds the socket already, the first one keeping it. A socket a dead server left is replaced.
-func ListenShape(parent int) (net.Listener, error) {
+// ShapeSockets are the sockets nib shape asks, in order: the Claude Code session's it runs in, then the one the nib server whose program
+// started it named.
+func ShapeSockets(getenv func(string) string) []string {
+	var paths []string
+	if session := getenv("CLAUDE_CODE_SESSION_ID"); hookstate.IsID(session) {
+		paths = append(paths, SocketPath("claude-"+session))
+	}
+	if named := getenv(ShapeSocketEnv); filepath.IsAbs(named) && !slices.Contains(paths, named) {
+		paths = append(paths, named)
+	}
+	return paths
+}
+
+// ListenShape listens on the socket known by key; nil when the runtime folder is not private or another live server holds the socket
+// already, the first one keeping it. A socket a dead server left is replaced.
+func ListenShape(key string) (net.Listener, error) {
 	if !hookstate.Private(RuntimeDirectory(), true) {
 		return nil, nil
 	}
-	path := SocketPath(parent)
+	path := SocketPath(key)
 	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
 		conn.Close()
 		return nil, nil
@@ -71,7 +96,7 @@ func ListenShape(parent int) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := platform.RestrictSocket(path); err != nil {
 		listener.Close()
 		return nil, err
 	}
@@ -168,14 +193,13 @@ func (s *Server) knownRoots() ([]string, error) {
 	return nil, errors.New("the client's roots are not known yet, so the sandbox allows nothing")
 }
 
-// AskShape asks the server of the first of pids, nearest ancestor first, whose socket answers; ok is false when none did, or the answer
-// could not be read, so the caller shapes the log itself.
-func AskShape(ctx context.Context, pids []int, request ShapeRequest) (answer ShapeAnswer, ok bool) {
+// AskShape asks the server of the first of paths whose socket answers; ok is false when none did, or the answer could not be read, so the
+// caller shapes the log itself.
+func AskShape(ctx context.Context, paths []string, request ShapeRequest) (answer ShapeAnswer, ok bool) {
 	if !hookstate.Private(RuntimeDirectory(), false) {
 		return answer, false
 	}
-	for _, pid := range pids {
-		path := SocketPath(pid)
+	for _, path := range paths {
 		if _, err := os.Lstat(path); err != nil {
 			continue
 		}

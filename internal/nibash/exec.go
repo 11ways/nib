@@ -19,6 +19,8 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 const (
@@ -307,7 +309,7 @@ func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr i
 	}
 	cmd.Env = environ(hc.Env)
 	cmd.Dir = hc.Dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	platform.Prepare(cmd)
 	if hc.Stdin != nil {
 		cmd.Stdin = hc.Stdin
 	}
@@ -367,6 +369,14 @@ func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr i
 		p.Close()
 	}
 	pgid := cmd.Process.Pid
+	// A program the OS cannot hold as a group could leave what it starts running past a kill, so it is not run at all.
+	if err := platform.Join(cmd); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		fmt.Fprintf(hc.Stderr, "%s: %v\n", args[0], err)
+		return interp.ExitStatus(126)
+	}
+	defer platform.Release(pgid)
 	c.started(pgid)
 	defer c.ended(pgid)
 	waited := make(chan error, 1)
@@ -416,12 +426,12 @@ func unwrapStart(err error) error {
 
 // terminate stops a process group: SIGTERM, then SIGKILL if it has not ended after killDelay; it returns the program's wait result.
 func terminate(pgid int, waited <-chan error) error {
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	_ = platform.SignalGroup(pgid, syscall.SIGTERM)
 	select {
 	case err := <-waited:
 		return err
 	case <-time.After(killDelay):
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = platform.SignalGroup(pgid, syscall.SIGKILL)
 		return <-waited
 	}
 }
@@ -435,14 +445,14 @@ func (c *call) killAll() {
 	}
 	c.mu.Unlock()
 	for _, pgid := range groups {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		_ = platform.SignalGroup(pgid, syscall.SIGTERM)
 	}
 	if len(groups) == 0 {
 		return
 	}
 	time.Sleep(100 * time.Millisecond)
 	for _, pgid := range groups {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = platform.SignalGroup(pgid, syscall.SIGKILL)
 	}
 }
 

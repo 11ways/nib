@@ -17,6 +17,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // job is work running detached from the calls: a whole command run with background: true, a statement run with &, or a call still running
@@ -50,7 +51,7 @@ func (j *job) add(pgid int) {
 	defer j.mu.Unlock()
 	j.groups[pgid] = true
 	if j.killed != 0 {
-		_ = syscall.Kill(-pgid, j.killed)
+		_ = platform.SignalGroup(pgid, j.killed)
 	}
 }
 
@@ -78,7 +79,7 @@ func (j *job) signal(sig syscall.Signal) {
 	}
 	j.mu.Unlock()
 	for _, pgid := range groups {
-		_ = syscall.Kill(-pgid, sig)
+		_ = platform.SignalGroup(pgid, sig)
 	}
 	if terminating[sig] {
 		j.cancel()
@@ -298,7 +299,8 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	return nil
 }
 
-var signalNames = map[string]syscall.Signal{"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUIT": syscall.SIGQUIT, "KILL": syscall.SIGKILL, "TERM": syscall.SIGTERM, "USR1": syscall.SIGUSR1, "USR2": syscall.SIGUSR2, "STOP": syscall.SIGSTOP, "CONT": syscall.SIGCONT}
+// signalNames are the signals kill knows by name, those the OS has.
+var signalNames = platform.Signals
 
 func parseSignal(name string) (syscall.Signal, bool) {
 	name = strings.TrimPrefix(strings.ToUpper(name), "SIG")
@@ -368,7 +370,12 @@ func (c *call) kill(ctx context.Context, args []string) error {
 			status = 1
 			continue
 		}
-		if err := syscall.Kill(pid, sig); err != nil {
+		signal, id := platform.Signal, pid
+		if pid < 0 {
+			// A negative number is a process group, as for kill(2).
+			signal, id = platform.SignalGroup, -pid
+		}
+		if err := signal(id, sig); err != nil {
 			fmt.Fprintf(hc.Stderr, "kill: (%d) - %s\n", pid, errorText(err))
 			status = 1
 		}

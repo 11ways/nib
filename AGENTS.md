@@ -4,8 +4,8 @@ nib is a stdio MCP server that gives coding agents hashline file tools: `read`, 
 
 ## Stack
 
-- Go, one binary (`cmd/nib`). Dependencies: `mvdan.cc/sh/v3` (the shell's parser and interpreter), `github.com/modelcontextprotocol/go-sdk`, `modernc.org/sqlite` (pure Go, for reading OpenCode's database read-only) and `github.com/odvcencio/gotreesitter` (pure-Go tree-sitter; only the grammar packages `internal/syntax` imports are linked), pinned in `go.mod`.
-- `rg` (ripgrep) must be on `PATH` for `grep`, `find`, nibash's recursive searches and their tests; `bwrap` for nibash's programs in sandbox mode and for the benchmark.
+- Go, one binary (`cmd/nib`). Dependencies: `mvdan.cc/sh/v3` (the shell's parser and interpreter), `github.com/modelcontextprotocol/go-sdk`, `modernc.org/sqlite` (pure Go, for reading OpenCode's database read-only), `golang.org/x/sys` (the syscalls `internal/platform` needs on Unix and Windows) and `github.com/odvcencio/gotreesitter` (pure-Go tree-sitter; only the grammar packages `internal/syntax` imports are linked), pinned in `go.mod`.
+- `rg` (ripgrep) must be on `PATH` for `grep`, `find`, nibash's recursive searches and their tests; `bwrap` (Linux only) for nibash's programs in sandbox mode and for the benchmark.
 - The black-box tests and the benchmark are TypeScript on Bun (`@modelcontextprotocol/sdk`, `diff`).
 
 ## Commands
@@ -37,7 +37,8 @@ claude plugin validate mods/nibash && claude plugin test mods/nibash   # the Cla
 | `internal/decider/` | which rows of a cut nibash output the model sees: the decider kinds and every `NIB_DECIDER_*` variable, keywords, the OpenRouter decision models in order of preference, which also judge a command against vague command rules (`RuleJudge`), the summarizers (OpenRouter chat models, `claude -p` and OpenCode 2's `opencode run`, isolated from the user's OpenCode data) and the checking of their answers against the log, the answer cache |
 | `internal/names/` | named directories (`~name/`): `nib.json` (the one place that file is named, `ConfigFile`), JVM source roots, the names agents define at runtime (`hash -d`) and the inheritance of them by later subagents, the names nib makes for directories an agent keeps seeing and the learned file that hands the names two sessions used to later ones, per-agent views, expansion, display, the instructions table |
 | `internal/snapshots/` | per-session snapshot store with seen and known lines and when each was first seen, copies as of a moment for forks, what an agent still holds of a version and dropping what it saw before its context was compacted or cleared, line remapping, shifted-line rescue, saving what agents with a lasting key saw across restarts (hashes and line numbers, never text) |
-| `internal/trash/` | the freedesktop.org trash everything nib deletes goes to: entries with their `.trashinfo`, a filesystem's own trash or a checked copy across devices, and what this server trashed, for `trash list` and `trash restore` |
+| `internal/trash/` | the user's trash everything nib deletes goes to (the freedesktop.org trash on Linux and the BSDs, `~/.Trash` on macOS, a freedesktop-layout trash of nib's own on Windows): entries with their `.trashinfo`, a filesystem's own trash or a checked copy across devices, and what this server trashed, for `trash list` and `trash restore` |
+| `internal/platform/` | what each OS provides its own way, one implementation for Unix and one for Windows and never `/proc`: file facts (change time, links, owner, device), open flags, the umask, private folders, pipe identity, nib's folders (`XDG_*` or the home folder), and process groups (job objects on Windows) with their signals |
 | `internal/patch/` | patch language parser (pinned against the TypeScript parser by `testdata/corpus.json`) |
 | `internal/diff/` | port of jsdiff's `diffArrays` (pinned against jsdiff by `testdata/jsdiff.json`) |
 | `internal/tag/` | the file tag (xxHash32) |

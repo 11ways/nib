@@ -447,7 +447,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 				base := filepath.Base(path)
 				foreign := slices.ContainsFunc(others, func(command string) bool { return strings.Contains(command, base) }) ||
 					s.engine.Drifted(tools, path, facts)
-				foreign = sess.changing(path, foreign, time.Unix(facts.MTime.Unix()))
+				foreign = sess.changing(path, foreign, time.Unix(0, facts.MTime))
 				before[path] = held{facts, latest.Tag, foreign}
 			}
 		}

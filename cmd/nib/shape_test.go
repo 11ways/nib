@@ -23,9 +23,9 @@ func alone(t *testing.T) {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
-	before := ancestry
-	ancestry = func() []int { return nil }
-	t.Cleanup(func() { ancestry = before })
+	before := shapeSockets
+	shapeSockets = func() []string { return nil }
+	t.Cleanup(func() { shapeSockets = before })
 }
 
 // shaped runs nib shape with args and returns its status and what it printed.
@@ -44,13 +44,13 @@ func shaped(t *testing.T, args ...string) (int, string) {
 	return status, string(out)
 }
 
-// session answers nib shape's requests on the socket of process pid as answer says, and records what it was asked.
-func session(t *testing.T, pid int, answer func(server.ShapeRequest) server.ShapeAnswer) *[]server.ShapeRequest {
+// session answers nib shape's requests on the socket known by key as answer says, and records what it was asked.
+func session(t *testing.T, key string, answer func(server.ShapeRequest) server.ShapeAnswer) *[]server.ShapeRequest {
 	t.Helper()
 	if err := os.MkdirAll(server.RuntimeDirectory(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("unix", server.SocketPath(pid))
+	listener, err := net.Listen("unix", server.SocketPath(key))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +82,8 @@ func TestShapeAsksTheSessionsServerAndShapesTheLogItselfWithoutOne(t *testing.T)
 	if status, out := shaped(t, "--log", log, "--purpose", "why"); status != 0 || out != "error: Foo\nBUILD FAILED\n" {
 		t.Fatalf("without a session: %d %q", status, out)
 	}
-	asked := session(t, 4321, func(server.ShapeRequest) server.ShapeAnswer { return server.ShapeAnswer{Text: "from the session"} })
-	ancestry = func() []int { return []int{77, 4321} }
+	asked := session(t, "claude-s1", func(server.ShapeRequest) server.ShapeAnswer { return server.ShapeAnswer{Text: "from the session"} })
+	shapeSockets = func() []string { return []string{server.SocketPath("claude-none"), server.SocketPath("claude-s1")} }
 	if status, out := shaped(t, "--log", log, "--purpose", "why", "--exit", "1", "--command", "zenit-dev test"); status != 0 || out != "from the session\n" {
 		t.Fatalf("with a session: %d %q", status, out)
 	}
@@ -91,27 +91,20 @@ func TestShapeAsksTheSessionsServerAndShapesTheLogItselfWithoutOne(t *testing.T)
 		t.Fatalf("asked %+v", *asked)
 	}
 	// A refusal is the session's answer: nib shape does not shape the log behind its back.
-	refused := session(t, 4322, func(server.ShapeRequest) server.ShapeAnswer {
+	refused := session(t, "claude-s2", func(server.ShapeRequest) server.ShapeAnswer {
 		return server.ShapeAnswer{Status: 2, Error: "outside the roots"}
 	})
-	ancestry = func() []int { return []int{4322} }
+	shapeSockets = func() []string { return []string{server.SocketPath("claude-s2")} }
 	if status, out := shaped(t, "--log", log, "--purpose", "why"); status != 2 || out != "" || len(*refused) != 1 {
 		t.Fatalf("refused: %d %q", status, out)
 	}
 	// A socket nothing answers on is passed over.
-	if err := os.WriteFile(server.SocketPath(4323), nil, 0o600); err != nil {
+	if err := os.WriteFile(server.SocketPath("claude-s3"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ancestry = func() []int { return []int{4323} }
+	shapeSockets = func() []string { return []string{server.SocketPath("claude-s3")} }
 	if status, out := shaped(t, "--log", log, "--purpose", "why"); status != 0 || !strings.Contains(out, "BUILD FAILED") {
 		t.Fatalf("dead socket: %d %q", status, out)
-	}
-}
-
-func TestProcAncestorsStartsAtTheParent(t *testing.T) {
-	pids := procAncestors()
-	if len(pids) == 0 || pids[0] != os.Getppid() {
-		t.Fatalf("ancestors %v, parent %d", pids, os.Getppid())
 	}
 }
 

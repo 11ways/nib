@@ -1,5 +1,7 @@
-// Package trash moves what nib deletes into the freedesktop.org trash, the one file managers and gio read, and keeps what this process put
-// there so an agent can list and restore it; nothing here ever empties the trash.
+// Package trash moves what nib deletes into the user's trash, and keeps what this process put there so an agent can list and restore it;
+// nothing here ever empties the trash. On Linux and the BSDs that is the freedesktop.org trash, the one file managers and gio read; on
+// macOS the user's ~/.Trash, with the freedesktop records beside nib's own files; on Windows a trash in the freedesktop layout under nib's
+// data folder, since the Recycle Bin cannot be filled and emptied by entry reliably from outside the shell.
 package trash
 
 import (
@@ -13,8 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 // ErrExists is a restore onto a path that is there already.
@@ -45,13 +48,16 @@ type Can struct {
 // New is a can with nothing trashed yet.
 func New() *Can { return &Can{rename: os.Rename, now: time.Now} }
 
-// Home is the home trash: $XDG_DATA_HOME/Trash, or ~/.local/share/Trash.
-func Home() string {
-	if data := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(data) {
-		return filepath.Join(data, "Trash")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "Trash")
+// Home is the freedesktop home trash: $XDG_DATA_HOME/Trash, or ~/.local/share/Trash.
+func Home() string { return filepath.Join(platform.DataHome(os.Getenv), "Trash") }
+
+// trashDir is a trash: the folders its files and their .trashinfo records go in, and top, the top directory of the filesystem it serves
+// ("" for the home trash, whose records hold absolute paths).
+type trashDir struct{ files, info, top string }
+
+// freedesktop is the trash in the freedesktop layout at dir.
+func freedesktop(dir, top string) trashDir {
+	return trashDir{filepath.Join(dir, "files"), filepath.Join(dir, "info"), top}
 }
 
 // Isolated points the home trash at a new temporary directory, for a test binary that must never touch the user's; call the result at exit.
@@ -64,23 +70,29 @@ func Isolated() func() {
 	return func() { os.RemoveAll(dir) }
 }
 
-// Put moves what location names to the trash, recording original, its absolute path; location may differ from it, as a path through
-// /proc/self/fd does. A file on another filesystem than the home trash goes to that filesystem's own trash, as the specification says,
-// unless homeOnly, as under the sandbox; where neither takes it by renaming, it is copied into the home trash and then removed.
+// Put moves what location names to the trash, recording original, its absolute path. A file on another filesystem than the home trash
+// goes to that filesystem's own trash, as the specification says, unless homeOnly, as under the sandbox; where neither takes it by
+// renaming, it is copied into the home trash and then removed.
 func (c *Can) Put(location, original string, homeOnly bool) (Entry, error) {
+	return c.PutBy(location, func(target string) error { return c.rename(location, target) }, original, homeOnly)
+}
+
+// PutBy is Put with the rename into the trash made by move, as from a directory pinned by its descriptor; location still names the entry,
+// for its facts and for a copy across filesystems.
+func (c *Can) PutBy(location string, move func(target string) error, original string, homeOnly bool) (Entry, error) {
 	info, err := os.Lstat(location)
 	if err != nil {
 		return Entry{}, err
 	}
-	home := Home()
-	entry, err := c.into(home, "", location, original, info, false)
-	if errors.Is(err, syscall.EXDEV) {
+	home := homeTrash()
+	entry, err := c.into(home, location, original, info, move, false)
+	if platform.CrossDevice(err) {
 		if top, ok := topTrash(original, homeOnly); ok {
-			if entry, err = c.into(top.dir, top.top, location, original, info, false); err == nil {
+			if entry, err = c.into(top, location, original, info, move, false); err == nil {
 				return c.keep(entry), nil
 			}
 		}
-		entry, err = c.into(home, "", location, original, info, true)
+		entry, err = c.into(home, location, original, info, move, true)
 	}
 	if err != nil {
 		return Entry{}, err
@@ -95,23 +107,22 @@ func (c *Can) keep(entry Entry) Entry {
 	return entry
 }
 
-// into moves location into the trash at dir, whose filesystem's top is top ("" for the home trash, whose entries record absolute paths):
-// its .trashinfo is created first, exclusively, which claims the name, then the file follows, renamed, or copied and removed when copy is set.
-func (c *Can) into(dir, top, location, original string, info fs.FileInfo, copy bool) (Entry, error) {
-	files, infos := filepath.Join(dir, "files"), filepath.Join(dir, "info")
-	for _, d := range []string{dir, files, infos} {
+// into moves location into the trash t: its .trashinfo is created first, exclusively, which claims the name, then the file follows, by move,
+// or copied and removed when copy is set.
+func (c *Can) into(t trashDir, location, original string, info fs.FileInfo, move func(string) error, copy bool) (Entry, error) {
+	for _, d := range []string{t.files, t.info} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return Entry{}, err
 		}
 	}
 	when := c.now()
 	recorded := original
-	if top != "" {
-		recorded = relativeTo(top, original)
+	if t.top != "" {
+		recorded = relativeTo(t.top, original)
 	}
-	body := fmt.Sprintf("[Trash Info]\nPath=%s\nDeletionDate=%s\n", escape(recorded), when.Format("2006-01-02T15:04:05"))
+	body := fmt.Sprintf("[Trash Info]\nPath=%s\nDeletionDate=%s\n", escape(filepath.ToSlash(recorded)), when.Format("2006-01-02T15:04:05"))
 	base := filepath.Base(original)
-	if base == "/" || base == "." || base == "" {
+	if base == string(filepath.Separator) || base == "." || base == "" || filepath.VolumeName(base) == base {
 		base = "root"
 	}
 	for n := 1; ; n++ {
@@ -119,8 +130,8 @@ func (c *Can) into(dir, top, location, original string, info fs.FileInfo, copy b
 		if n > 1 {
 			name = base + "." + strconv.Itoa(n)
 		}
-		infoPath := filepath.Join(infos, name+".trashinfo")
-		target := filepath.Join(files, name)
+		infoPath := filepath.Join(t.info, name+".trashinfo")
+		target := filepath.Join(t.files, name)
 		if _, err := os.Lstat(target); err == nil {
 			continue
 		}
@@ -139,7 +150,7 @@ func (c *Can) into(dir, top, location, original string, info fs.FileInfo, copy b
 			if copy {
 				werr = moveByCopy(location, target)
 			} else {
-				werr = c.rename(location, target)
+				werr = move(target)
 			}
 		}
 		if werr != nil {
@@ -155,56 +166,6 @@ func relativeTo(top, path string) string {
 		return rel
 	}
 	return path
-}
-
-// trashDir is a filesystem's own trash, at dir under its top directory top.
-type trashDir struct{ dir, top string }
-
-// topTrash is the trash of the filesystem path is on, at its top directory: $topdir/.Trash/$uid when $topdir/.Trash is a sticky directory
-// and no symlink, else $topdir/.Trash-$uid, which must be the user's own directory if it is there.
-func topTrash(path string, homeOnly bool) (trashDir, bool) {
-	if homeOnly {
-		return trashDir{}, false
-	}
-	top, ok := mountTop(filepath.Dir(path))
-	if !ok {
-		return trashDir{}, false
-	}
-	uid := strconv.Itoa(os.Getuid())
-	if info, err := os.Lstat(filepath.Join(top, ".Trash")); err == nil && info.IsDir() && info.Mode()&fs.ModeSticky != 0 {
-		return trashDir{filepath.Join(top, ".Trash", uid), top}, true
-	}
-	own := filepath.Join(top, ".Trash-"+uid)
-	info, err := os.Lstat(own)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		if os.Mkdir(own, 0o700) != nil {
-			return trashDir{}, false
-		}
-	case err != nil || !info.IsDir() || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()):
-		return trashDir{}, false
-	}
-	return trashDir{own, top}, true
-}
-
-// mountTop is the highest directory above dir on the same device.
-func mountTop(dir string) (string, bool) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return "", false
-	}
-	dev := info.Sys().(*syscall.Stat_t).Dev
-	for {
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return dir, true
-		}
-		up, err := os.Stat(parent)
-		if err != nil || up.Sys().(*syscall.Stat_t).Dev != dev {
-			return dir, true
-		}
-		dir = parent
-	}
 }
 
 // escape is a path as a .trashinfo holds it: URL-escaped, slashes kept.
@@ -345,7 +306,7 @@ func (c *Can) Restore(original string, force, homeOnly bool) (Entry, error) {
 		return Entry{}, err
 	}
 	err := c.rename(found.File, original)
-	if errors.Is(err, syscall.EXDEV) {
+	if platform.CrossDevice(err) {
 		err = moveByCopy(found.File, original)
 	}
 	if err != nil {

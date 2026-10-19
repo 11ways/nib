@@ -85,9 +85,9 @@ Behavior is ported, not redesigned:
 - **Regexes:** the patch parser's one backreference and the outline's one lookahead (`#(?![[!]|include\b)`, bundle
   hashes) become direct checks. `localeCompare` (`countsByFolder`) becomes a fixed comparator: by count, then bytewise
   [m4].
-- **Atomic writes** keep their steps: open the parent directory, stage with `O_EXCL|O_NOFOLLOW`, fsync, rename or link
-  through `/proc/self/fd`, re-check descriptors. They preserve BOM, line endings, final newline, mode and ownership, and
-  refuse hardlinked targets.
+- **Atomic writes** keep their steps: open the parent directory as an `os.Root`, stage with `O_EXCL` inside it, fsync,
+  rename or link inside it, re-check descriptors by file identity. They preserve BOM, line endings, final newline, mode
+  and ownership, and refuse hardlinked targets. Every OS-specific part is in `internal/platform`; nothing reads `/proc`.
 - **ripgrep and git** get the same arguments (`--json`, `core.fsmonitor=false`, no link following).
 - **Concurrency:** per-path locks become a keyed lock map with ordered acquisition. A cancelled call stops waiting.
 
@@ -270,7 +270,8 @@ the mark the view leaves out), a streamed file (cut reads its raw bytes) and gre
 ### 5.5 Real programs and interp builtins
 
 - **Real programs** run under nibash's exec handler:
-  - `Setpgid` gives each command its own process group;
+  - `platform.Prepare` gives each command its own process group (on Windows a job object it joins suspended, before it
+    runs);
   - on the client's cancellation of a call that still waits, `kill`, or the connection's end the group gets SIGTERM,
     then SIGKILL after 3 s;
   - `WaitDelay` bounds the wait for output a daemonised child keeps open [missing].
@@ -282,7 +283,7 @@ the mark the view leaves out), a streamed file (cut reads its raw bytes) and gre
   (section 5.7) [B2].
 - **Deleting commands** (`rm`, `unlink`, `git rm`, `git clean`, `find -delete`) and nibash's `trash list` /
   `trash restore` are caught in the exec handler before classification matters, wherever their output goes, so what they
-  delete goes to the freedesktop.org trash (`internal/trash`, shared with `edit`'s `REM`; the record of what this server
+  delete goes to the user's trash (`internal/trash`, shared with `edit`'s `REM`; the record of what this server
   trashed is the session's, main agent and subagents). `rm` and `unlink` are reimplemented with coreutils' messages,
   quoting (`quoteaf`'s shell escapes), prompts and exit status, and refuse what they lack rather than run the system
   program; `git rm` and `git clean` learn what they would delete from a dry run of the same words, and `find -delete`
@@ -312,8 +313,8 @@ When the command finishes or its time runs out, the sink is rendered once:
 - **Budget:** output past 400 rows or 30 KiB is cut; which rows stay is the decider's choice (`docs/design-decider.md`):
   the fixed cut keeps the first 100 and last 200 rows, keywords and the OpenRouter decision model keep the first 30 and
   last 100 and choose the middle.
-  - The whole output goes to a log in `$XDG_RUNTIME_DIR/nib/` (falling back to `os.TempDir()/nib-<uid>/`). The directory
-    is `0700`, and a log is capped at 64 MiB [m5].
+  - The whole output goes to a log in `$XDG_RUNTIME_DIR/nib/` (falling back to a folder of the user's own under
+    `os.TempDir()`). The directory is `0700`, and a log is capped at 64 MiB [m5].
   - Every gap names the log lines it leaves out (`[nibash: log lines 101-4612 left out]`), counted in the log, not in
     rows, so `sed -n 101,4612p LOG` shows exactly that; the closing note says how many rows are shown of how many log
     lines and who chose. 30 KiB stays under Claude Code's 50,000-character result limit [m2].
@@ -410,7 +411,7 @@ With `NIB_SANDBOX=1`:
     `NIB_SANDBOX_BIND` bound read-only again;
   - the roots bound read-write, a private `/tmp`, no network unless `NIB_SANDBOX_NETWORK=1`;
   - the toolchain works while the user's files outside the roots stay hidden;
-  - without `bwrap`, real programs are refused in sandbox mode, with that reason.
+  - without `bwrap`, as on every OS but Linux, nib refuses to start in sandbox mode unless `NIB_SHELL=0`.
 
 AGENTS.md's sandbox rule gains this paragraph: system directories are readable by real programs.
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime/debug"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/names"
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/providers"
 	"github.com/11ways/nib/internal/server"
 	"github.com/11ways/nib/internal/setup"
@@ -88,7 +90,7 @@ func main() {
 		}
 	}
 	// Under a file size limit a write past it fails with EFBIG; the signal would otherwise end nib mid-write.
-	signal.Ignore(syscall.SIGXFSZ)
+	signal.Ignore(platform.Ignored...)
 	directory := os.Getenv("NIB_DIRECTORY")
 	if directory == "" {
 		directory, _ = os.Getwd()
@@ -111,6 +113,13 @@ func main() {
 		// Claude Code tells a server nothing of its channels; the launcher that names nib's says so in NIB_CHANNEL.
 		Channel: server.ChannelOn(),
 	}
+	// Sandbox mode confines nibash's programs with bwrap, which only Linux has; without it nib would run them unconfined, so it stops.
+	if options.Sandbox && os.Getenv("NIB_SHELL") != "0" {
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			fmt.Fprintln(os.Stderr, "nib: NIB_SANDBOX=1 runs nibash's programs in bwrap, which this system lacks (it exists on Linux only); install it, or set NIB_SHELL=0 to offer the file tools alone")
+			os.Exit(1)
+		}
+	}
 	// The names agents got in this directory before, theirs and nib's, are named from the start; NIB_AUTO_NAMES=0 turns both off.
 	if file := names.LearnedFile(table.Base); file != "" && os.Getenv("NIB_AUTO_NAMES") != "0" {
 		options.NamesFile = file
@@ -120,10 +129,13 @@ func main() {
 	defer stop()
 	options.Providers = startProviders(ctx, specs, directory, options.Sandbox && os.Getenv("NIB_PROVIDERS_SANDBOX") != "1")
 	s := newServer(options, choice.New(), choice.Summarizer())
-	// nib shape run anywhere under the program that started this server, as a build wrapper that program also started, asks this server.
-	if listener, err := server.ListenShape(os.Getppid()); err != nil {
+	// nib shape run by a program of the same Claude Code session (another MCP server, a Bash command, a hook) or by one of this server's
+	// own programs asks this server.
+	key := server.ShapeKey(os.Getenv)
+	if listener, err := server.ListenShape(key); err != nil {
 		fmt.Fprintln(os.Stderr, "nib: nib shape requests are not taken:", err)
 	} else if listener != nil {
+		os.Setenv(server.ShapeSocketEnv, server.SocketPath(key))
 		go s.ServeShape(ctx, listener)
 		defer listener.Close()
 	}

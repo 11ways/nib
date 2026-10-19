@@ -11,8 +11,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 // RecordAge is how long an agent record waits for its call; a call the user refused or that failed before reaching nib leaves one behind.
@@ -20,11 +21,10 @@ const RecordAge = 24 * time.Hour
 
 // Directory is the per-user runtime folder when there is one, else the user's cache; never a folder another user could have made.
 func Directory() string {
-	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
+	if runtime := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(runtime) {
 		return filepath.Join(runtime, "nib-hook")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "nib", "hook")
+	return filepath.Join(platform.CacheHome(os.Getenv), "nib", "hook")
 }
 
 // Private is true when directory is a real folder of this user's own that no one else may enter; create makes it first when missing.
@@ -32,12 +32,7 @@ func Private(directory string, create bool) bool {
 	if create {
 		_ = os.MkdirAll(directory, 0o700)
 	}
-	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && int(st.Uid) == os.Getuid()
+	return platform.PrivateDirectory(directory)
 }
 
 // identifier is the shape of Claude Code's tool_use and agent ids; anything else could name a path, and is never filed or looked up.
@@ -82,7 +77,10 @@ func (f folder) get(name string, limit int, take bool) (text string, ok bool) {
 		return "", false
 	}
 	path := filepath.Join(f.directory, name)
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|platform.NoFollow, 0)
 	if err != nil {
 		return "", false
 	}

@@ -37,8 +37,8 @@ type Restored struct {
 
 // shown is path as it reads from directory when under it, else the path itself.
 func shown(directory, path string) string {
-	if rel, err := filepath.Rel(directory, path); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
-		return rel
+	if rel, err := filepath.Rel(directory, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(rel)
 	}
 	return path
 }

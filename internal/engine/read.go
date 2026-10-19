@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/11ways/nib/internal/js"
@@ -753,7 +752,7 @@ func parseAge(input string) (time.Duration, error) {
 }
 
 func listDirectory(file *os.File, display string) (*block, error) {
-	entries, err := os.ReadDir(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
+	entries, err := file.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +780,7 @@ func listDirectory(file *os.File, display string) (*block, error) {
 }
 
 func directoryFacts(file *os.File, display string) (*block, error) {
-	entries, err := os.ReadDir(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
+	entries, err := file.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -886,12 +885,12 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string, args ReadArgs, maxLineLength int, images *[]Image) (*block, error) {
 	return serialized(t.canonical, ctx, func() (*block, error) {
 		return inParent(t, func(p *parent) (*block, error) {
-			file, err := os.OpenFile(p.location, os.O_RDONLY|syscall.O_NOFOLLOW|nonblock, 0)
+			file, err := p.open()
 			if err != nil {
 				return nil, err
 			}
 			defer file.Close()
-			if err := checkDescriptor(file, p.location, t.canonical); err != nil {
+			if err := checkDescriptor(file, p, p.name, t.canonical); err != nil {
 				return nil, err
 			}
 			info, err := file.Stat()
@@ -929,7 +928,7 @@ func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string
 			if err := p.check(); err != nil {
 				return nil, err
 			}
-			if err := checkDescriptor(file, p.location, t.canonical); err != nil {
+			if err := checkDescriptor(file, p, p.name, t.canonical); err != nil {
 				return nil, err
 			}
 			if err := ctx.checkAbort(); err != nil {

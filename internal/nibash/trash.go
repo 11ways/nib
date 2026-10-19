@@ -20,6 +20,7 @@ import (
 
 	"mvdan.cc/sh/v3/interp"
 
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/trash"
 )
 
@@ -450,7 +451,7 @@ func (r *rmRun) one(operand string) {
 			return
 		}
 		if r.preserveAll {
-			if parent, perr := os.Stat(filepath.Dir(path)); perr == nil && device(parent) != device(info) {
+			if parent, perr := os.Stat(filepath.Dir(path)); perr == nil && device(filepath.Dir(path), parent) != device(path, info) {
 				fmt.Fprintf(r.stderr, "rm: skipping %s, since it's on a different device\nrm: and --preserve-root=all is in effect\n", quoteShell(operand))
 				r.status = 1
 				return
@@ -503,7 +504,7 @@ func (r *rmRun) tree(operand, path string, info fs.FileInfo) {
 	if r.oneFS {
 		filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 			if err == nil && d.IsDir() && p != path {
-				if sub, err := os.Lstat(p); err == nil && device(sub) != device(info) {
+				if sub, err := os.Lstat(p); err == nil && device(p, sub) != device(path, info) {
 					mounts = true
 					return filepath.SkipAll
 				}
@@ -567,7 +568,7 @@ func (r *rmRun) walk(operand, path string, info fs.FileInfo) bool {
 			continue
 		}
 		if sub.IsDir() {
-			if r.oneFS && device(sub) != device(info) {
+			if r.oneFS && device(child, sub) != device(path, info) {
 				fmt.Fprintf(r.stderr, "rm: skipping %s, since it's on a different device\n", quoteShell(name))
 				r.status = 1
 				continue
@@ -601,7 +602,11 @@ func dirOrder(dir string) []string {
 	return names
 }
 
-func device(info fs.FileInfo) uint64 { return uint64(info.Sys().(*syscall.Stat_t).Dev) }
+// device is the filesystem the file at path is on, 0 where the OS cannot tell, so every file counts as on one.
+func device(path string, info fs.FileInfo) uint64 {
+	dev, _ := platform.Device(path, info)
+	return dev
+}
 
 func empty(dir string) bool {
 	handle, err := os.Open(dir)
@@ -632,7 +637,7 @@ func describe(path string, info fs.FileInfo) string {
 	case info.Size() == 0:
 		kind = "regular empty file"
 	}
-	if syscall.Access(path, 2) != nil {
+	if !platform.Writable(path) {
 		kind = "write-protected " + kind
 	}
 	return kind

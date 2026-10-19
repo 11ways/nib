@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/11ways/nib/internal/opencode"
+	"github.com/11ways/nib/internal/platform"
 )
 
 // Remembered are the variables nib setup may keep for every nib it registers; the key is never one of them.
@@ -88,12 +89,7 @@ func findKey(getenv func(string) string) (key, looked string, err error) {
 
 // keyFile is nib's own key file, in $XDG_CONFIG_HOME/nib or ~/.config/nib; "" without a home.
 func keyFile(getenv func(string) string) string {
-	config := getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		if home := getenv("HOME"); home != "" {
-			config = filepath.Join(home, ".config")
-		}
-	}
+	config := platform.ConfigHome(getenv)
 	if config == "" {
 		return ""
 	}
@@ -113,14 +109,10 @@ func readKeyFile(file string) (string, error) {
 	return strings.TrimSpace(first), nil
 }
 
-// opencodeAuth is where OpenCode keeps its keys: $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json.
+// opencodeAuth is where OpenCode keeps its keys: $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json, on every OS, as
+// OpenCode finds its data folder the XDG way everywhere.
 func opencodeAuth(getenv func(string) string) string {
-	data := getenv("XDG_DATA_HOME")
-	if data == "" {
-		if home := getenv("HOME"); home != "" {
-			data = filepath.Join(home, ".local", "share")
-		}
-	}
+	data := platform.DataHome(getenv)
 	if data == "" {
 		return ""
 	}

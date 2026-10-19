@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/11ways/nib/internal/platform"
 )
 
 const (
@@ -87,9 +89,9 @@ func (d *Defined) Announced(agent string) []string {
 	}
 	for _, m := range names.retell {
 		if inFull() {
-			notes = append(notes, fmt.Sprintf("[~%s = %s, a name you got before your context was compacted or cleared; ~%s/ works in every tool and in nibash, for you and the subagents you start]", m.Name, m.prefix, m.Name))
+			notes = append(notes, fmt.Sprintf("[~%s = %s, a name you got before your context was compacted or cleared; ~%s/ works in every tool and in nibash, for you and the subagents you start]", m.Name, filepath.ToSlash(m.prefix), m.Name))
 		} else {
-			notes = append(notes, fmt.Sprintf("[~%s = %s]", m.Name, m.prefix))
+			notes = append(notes, fmt.Sprintf("[~%s = %s]", m.Name, filepath.ToSlash(m.prefix)))
 		}
 	}
 	names.made, names.retell = nil, nil
@@ -244,12 +246,12 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 
 // note announces in full a name nib made for the directory printed as prefix, which count shown paths ran through.
 func note(name, prefix string, count int) string {
-	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, prefix, why(count, "which %d of the paths shown to you ran through"), name)
+	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, filepath.ToSlash(prefix), why(count, "which %d of the paths shown to you ran through"), name)
 }
 
 // brief is note for an agent already told in full what such a name is.
 func brief(name, prefix string, count int) string {
-	return fmt.Sprintf("[~%s = %s, %s]", name, prefix, why(count, "%d paths shown"))
+	return fmt.Sprintf("[~%s = %s, %s]", name, filepath.ToSlash(prefix), why(count, "%d paths shown"))
 }
 
 // why is the reason a name was made: count shown paths in the words of format, or a prefix named at first sight.
@@ -363,13 +365,9 @@ func LearnedFile(base string) string {
 
 // StateHome is nib's folder in the user's state home, where what one server learns is kept for the next; "" without a home to put it in.
 func StateHome() string {
-	state := os.Getenv("XDG_STATE_HOME")
+	state := platform.StateHome(os.Getenv)
 	if state == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return ""
-		}
-		state = filepath.Join(home, ".local", "state")
+		return ""
 	}
 	return filepath.Join(state, "nib")
 }

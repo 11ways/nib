@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -12,11 +13,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/patch"
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/snapshots"
 	"github.com/11ways/nib/internal/trash"
 )
@@ -1136,7 +1137,7 @@ func orderEdits(edits []snapshots.LineEdit) ([]snapshots.LineEdit, error) {
 			return nil, fmt.Errorf("Range %d.=%d is reversed", edit.Start, edit.End)
 		}
 	}
-	const infinity = 1 << 62
+	const infinity = math.MaxInt / 2
 	from := func(e snapshots.LineEdit) int {
 		switch {
 		case e.Edge:
@@ -1245,6 +1246,13 @@ type handle struct {
 	parent      *parent
 	file        *os.File
 	destination *handle
+}
+
+// release closes the handle's open file, as a replacement on Windows needs.
+func (h *handle) release() {
+	if h.file != nil {
+		h.file.Close()
+	}
 }
 
 // locked takes locks in canonical order so concurrent multi-file patches cannot deadlock; handles stay open until run returns.
@@ -1369,12 +1377,12 @@ func locked[T any](ctx *Context, requests []*request, runWith func(handles []*ha
 				if h.request.create && h.request.overwrite == "" {
 					return step(index + 1)
 				}
-				file, err := os.OpenFile(p.location, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+				file, err := p.open()
 				if err != nil {
 					return zero, err
 				}
 				defer file.Close()
-				if err := checkDescriptor(file, p.location, h.target.canonical); err != nil {
+				if err := checkDescriptor(file, p, p.name, h.target.canonical); err != nil {
 					return zero, err
 				}
 				h.file = file
@@ -1438,7 +1446,7 @@ type staged struct {
 	kept     []string
 }
 
-func hardlinked(h *held) bool { return statOf(h.info).Nlink > 1 }
+func hardlinked(h *held) bool { return h.links > 1 }
 
 var errHardlinked = errors.New("Hardlinked targets are not supported; refusing to break links")
 
@@ -1709,7 +1717,7 @@ func stageCreate(ctx *Context, store *snapshots.Store, h *handle) (*staged, erro
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Lstat(h.parent.location); err == nil {
+	if _, err := h.parent.root.Lstat(h.parent.name); err == nil {
 		return nil, fmt.Errorf("%s already exists; edit it with a [PATH#TAG] section, or write it with its tag to overwrite", h.target.display)
 	} else if !missing(err) {
 		return nil, err
@@ -1718,7 +1726,7 @@ func stageCreate(ctx *Context, store *snapshots.Store, h *handle) (*staged, erro
 }
 
 func destinationFree(h *handle) error {
-	if _, err := os.Lstat(h.parent.location); err == nil {
+	if _, err := h.parent.root.Lstat(h.parent.name); err == nil {
 		return fmt.Errorf("Destination %s already exists; REM it in its own section first", h.target.display)
 	} else if !missing(err) {
 		return err
@@ -1728,7 +1736,7 @@ func destinationFree(h *handle) error {
 
 // unchanged fails unless the open source descriptor still holds the bytes that were staged.
 func unchanged(h *handle, current *held) error {
-	if err := checkDescriptor(h.file, h.parent.location, h.target.canonical); err != nil {
+	if err := checkDescriptor(h.file, h.parent, h.parent.name, h.target.canonical); err != nil {
 		return err
 	}
 	latest, err := snapshot(h.file, TextLimit)
@@ -1738,7 +1746,7 @@ func unchanged(h *handle, current *held) error {
 	if hardlinked(latest) {
 		return errHardlinked
 	}
-	if statOf(latest.info).Ctim != statOf(current.info).Ctim || !bytes.Equal(latest.bytes, current.bytes) {
+	if platform.ChangeTime(latest.info) != platform.ChangeTime(current.info) || !bytes.Equal(latest.bytes, current.bytes) {
 		return errors.New("File changed before publication; read again")
 	}
 	return nil
@@ -1769,7 +1777,7 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 			return nil, err
 		}
 		if item.handle.file != nil {
-			if err := checkDescriptor(item.handle.file, item.handle.parent.location, item.handle.target.canonical); err != nil {
+			if err := checkDescriptor(item.handle.file, item.handle.parent, item.handle.parent.name, item.handle.target.canonical); err != nil {
 				return nil, err
 			}
 		}
@@ -1794,6 +1802,7 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 				if item.replace != nil {
 					options.replace = item.replace.info
 					options.validate = func() error { return unchanged(h, item.replace) }
+					options.release = h.release
 				}
 				return publish(h.parent, h.target.canonical, item.bytes, ctx, options)
 			case stagedRemove:
@@ -1803,14 +1812,14 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 				if err := h.parent.check(); err != nil {
 					return err
 				}
-				_, err := can.Put(h.parent.location, h.target.canonical, ctx.Sandbox)
+				_, err := can.PutBy(h.target.canonical, h.parent.moveOut, h.target.canonical, ctx.Sandbox)
 				return err
 			}
 			if d := h.destination; d != nil {
 				if err := unchanged(h, item.current); err != nil {
 					return err
 				}
-				if err := publish(d.parent, d.target.canonical, item.applied.bytes, ctx, publishOptions{mode: statOf(item.current.info).Mode & 0o7777, hasMode: true}); err != nil {
+				if err := publish(d.parent, d.target.canonical, item.applied.bytes, ctx, publishOptions{mode: rawMode(item.current.info), hasMode: true}); err != nil {
 					return err
 				}
 				if h.request.move != "" {
@@ -1820,11 +1829,11 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 					if err := h.parent.check(); err != nil {
 						return err
 					}
-					return os.Remove(h.parent.location)
+					return h.parent.root.Remove(h.parent.name)
 				}
 				return nil
 			}
-			return publish(h.parent, h.target.canonical, item.applied.bytes, ctx, publishOptions{replace: item.current.info, validate: func() error { return unchanged(h, item.current) }})
+			return publish(h.parent, h.target.canonical, item.applied.bytes, ctx, publishOptions{replace: item.current.info, validate: func() error { return unchanged(h, item.current) }, release: h.release})
 		}()
 		if err != nil {
 			if len(written) == 0 {
