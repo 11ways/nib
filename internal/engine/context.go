@@ -92,6 +92,18 @@ func (ctx *Context) worked(h *handle) {
 	}
 }
 
+// previewer is Names that counts the paths a response is about to print, so a name they earn holds for all of them.
+type previewer interface {
+	Preview(canonicals []string)
+}
+
+// preview tells the names the paths a response will print, before it prints any.
+func (ctx *Context) preview(paths []string) {
+	if p, ok := ctx.Names.(previewer); ok && len(paths) > 0 {
+		p.Preview(paths)
+	}
+}
+
 // Image is an attached image.
 type Image struct {
 	Data     []byte

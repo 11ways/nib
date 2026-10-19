@@ -817,6 +817,18 @@ type ReadArgs struct {
 	Full bool
 }
 
+// readEntry splits one of read's paths into the file, the tag after # and the selector, a database query included.
+func readEntry(ctx *Context, entry string) (input, since string, sel selection, err error) {
+	selected := ""
+	if path, query := databaseQuery(ctx, entry); query != "" {
+		selected, sel = path, selection{query: query}
+	} else if selected, sel, err = splitSelector(entry, ctx); err != nil {
+		return "", "", sel, err
+	}
+	input, since = splitSince(selected, ctx)
+	return input, since, sel, nil
+}
+
 // Read reads files, lists directories and attaches images.
 func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 	if args.Info && (args.Plain || args.Collapse != nil || args.MaxLineLength != nil) {
@@ -833,16 +845,21 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 	var absent []string
 	var images []Image
 	single := false
+	// Every file the read names counts toward a name before any prints, so a name they earn holds for all of them.
+	var named []string
 	for _, entry := range args.Paths {
-		var selected string
-		var sel selection
-		var err error
-		if path, query := databaseQuery(ctx, entry); query != "" {
-			selected, sel = path, selection{query: query}
-		} else if selected, sel, err = splitSelector(entry, ctx); err != nil {
+		if input, _, _, err := readEntry(ctx, entry); err == nil {
+			if real, err := realpath(ctx.resolve(input)); err == nil {
+				named = append(named, real)
+			}
+		}
+	}
+	ctx.preview(named)
+	for _, entry := range args.Paths {
+		input, since, sel, err := readEntry(ctx, entry)
+		if err != nil {
 			return Result{}, err
 		}
-		input, since := splitSince(selected, ctx)
 		narrowed := sel.ranges != nil || sel.tail > 0 || sel.symbols != nil || sel.query != ""
 		if since != "" && (narrowed || args.Info || args.Plain) {
 			return Result{}, fmt.Errorf("%s: path#TAG shows what changed since that tag, so it takes no line selector, info or plain", entry)

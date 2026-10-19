@@ -31,11 +31,11 @@ func TestNamesAnAgentGotBeforeADropAreToldAgainOnceEach(t *testing.T) {
 	view.Display(filepath.Join(widgets, "B.java"))
 	view.Display(filepath.Join(later, "C.java"))
 	notes := defined.Announced("main")
-	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[~w = zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared;") {
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[~w = "+filepath.ToSlash(widgets)+", a name you got before your context was compacted or cleared;") {
 		t.Fatalf("a name defined before the drop is told again once, in full; one defined since is not: %v", notes)
 	}
 	view.Display(filepath.Join(gadgets, "D.java"))
-	if notes := defined.Announced("main"); len(notes) != 1 || notes[0] != "[~g = zenit/src/server/java/be/elevenways/gadgets]" {
+	if notes := defined.Announced("main"); len(notes) != 1 || notes[0] != "[~g = "+filepath.ToSlash(gadgets)+"]" {
 		t.Fatalf("the next is brief: %v", notes)
 	}
 	view.Display(filepath.Join(widgets, "E.java"))
@@ -61,17 +61,16 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	defined := NewDefined()
 	defined.Automatic(file, root)
 	view := (&Table{Base: root}).For(defined, "main")
-	for i := range 5 {
-		view.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
+	for i := range 3 {
+		view.Display(filepath.Join(widgets, fmt.Sprintf("V%d.java", i)))
 	}
 	if notes := defined.Announced("main"); len(notes) != 0 {
 		t.Fatalf("named too soon: %v", notes)
 	}
-	if shown, ok := view.Display(filepath.Join(widgets, "Last.java")); ok {
-		t.Fatalf("a name takes effect only once told, so a response prints its paths alike, got %q", shown)
-	}
+	// The path that earns the name prints under it already, and the note names the directory whole.
+	untilNamed(t, view, widgets)
 	notes := defined.Announced("main")
-	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through;") {
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bewidgets = "+filepath.ToSlash(widgets)+", which ") {
 		t.Fatalf("notes %v", notes)
 	}
 	if again := defined.Announced("main"); len(again) != 0 {
@@ -94,9 +93,7 @@ func TestADirectoryShownPathsKeepRunningThroughGetsANameOnce(t *testing.T) {
 	second := NewDefined()
 	second.Automatic(file, root)
 	again := (&Table{Base: root}).For(second, "main")
-	for i := range 6 {
-		again.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
-	}
+	untilNamed(t, again, widgets)
 	second.Announced("main")
 	next.AddLearned(file)
 	if len(next.Entries) != 1 || next.Entries[0] != (Entry{"bewidgets", widgets}) {
@@ -137,8 +134,8 @@ func TestAPrefixTooLongToRepeatIsNamedInTheSecondCallThatShowsIt(t *testing.T) {
 	if notes := defined.Announced("main"); len(notes) != 0 {
 		t.Fatalf("named at first sight: %v", notes)
 	}
-	if shown, ok := view.Display(filepath.Join(skill, "index.d.ts")); ok {
-		t.Fatalf("got %q", shown)
+	if shown, _ := view.Display(filepath.Join(skill, "index.d.ts")); shown != "~bptypes/index.d.ts" {
+		t.Fatalf("the second call that shows it names it and prints under it, got %q", shown)
 	}
 	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, which 2 of the paths shown to you ran through; ~bptypes/ works") {
 		t.Fatalf("notes %v", notes)
@@ -198,9 +195,7 @@ func TestLaterNotesAreBriefUntilManyCallsHavePassed(t *testing.T) {
 	// name shows the paths of one call that earn leaf's directory a name, and returns the note on it.
 	name := func(leaf string) string {
 		directory := deep(t, filepath.Join(root, leaf), leaf)
-		for i := range 8 {
-			view.Display(filepath.Join(directory, fmt.Sprintf("f%d", i)))
-		}
+		untilNamed(t, view, directory)
 		notes := defined.Announced("main")
 		if len(notes) != 1 {
 			t.Fatalf("notes %v", notes)
@@ -210,7 +205,7 @@ func TestLaterNotesAreBriefUntilManyCallsHavePassed(t *testing.T) {
 	if got := name("widgets"); !strings.HasPrefix(got, "[nib named ~bewidgets = ") {
 		t.Fatalf("the first note is told in full, got %q", got)
 	}
-	if got := name("gadgets"); !strings.HasPrefix(got, "[~begadgets = gadgets/zenit/src/server/java/be/elevenways/gadgets, ") || !strings.HasSuffix(got, " paths shown]") {
+	if got := name("gadgets"); !strings.HasPrefix(got, "[~begadgets = "+filepath.ToSlash(filepath.Join(root, "gadgets"))+"/zenit/src/server/java/be/elevenways/gadgets, ") || !strings.HasSuffix(got, " paths shown]") {
 		t.Fatalf("got %q", got)
 	}
 	// Calls that show paths count toward telling a note in full again.
@@ -358,23 +353,33 @@ func TestLearnedNamesThatSaveNothingInTheBaseAreNeitherKeptNorLoaded(t *testing.
 	}
 }
 
-// showSix prints six paths in directory to a fresh server of root keeping names in file, enough for nib to name it, and returns the notes.
-func showSix(file, root, directory string) []string {
+// showUntilNamed prints paths in directory to a fresh server of root keeping names in file until nib names it, and returns the notes.
+func showUntilNamed(t *testing.T, file, root, directory string) []string {
+	t.Helper()
 	defined := NewDefined()
 	defined.Automatic(file, root)
-	view := (&Table{Base: root}).For(defined, "main")
-	for i := range 6 {
-		view.Display(filepath.Join(directory, fmt.Sprintf("W%d.java", i)))
-	}
+	untilNamed(t, (&Table{Base: root}).For(defined, "main"), directory)
 	return defined.Announced("main")
+}
+
+// untilNamed shows paths in directory to view until one prints under a name nib made, and returns how many it showed.
+func untilNamed(t *testing.T, view *View, directory string) int {
+	t.Helper()
+	for i := range 40 {
+		if _, ok := view.Display(filepath.Join(directory, fmt.Sprintf("W%d.java", i))); ok {
+			return i + 1
+		}
+	}
+	t.Fatalf("%s was never named", directory)
+	return 0
 }
 
 func TestAKeptNameStaysWhileSessionsPrintUnderItAndGoesOnceUnused(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	widgets := deep(t, root, "widgets")
 	file := filepath.Join(t.TempDir(), "learned.json")
-	showSix(file, root, widgets)
-	showSix(file, root, widgets)
+	showUntilNamed(t, file, root, widgets)
+	showUntilNamed(t, file, root, widgets)
 	// A third session starts with the name; a path it prints under the name counts it once more, however many it prints.
 	table := &Table{Base: root}
 	table.AddLearned(file)
@@ -401,7 +406,7 @@ func TestAKeptNameStaysWhileSessionsPrintUnderItAndGoesOnceUnused(t *testing.T) 
 		t.Fatalf("a stale name was carried: %v", stale.Entries)
 	}
 	gadgets := deep(t, root, "gadgets")
-	showSix(file, root, gadgets)
+	showUntilNamed(t, file, root, gadgets)
 	if kept := readLearned(file, root); len(kept) != 1 || kept[0].Name != "begadgets" || kept[0].Runs != 1 {
 		t.Fatalf("kept %+v", kept)
 	}
@@ -475,7 +480,7 @@ func TestAFileFromBeforeSessionsWereCountedKeepsOnlyNamesNibMakesAsOneSession(t 
 		t.Fatalf("carried %v", next.Entries)
 	}
 	// The name nib makes counts as one session, so the next one that names the folder gets that name again, and the one after starts with it.
-	if notes := showSix(file, root, gadgets); len(notes) != 1 || !strings.Contains(notes[0], "~begadgets2 = ") {
+	if notes := showUntilNamed(t, file, root, gadgets); len(notes) != 1 || !strings.Contains(notes[0], "~begadgets2 = ") {
 		t.Fatalf("notes %v", notes)
 	}
 	if kept := readLearned(file, root); len(kept) != 1 || kept[0].Name != "begadgets2" || kept[0].Runs != 2 {
@@ -491,4 +496,34 @@ func TestAFileFromBeforeSessionsWereCountedKeepsOnlyNamesNibMakesAsOneSession(t 
 func quoted(text string) string {
 	data, _ := json.Marshal(text)
 	return string(data)
+}
+
+func TestPreviewedPathsAllPrintUnderTheNameTheyEarnAndCountOnce(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	widgets := deep(t, root, "widgets")
+	defined := NewDefined()
+	defined.Automatic("", root)
+	view := (&Table{Base: root}).For(defined, "main")
+	var paths []string
+	for i := range 40 {
+		paths = append(paths, filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
+	}
+	view.Preview(paths)
+	for _, path := range paths {
+		if shown, _ := view.Display(path); shown != "~bewidgets/"+filepath.Base(path) {
+			t.Fatalf("got %q", shown)
+		}
+	}
+	// Previewed paths count once: the name comes at the same count as when each path is only displayed.
+	alone := NewDefined()
+	alone.Automatic("", root)
+	count := untilNamed(t, (&Table{Base: root}).For(alone, "main"), widgets)
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], fmt.Sprintf("which %d of the paths shown to you ran through", count)) {
+		t.Fatalf("notes %v, want the count %d", notes, count)
+	}
+	// The next call counts its paths again.
+	view.Display(paths[0])
+	if got := defined.uses["main"]["bewidgets"]; got != 41 {
+		t.Fatalf("uses %d", got)
+	}
 }

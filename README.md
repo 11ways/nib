@@ -965,16 +965,18 @@ above it that say something, outer first, and its own folder, or that folder's l
 characters: `~bewidgets` for `.../java/be/elevenways/widgets`, `~bptypes` for
 `bundled-skills/2.1.302/<hash>/plugin-authoring/types`, `~cpnib` for `claude/projects/-home-skerit-projects-nib`, as a
 hash or a version says nothing and is passed over; a name that is taken gets a number after it, and no name nib makes is
-over 12 characters. It ends the response with one note, and prints every later path under the name from the next call
-on, so one response prints all its paths alike and a listing names each folder once:
-`[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through (or, named at once, `too
+over 12 characters. The name holds at once: `read`, `grep`, `find` and hosted tools' locations count every path a
+response will print before printing any, so all of them print under a name they earn, and a listing names each folder
+once; nibash, whose output streams, prints its later paths under it. One note, which names the directory whole, opens
+the response:
+`[nib named ~bewidgets = /home/me/zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through (or, named at once, `too
 long to print again`); ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]`. Only an
 agent's first such note is told in full, and the first again once 25 more calls have shown it paths; the others are
-brief: `[~bewidgets = zenit/src/server/java/be/elevenways/widgets, 6 paths shown]`. Such a name behaves as one the agent
-defined with `hash -d`, at most 8 per agent. When nib learns that an agent's context was compacted or cleared (see held
-rows below), the notes went with it: the first path printed under a name the agent got before then, its own, nib's or
-inherited, tells of it again
-(`[~bewidgets = zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared; ...]`
+brief: `[~bewidgets = /home/me/zenit/src/server/java/be/elevenways/widgets, 6 paths shown]`. Such a name behaves as one
+the agent defined with `hash -d`, at most 8 per agent. When nib learns that an agent's context was compacted or
+cleared (see held rows below), the notes went with it: the first path printed under a name the agent got before then,
+its own, nib's or inherited, tells of it again
+(`[~bewidgets = /home/me/zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared; ...]`
 in full for the first, `[~bewidgets = ...]` after), and a subagent, whose first call's greeting listed its names, is
 greeted again; the server's own names are in the instructions, which a compaction keeps. Both kinds are kept for later
 sessions of the same server directory, the 16 used last, in `~/.local/state/nib/names/` (`$XDG_STATE_HOME` when set),

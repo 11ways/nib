@@ -15,20 +15,22 @@ import (
 func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	deep := filepath.Join(directory, "zenit", "src", "server", "java", "be", "elevenways", "widgets")
-	for i := range 8 {
+	for i := range 12 {
 		file(t, filepath.Join(deep, fmt.Sprintf("W%d.java", i)), "class W {}\n")
 	}
 	learned := filepath.Join(t.TempDir(), "learned.json")
 	c := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: learned}, nil, nil, false)
-	var last string
-	for i := range 6 {
-		last = text(c.call(t, readCall(filepath.Join(deep, fmt.Sprintf("W%d.java", i)))))
-		if i < 5 && strings.Contains(last, "nib named") {
-			t.Fatalf("named after %d reads: %s", i+1, last)
-		}
+	last, named := "", 0
+	for named < 12 && !strings.Contains(last, "nib named") {
+		last = text(c.call(t, readCall(filepath.Join(deep, fmt.Sprintf("W%d.java", named)))))
+		named++
 	}
-	// Six shown paths save more than the note that tells of the name costs; the name takes effect from the next call.
-	if !strings.HasPrefix(last, "[zenit/src/server/java/be/elevenways/widgets/W5.java#") || !strings.HasSuffix(last, "\n\n[nib named ~bewidgets = zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through; ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]") {
+	if named < 3 {
+		t.Fatalf("named after %d reads: %s", named, last)
+	}
+	// The note comes first and names the directory whole; the read that earned the name prints under it already.
+	want := fmt.Sprintf("[nib named ~bewidgets = %s, which %d of the paths shown to you ran through; ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]\n\n[~bewidgets/W%d.java#", filepath.ToSlash(deep), named, named-1)
+	if !strings.HasPrefix(last, want) {
 		t.Fatalf("got:\n%s", last)
 	}
 	// The name works as input and in output, and the note is told once.
@@ -38,7 +40,7 @@ func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 	}
 	// Once a second server of this directory made it too, the next one has the name from the start, in its instructions.
 	second := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: learned}, nil, nil, false)
-	for i := range 6 {
+	for i := range 12 {
 		second.call(t, readCall(filepath.Join(deep, fmt.Sprintf("W%d.java", i))))
 	}
 	table := &names.Table{Base: directory}
@@ -48,7 +50,7 @@ func TestADirectoryAgentsKeepReadingInGetsANameTheyAreToldOf(t *testing.T) {
 	}
 }
 
-func TestNamesMadeWhileAListingPrintsApplyFromTheNextCall(t *testing.T) {
+func TestANameMadeWhileAListingPrintsHoldsForTheWholeListing(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	deep := filepath.Join(directory, "zenit", "src", "server", "java", "be", "elevenways", "widgets")
 	for _, name := range []string{"a.txt", "b.txt", "z.txt"} {
@@ -60,21 +62,35 @@ func TestNamesMadeWhileAListingPrintsApplyFromTheNextCall(t *testing.T) {
 	c := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: filepath.Join(t.TempDir(), "learned.json")}, nil, nil, false)
 	find := &mcp.CallToolParams{Name: "find", Arguments: map[string]any{"paths": []string{"zenit"}}}
 	first := text(c.call(t, find))
-	listing, notes, _ := strings.Cut(first, "\n\n[nib named ")
-	// Every row of the listing prints the same way, so each folder is named once, its whole count with it.
-	if strings.Contains(listing, "~") || strings.Count(listing, "sub/") != 1 || notes == "" {
+	notes, listing, _ := strings.Cut(first, "\n\n")
+	// The note comes first, and every row of the listing prints under the name.
+	if !strings.HasPrefix(notes, "[nib named ~bewidgets = "+filepath.ToSlash(deep)+", ") || !strings.HasPrefix(listing, "11 files under ~bewidgets/") || strings.Contains(listing, "zenit/src") || strings.Count(listing, "sub/") != 1 {
 		t.Fatalf("got:\n%s", first)
 	}
 	again := text(c.call(t, find))
-	if !strings.Contains(again, "~bewidgets/") || strings.Contains(again, "zenit/src") {
+	if !strings.Contains(again, "~bewidgets/") || strings.Contains(again, "zenit/src") || strings.Contains(again, "nib named") {
 		t.Fatalf("got:\n%s", again)
+	}
+}
+
+func TestANameMadeWhileAGrepPrintsHoldsForEveryFileItShows(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	deep := filepath.Join(directory, "zenit", "src", "server", "java", "be", "elevenways", "widgets")
+	for i := range 12 {
+		file(t, filepath.Join(deep, fmt.Sprintf("W%02d.java", i)), "class W {}\n")
+	}
+	c := connect(t, Options{Directory: directory, Names: &names.Table{Base: directory}, NamesFile: filepath.Join(t.TempDir(), "learned.json")}, nil, nil, false)
+	got := text(c.call(t, &mcp.CallToolParams{Name: "grep", Arguments: map[string]any{"pattern": "class", "paths": []string{"zenit"}}}))
+	notes, matches, _ := strings.Cut(got, "\n\n")
+	if !strings.HasPrefix(notes, "[nib named ~bewidgets = "+filepath.ToSlash(deep)+", ") || strings.Count(matches, "[~bewidgets/W") != 12 || strings.Contains(matches, "zenit/src") {
+		t.Fatalf("got:\n%s", got)
 	}
 }
 
 func TestNamesAreToldAgainAfterAnAgentsContextDrops(t *testing.T) {
 	directory := resolvedPath(t, t.TempDir())
 	deep := filepath.Join(directory, "zenit", "src", "server", "java", "be", "elevenways", "widgets")
-	for i := range 8 {
+	for i := range 12 {
 		file(t, filepath.Join(deep, fmt.Sprintf("W%d.java", i)), "class W {}\n")
 	}
 	r := &records{byUse: map[string]hookstate.Agent{}}
@@ -86,7 +102,7 @@ func TestNamesAreToldAgainAfterAnAgentsContextDrops(t *testing.T) {
 		}
 		return text(c.call(t, r.by(*agent, readCall(path))))
 	}
-	for i := range 6 {
+	for i := range 12 {
 		read(nil, filepath.Join(deep, fmt.Sprintf("W%d.java", i)))
 	}
 	if got := read(nil, "~bewidgets/W6.java"); strings.Contains(got, "~bewidgets =") {
@@ -96,7 +112,7 @@ func TestNamesAreToldAgainAfterAnAgentsContextDrops(t *testing.T) {
 	d.dropped = time.Now()
 	d.mu.Unlock()
 	// The note went with the rest of the context, so the next path printed under the name tells of it again, in full; then not again.
-	if got := read(nil, "~bewidgets/W7.java"); !strings.HasSuffix(got, "\n\n[~bewidgets = zenit/src/server/java/be/elevenways/widgets, a name you got before your context was compacted or cleared; ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]") {
+	if got := read(nil, "~bewidgets/W7.java"); !strings.HasPrefix(got, "[~bewidgets = "+filepath.ToSlash(deep)+", a name you got before your context was compacted or cleared; ~bewidgets/ works in every tool and in nibash, for you and the subagents you start]\n\n") {
 		t.Fatalf("after the drop: %s", got)
 	}
 	if got := read(nil, "~bewidgets/W0.java"); strings.Contains(got, "~bewidgets =") {

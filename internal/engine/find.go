@@ -184,6 +184,11 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		}
 		return Result{Text: fmt.Sprintf("No files found (none of the %d listed pass the filters)", len(names))}, nil
 	}
+	previewed := make([]string, len(page))
+	for i, item := range page {
+		previewed[i] = item.name
+	}
+	ctx.preview(previewed)
 	rows := make([]listedRow, len(page))
 	for i, item := range page {
 		rows[i].path = ctx.relativeDisplay(item.name)

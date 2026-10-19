@@ -40,29 +40,30 @@ type Defined struct {
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
 // directory that automatic naming weighs, since the call (plus one) each was first shown in, worked the directories the agent changed into
-// or wrote a file in, auto the names it made, and made those not yet told, which take effect once told. calls counts the calls that showed
-// the agent paths, full the call of the last note told in full, and observed that the current call showed one. untold are the names the
-// agent got before its context was last dropped, and retell those of them a path in the current call ran through.
+// or wrote a file in, auto the names it made, made those not yet told, and previewed the paths the current call counted before printing
+// them. calls counts the calls that showed the agent paths, full the call of the last note told in full, and observed that the current call
+// showed one. untold are the names the agent got before its context was last dropped, and retell those of them a path in the current call
+// ran through.
 type defined struct {
-	list     []definition
-	own      int
-	counts   map[string]int
-	since    map[string]int
-	worked   map[string]bool
-	auto     int
-	made     []made
-	calls    int
-	full     int
-	observed bool
-	untold   map[string]bool
-	retell   []made
+	list      []definition
+	own       int
+	counts    map[string]int
+	since     map[string]int
+	worked    map[string]bool
+	auto      int
+	made      []made
+	previewed map[string]bool
+	calls     int
+	full      int
+	observed  bool
+	untold    map[string]bool
+	retell    []made
 }
 
-// made is a name nib made and has not told of yet: the directory as it printed, and the shown paths that ran through it.
+// made is a name nib made and has not told of yet, with the shown paths that ran through its directory.
 type made struct {
 	Entry
-	prefix string
-	count  int
+	count int
 }
 
 // definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited.
@@ -199,17 +200,29 @@ func (v *View) table() *Table {
 func (v *View) Expand(input string) (string, bool) { return v.table().Expand(input) }
 
 // Display is canonical under the deepest named directory holding it; ok is false when none does. With automatic naming on, the path counts
-// toward naming a directory it runs through; a name made then takes effect once Announced tells of it, so one response prints every path the
-// same way. A name the agent got before its context was dropped is told again once a path printed under it.
+// toward naming a directory it runs through, unless Preview counted it already, and a name made then holds for this path and the rest. A name
+// the agent got before its context was dropped is told again once a path printed under it.
 func (v *View) Display(canonical string) (string, bool) {
+	if !v.defined.previewed(v.agent, canonical) {
+		v.defined.observe(v.agent, v.table(), filepath.Dir(canonical))
+	}
 	table := v.table()
-	v.defined.observe(v.agent, table, filepath.Dir(canonical))
 	shown, ok := table.Display(canonical)
 	if ok {
 		v.defined.mention(v.agent, table, shown)
 		v.defined.use(v.agent, shown)
 	}
 	return shown, ok
+}
+
+// Preview counts the canonical paths a response is about to print, as Display would, so a name they earn holds for every one of them; Display
+// then counts them no more in this call.
+func (v *View) Preview(canonicals []string) {
+	for _, canonical := range canonicals {
+		if v.defined.preview(v.agent, canonical) {
+			v.defined.observe(v.agent, v.table(), filepath.Dir(canonical))
+		}
+	}
 }
 
 // Observe counts path, an absolute path the agent used, toward naming a directory it runs through, as a path shown to it counts: from the

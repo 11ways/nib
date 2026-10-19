@@ -56,9 +56,10 @@ func (d *Defined) Automatic(file, base string) {
 	d.automatic, d.file, d.base, d.run = true, file, base, hex.EncodeToString(id)
 }
 
-// Announced are the notes on names nib made for agent since the last call, once each, and makes those names take effect, then the notes
-// again on names its paths ran through that it got before its context was dropped; call it once at the end of each call. The first note is
-// told in full, as is the first after fullAgain more calls that showed paths, or after a drop, the rest briefly.
+// Announced are the notes on names nib made for agent in this call, once each, then the notes again on names its paths ran through that it
+// got before its context was dropped; call it once at the end of each call, and put the notes before the response, whose paths already
+// print under those names. The first note is told in full, as is the first after fullAgain more calls that showed paths, or after a drop,
+// the rest briefly.
 func (d *Defined) Announced(agent string) []string {
 	if d == nil {
 		return nil
@@ -82,21 +83,20 @@ func (d *Defined) Announced(agent string) []string {
 	}
 	var notes []string
 	for _, m := range names.made {
-		names.list = append(names.list, definition{m.Entry, d.Now().UnixNano(), "automatic"})
 		if inFull() {
-			notes = append(notes, note(m.Name, m.prefix, m.count))
+			notes = append(notes, note(m.Name, m.Directory, m.count))
 		} else {
-			notes = append(notes, brief(m.Name, m.prefix, m.count))
+			notes = append(notes, brief(m.Name, m.Directory, m.count))
 		}
 	}
 	for _, m := range names.retell {
 		if inFull() {
-			notes = append(notes, fmt.Sprintf("[~%s = %s, a name you got before your context was compacted or cleared; ~%s/ works in every tool and in nibash, for you and the subagents you start]", m.Name, filepath.ToSlash(m.prefix), m.Name))
+			notes = append(notes, fmt.Sprintf("[~%s = %s, a name you got before your context was compacted or cleared; ~%s/ works in every tool and in nibash, for you and the subagents you start]", m.Name, filepath.ToSlash(m.Directory), m.Name))
 		} else {
-			notes = append(notes, fmt.Sprintf("[~%s = %s]", m.Name, filepath.ToSlash(m.prefix)))
+			notes = append(notes, fmt.Sprintf("[~%s = %s]", m.Name, filepath.ToSlash(m.Directory)))
 		}
 	}
-	names.made, names.retell = nil, nil
+	names.made, names.retell, names.previewed = nil, nil, nil
 	return notes
 }
 
@@ -164,8 +164,7 @@ func (d *Defined) mention(agent string, table *Table, shown string) {
 	}
 	delete(names.untold, name)
 	names.observed = true
-	rest := &Table{Base: table.Base, Entries: slices.DeleteFunc(slices.Clone(table.Entries), func(e Entry) bool { return e.Name == name })}
-	names.retell = append(names.retell, made{Entry{name, home}, printed(rest, home), 0})
+	names.retell = append(names.retell, made{Entry{name, home}, 0})
 }
 
 // printed is directory as a path shows it with table: under a name, relative to the table's base inside it, else absolute.
@@ -184,8 +183,8 @@ func useful(base string, entry Entry) bool {
 }
 
 // observe counts the directories from directory up, below the deepest named one holding it, and names the one that saves the most among
-// those with a printed prefix of autoChars or more that autoAtOnce or the characters saved so far make worth a note. A directory whose name
-// holds a control character is never named.
+// those with a printed prefix of autoChars or more that autoAtOnce or the characters saved so far make worth a note. A name made takes effect
+// at once, so the rest of the response prints under it. A directory whose name holds a control character is never named.
 func (d *Defined) observe(agent string, table *Table, directory string) {
 	if d == nil || !d.automatic || strings.ContainsFunc(directory, unicode.IsControl) {
 		return
@@ -205,13 +204,6 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 	if names.counts == nil {
 		names.counts, names.since = map[string]int{}, map[string]int{}
 	}
-	// Names made in this call but not yet told count as taken and as named, so a path below one adds nothing until it takes effect.
-	if len(names.made) > 0 {
-		table = &Table{Base: table.Base, Entries: slices.Clone(table.Entries)}
-		for _, m := range names.made {
-			table.Entries = append(table.Entries, m.Entry)
-		}
-	}
 	best, saving := "", 0
 	for ; directory != filepath.Dir(directory); directory = filepath.Dir(directory) {
 		// A named directory, or the server's own for a path inside it, prints no further up: nothing above it is ever shown.
@@ -225,7 +217,7 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		names.counts[directory]++
 		count := names.counts[directory]
 		saved := count * (len(prefix) - len(stem(filepath.Base(directory))) - 3)
-		worth := count >= autoUses && saved >= len(note("x", prefix, count))
+		worth := count >= autoUses && saved >= len(note("x", directory, count))
 		if len(prefix) >= autoAtOnce {
 			if names.since[directory] == 0 {
 				names.since[directory] = names.calls + 1
@@ -248,7 +240,8 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		return
 	}
 	entry := Entry{name, best}
-	names.made = append(names.made, made{entry, shown(best), names.counts[best]})
+	names.list = append(names.list, definition{entry, d.Now().UnixNano(), "automatic"})
+	names.made = append(names.made, made{entry, names.counts[best]})
 	names.auto++
 	d.learnLocked(entry)
 }
@@ -269,6 +262,39 @@ func (d *Defined) work(agent, directory string) {
 		names.worked = map[string]bool{}
 	}
 	names.worked[directory] = true
+}
+
+// preview marks path as counted before the current call printed it; ok is false when it was already, or automatic naming is off.
+func (d *Defined) preview(agent, path string) bool {
+	if d == nil || !d.automatic {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		names = &defined{}
+		d.agents[agent] = names
+	}
+	if names.previewed[path] {
+		return false
+	}
+	if names.previewed == nil {
+		names.previewed = map[string]bool{}
+	}
+	names.previewed[path] = true
+	return true
+}
+
+// previewed reports whether the current call counted path before printing it.
+func (d *Defined) previewed(agent, path string) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	return names != nil && names.previewed[path]
 }
 
 // firstSightLocked reports whether directory is worth a name the first time it is shown: the agent works in it or below it, or an earlier
@@ -293,14 +319,14 @@ func (d *Defined) firstSightLocked(names *defined, directory string) bool {
 	return !ignored
 }
 
-// note announces in full a name nib made for the directory printed as prefix, which count shown paths ran through.
-func note(name, prefix string, count int) string {
-	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, filepath.ToSlash(prefix), why(count, "which %d of the paths shown to you ran through"), name)
+// note announces in full a name nib made for directory, which count shown paths ran through.
+func note(name, directory string, count int) string {
+	return fmt.Sprintf("[nib named ~%s = %s, %s; ~%s/ works in every tool and in nibash, for you and the subagents you start]", name, filepath.ToSlash(directory), why(count, "which %d of the paths shown to you ran through"), name)
 }
 
 // brief is note for an agent already told in full what such a name is.
-func brief(name, prefix string, count int) string {
-	return fmt.Sprintf("[~%s = %s, %s]", name, filepath.ToSlash(prefix), why(count, "%d paths shown"))
+func brief(name, directory string, count int) string {
+	return fmt.Sprintf("[~%s = %s, %s]", name, filepath.ToSlash(directory), why(count, "%d paths shown"))
 }
 
 // why is the reason a name was made: count shown paths in the words of format, or a prefix named at first sight.

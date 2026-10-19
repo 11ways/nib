@@ -21,6 +21,16 @@ type Piece struct {
 func (e *Engine) Show(ctx *Context, provider string, pieces []Piece) (Result, error) {
 	var blocks []*block
 	var images []Image
+	// Every file the answer points at counts toward a name before any prints, so a name they earn holds for all of them.
+	var named []string
+	for _, piece := range pieces {
+		if piece.Path != "" {
+			if real, err := realpath(ctx.resolve(piece.Path)); err == nil && !slices.Contains(named, real) {
+				named = append(named, real)
+			}
+		}
+	}
+	ctx.preview(named)
 	for i := 0; i < len(pieces); {
 		if pieces[i].Path == "" {
 			blocks = append(blocks, proseBlock(provider, pieces[i].Text))

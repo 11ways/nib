@@ -956,6 +956,7 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 		}
 		display := func(name string) string { return ctx.relativeDisplay(name) }
 		if mode == "count" && skip == 0 && len(names) > countRows {
+			ctx.preview(names)
 			if grouped := countsByFolder(names, func(name string) int { return len(files[name]) }, display); grouped != nil {
 				parts := []string{fmt.Sprintf("%d matches in %d files, by folder", total, len(names)), strings.Join(grouped, "\n"), "[grep one folder for its files' counts]"}
 				return Result{Text: strings.Join(append(parts, out.notes...), "\n\n")}, nil
@@ -965,6 +966,7 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 		if len(page) == 0 {
 			return Result{Text: fmt.Sprintf("No more results (%d matching files; skip %d is past the end)", len(names), skip)}, nil
 		}
+		ctx.preview(page)
 		rows := make([]listedRow, len(page))
 		for i, name := range page {
 			rows[i] = listedRow{path: display(name)}
@@ -1048,6 +1050,13 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
 		}
 		return texts, nil
 	}
+	canonicalPage := make([]string, 0, len(page))
+	for _, name := range page {
+		if real, err := realpath(name); err == nil {
+			canonicalPage = append(canonicalPage, real)
+		}
+	}
+	ctx.preview(canonicalPage)
 	targets := make([]*target, len(page))
 	var canonicals []string
 	for i, name := range page {

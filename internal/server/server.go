@@ -778,15 +778,14 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 				return s.pause(c, q), nil
 			}
 		}
+		// The names this call made print before the response, whose paths already use them.
+		notes = append(notes, s.defined.Announced(s.engineSession(c.agent))...)
 		if err != nil {
 			return failure(notes, err), nil
 		}
 		text := result.Text
 		if len(notes) > 0 {
 			text = strings.Join(notes, "\n") + "\n\n" + text
-		}
-		if named := s.defined.Announced(s.engineSession(c.agent)); len(named) > 0 {
-			text += "\n\n" + strings.Join(named, "\n")
 		}
 		content := []mcp.Content{&mcp.TextContent{Text: text}}
 		for _, image := range result.Images {

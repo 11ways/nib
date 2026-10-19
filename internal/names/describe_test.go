@@ -1,7 +1,6 @@
 package names
 
 import (
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -18,14 +17,13 @@ func TestDescribeSaysWhereEachNameCameFromAndHowManyPathsPrintedUnderIt(t *testi
 	if err := main.Define("g", gadgets); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 6 {
-		main.Display(filepath.Join(widgets, fmt.Sprintf("W%d.java", i)))
-	}
+	untilNamed(t, main, widgets)
 	defined.Announced("main")
 	main.Display(filepath.Join(widgets, "Last.java"))
 	main.Display(filepath.Join(fixed, "A.java"))
 	main.Display(filepath.Join(fixed, "B.java"))
-	want := []Described{{"fixed", fixed, "server", 2}, {"g", gadgets, "defined", 0}, {"bewidgets", widgets, "automatic", 1}}
+	// The path that earned bewidgets printed under it, as did Last.java.
+	want := []Described{{"fixed", fixed, "server", 2}, {"g", gadgets, "defined", 0}, {"bewidgets", widgets, "automatic", 2}}
 	if got := main.Describe(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("main:\n got %v\nwant %v", got, want)
 	}
