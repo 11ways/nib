@@ -99,7 +99,7 @@ Behavior is ported, not redesigned:
 nibash
   command      string, required
   description  string, optional: what the command is for, in 5 to 12 words
-  timeout      number, ms; default 120000, at most 600000
+  timeout      number, ms; default 120000 (600000 for a call that only waits), at most 600000
   background   boolean; run detached, return a job id and log path at once
 ```
 
@@ -362,12 +362,14 @@ When the command finishes or its time runs out, the sink is rendered once:
   keeps the run's own, since the request's ends with the answer (nib's own commands after a `wait` that went on as a job
   once failed with `context canceled`).
 - **`jobs`** lists the session's jobs with state, exit code and log path. **`kill %N`, `kill PID` and `kill -SIG`** work
-  on jobs and on any real process. **`wait %N`** waits for a job; past the call's timeout the waiting call goes on as a
-  job too. A call still in its request is no job, as one a client moved to its own background list is: a `wait` that
-  finds no such job, or no running one, while another call of the same agent runs adds a note after the output, `[no
-  job %2 to wait for: the call "..." still runs as a call, not a job, and its result comes back to that call]`, with
-  the command shortened to 60 characters. It is nib's own line, so it shows when the command sends `wait`'s message to
-  `/dev/null`; that message and the exit status stay bash's.
+  on jobs and on any real process. **`wait %N`** waits for a job. A call that only waits gets the longest timeout unless
+  it asks for less, and past it stops waiting rather than go on as a job that waits for jobs, with one note naming the
+  jobs that run on (`[job %4 still running after 10m0s; wait %4 again]`); a `wait` its call stops ends with status 130,
+  as bash's does when a signal interrupts it. A call still in its request is no job, as one a client moved to its own
+  background list is: a `wait` that finds no such job, or no running one, while another call of the same agent runs
+  adds a note after the output, `[no job %2 to wait for: the call "..." still runs as a call, not a job, and its result
+  comes back to that call]`, with the command shortened to 60 characters. It is nib's own line, so it shows when the
+  command sends `wait`'s message to `/dev/null`; that message and the exit status stay bash's.
 - **Reporting:** finished jobs are reported at the top of the next nibash result (`[job 3 finished, exit 0]`), since MCP
   cannot notify on its own; a `wait` that saw a job end tells it, so no result repeats it.
 - **Pushing a job's end.** Claude Code's channels let a server put a message in the session's conversation

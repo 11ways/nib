@@ -373,6 +373,10 @@ func (c *call) kill(ctx context.Context, args []string) error {
 			status = 1
 		}
 	}
+	if status == 0 {
+		// The interpreter takes a zero exit status given as an error for an internal error.
+		return nil
+	}
 	return interp.ExitStatus(status)
 }
 
@@ -415,10 +419,14 @@ func (c *call) wait(ctx context.Context, args []string) error {
 	} else if !slices.ContainsFunc(targets, (*job).running) {
 		c.noteWaitless("no running job")
 	}
+	c.mu.Lock()
+	c.waited = append(c.waited, targets...)
+	c.mu.Unlock()
 	status := 0
 	for _, j := range targets {
 		if err := c.session.jobs.await(ctx, j); err != nil {
-			return err
+			// Stopped by its call, wait ends as bash's does when a signal interrupts it; the interpreter takes an error for an internal one.
+			return interp.ExitStatus(waitInterrupted)
 		}
 		status = j.exit
 	}
@@ -460,3 +468,6 @@ func (c *call) noteWaitless(what string) {
 }
 
 var _ io.Writer = (*cappedWriter)(nil)
+
+// waitInterrupted is the status of a wait its call stopped: bash's for a wait a signal interrupts, 128 plus SIGINT's number.
+const waitInterrupted = 130

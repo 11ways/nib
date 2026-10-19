@@ -490,9 +490,12 @@ another. What does carry over is an agent's jobs, kept per client session, per C
 tells them apart, and per OpenCode session ([below](#the-hook)), and its named directories, which live in nib, not in
 the shell. Every program is a real process in its own process group. A command still running when the call's `timeout`
 ends (default 2 minutes, at most 10) is never stopped: the call returns the output so far and the command goes on as a
-job, its whole output, from the start, in the job's log. Only the client cancelling a call that still waits, `kill`, or
-the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Standard input is empty, and
-`GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and `TERM=dumb` keep programs from waiting on a terminal.
+job, its whole output, from the start, in the job's log. A call that only waits (`wait`, `wait %2`) gets 10 minutes
+unless it asks for less, and then stops waiting rather than go on as a job that waits for jobs, with a note naming
+the jobs, `[job %2 still running after 10m0s; wait %2 again]`, which run on. Only the client cancelling a call that
+still waits, `kill`, or the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Standard input
+is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and `TERM=dumb` keep programs from waiting on
+a terminal.
 
 - **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections), `cut -c`
   (character selections) and `wc` run as nib's own when their output goes to the model or into another of them and

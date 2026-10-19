@@ -282,7 +282,7 @@ type call struct {
 	links *links
 	logs  *logDirectory
 	jobs  map[int]*syntax.Stmt
-	// mu guards job, groups, written, system and waitless, which a call's stages and a job it turned into share.
+	// mu guards job, groups, written, system, waitless and waited, which a call's stages and a job it turned into share.
 	mu sync.Mutex
 	// job is set for calls that run a job's statement, and for a call that went on as a job; their processes join it.
 	job *job
@@ -300,6 +300,8 @@ type call struct {
 	piped []pipe
 	// waitless is the note of a wait that found nothing to wait for while other calls of the agent were running.
 	waitless string
+	// waited are the jobs the call's waits waited for, which a call that only waits names when its timeout ends it.
+	waited []*job
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -396,18 +398,17 @@ func pathRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("/._-+@%$~", r) || r == unknown
 }
 
-// Run runs one nibash call in a fresh interpreter; a command still running at the call's timeout goes on as a job.
+// Run runs one nibash call in a fresh interpreter; a command still running at the call's timeout goes on as a job, but a call that only waits
+// stops waiting.
 func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tools *engine.Context) (engine.Result, error) {
 	sess := s.session(key)
 	view, _ := tools.Names.(namer)
-	timeout := defaultTimeout
-	if request.Timeout != nil {
-		timeout = min(time.Duration(*request.Timeout)*time.Millisecond, maxTimeout)
-	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(request.Command), "")
 	if err != nil {
 		return engine.Result{Text: fmt.Sprintf("nibash: %v\n[exit 2]", err)}, nil
 	}
+	waits := onlyWaits(file)
+	timeout := callTimeout(request, waits)
 	check := s.checkRules(ctx, sess, file, request, tools, view)
 	if check.refusal != "" {
 		return engine.Result{Text: check.refusal + "\n[exit 126]"}, nil
@@ -486,6 +487,9 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		cancel()
 		err = <-done
 	case <-timer.C:
+		if waits {
+			return s.stopWaiting(ctx, c, request, timeout, cancel, done, before, bodies, reports)
+		}
 		return s.detach(ctx, c, request, timeout, cancel, done, before, bodies, reports)
 	}
 	cancel()
@@ -504,6 +508,63 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
+	}
+	return c.result(reports, text, tail, before, bodies), nil
+}
+
+// callTimeout is how long a call runs before its timeout: what it asked for, up to maxTimeout, else defaultTimeout, or maxTimeout for a call
+// that only waits, which a shorter one would only end early.
+func callTimeout(request server.ShellCall, waits bool) time.Duration {
+	switch {
+	case request.Timeout != nil:
+		return min(time.Duration(*request.Timeout)*time.Millisecond, maxTimeout)
+	case waits:
+		return maxTimeout
+	}
+	return defaultTimeout
+}
+
+// onlyWaits says whether every statement of file is a plain wait.
+func onlyWaits(file *syntax.File) bool {
+	if len(file.Stmts) == 0 {
+		return false
+	}
+	for _, s := range file.Stmts {
+		call, ok := s.Cmd.(*syntax.CallExpr)
+		if !ok || s.Background || s.Coprocess || s.Negated || len(call.Assigns) > 0 || len(call.Args) == 0 {
+			return false
+		}
+		if name, ok := wordLiteral(call.Args[0]); !ok || name != "wait" {
+			return false
+		}
+	}
+	return true
+}
+
+// stopWaiting ends a call that only waits at its timeout instead of turning it into a job, which would only wait for other jobs: the call
+// returns what it printed and names the jobs it waited for that still run, which go on.
+func (s *Shell) stopWaiting(ctx context.Context, c *call, request server.ShellCall, timeout time.Duration, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string) (engine.Result, error) {
+	cancel()
+	<-done
+	c.killAll()
+	c.tools.Ctx = ctx
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
+	c.mu.Lock()
+	waited := slices.Clone(c.waited)
+	c.mu.Unlock()
+	var specs []string
+	for _, j := range waited {
+		if spec := fmt.Sprintf("%%%d", j.id); j.running() && !slices.Contains(specs, spec) {
+			specs = append(specs, spec)
+		}
+	}
+	var tail []string
+	switch len(specs) {
+	case 0:
+	case 1:
+		tail = append(tail, fmt.Sprintf("[job %s still running after %s; wait %s again]", specs[0], timeout, specs[0]))
+	default:
+		tail = append(tail, fmt.Sprintf("[jobs %s still running after %s; wait %s again]", strings.Join(specs, ", "), timeout, strings.Join(specs, " ")))
 	}
 	return c.result(reports, text, tail, before, bodies), nil
 }
