@@ -689,9 +689,13 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
-  when the command changed them: `[changed by this command: a.txt#9C10 (was #3F2A), notes.md#1B2C (new)]`. A file whose
-  content is exactly a here-document of the command counts as known, like a `write`, so a checked edit needs no read. A
-  held file something else was already changing as the command began (it differed from the version the session holds,
+  when the command changed them: `[changed by this command: a.txt#9C10 (was #3F2A, +1 -1), notes.md#1B2C (new)]`. A
+  file the agent saw some of, changed in at most 10 lines, then shows the change under its header: removed lines as `-|`
+  rows, added ones as `+N:` rows of the new version, which count as seen, so an edit can anchor on them at once, and the
+  kept line before a hunk that only removes, so its place shows; at most 30 such rows per command, the rest counts only.
+  A file whose content is exactly a here-document of the command counts as known, like a `write`, so a checked edit
+  needs no read. A held file something else was already changing as the command began (it differed from the version
+  the session holds,
   another running call or job of the session names it, or it was found so before and changed in the last 10 s) is left
   out unless the command redirected to it, as a log a build writes is: its change need not be the command's.
 - **Jobs.** `background: true` runs the whole command as a job and returns its id and log at once. `cmd &` starts a job

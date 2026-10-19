@@ -1212,11 +1212,7 @@ func (e *Engine) sinceBlock(ctx *Context, t *target, source *text, since string,
 	for _, index := range sortedSet(listed) {
 		en := entries[index]
 		if en.removed != nil {
-			shown := visible(*en.removed)
-			if js.Len(shown) > maxLineLength {
-				shown = js.Slice(shown, 0, maxLineLength) + "..."
-			}
-			rows = append(rows, blockRow{text: "-|" + shown})
+			rows = append(rows, blockRow{text: removedRow(*en.removed, maxLineLength)})
 		} else {
 			r := lineRow(en.line, live.Lines[en.line-1], maxLineLength)
 			marker := " "

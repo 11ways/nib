@@ -350,7 +350,12 @@ When the command finishes or its time runs out, the sink is rendered once:
   - Before the call, nibash notes size and mtime of every file the session's store holds. Every file a redirect opens
     for writing is noted through `OpenHandler`.
   - Afterwards it lists those that changed or were created, with their new tags:
-    `[changed by this command: ~orm/A.java#9C10 (was #3F2A), notes.md#1B2C (new)]`.
+    `[changed by this command: ~orm/A.java#9C10 (was #3F2A, +1 -1), notes.md#1B2C (new)]`, the counts from a line diff
+    against the version held before.
+  - A file whose old version the agent saw some of and that changed in at most 10 lines (`changedLines`) is followed by
+    the change, its header then `-|` rows for removed lines and `+N:` rows of the new version, recorded as seen, and the
+    kept line before a hunk that only removes. One command shows at most 30 such rows (`changedRows`); later files, and
+    every larger change, give their counts only (`Engine.Changed`).
   - A file whose new content equals a here-document or here-string body in the command is recorded with every line
     known, as after `write`, since the model typed it.
   - A held file something else is changing is left out unless a redirect of the command wrote it, so a log a build

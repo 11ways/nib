@@ -9,7 +9,7 @@ import (
 )
 
 // A program the agent runs, a formatter say, makes a new version of a file it saw: lines that kept their number and text stay anchors, a
-// line it moved needs a ~ check, and a line it changed needs a read.
+// line it moved needs a ~ check, and so does a line it changed, which came as a row of the change and moved since.
 func TestLinesSeenStayAnchorsAfterACommandRewritesTheFile(t *testing.T) {
 	var lines []string
 	for i := 1; i <= 12; i++ {
@@ -23,8 +23,8 @@ func TestLinesSeenStayAnchorsAfterACommandRewritesTheFile(t *testing.T) {
 		t.Fatalf("a line the command left in place must stay an anchor: %v", err)
 	}
 	tag = tagOf(t, result.Text)
-	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 11:\n+changed", tag)); err == nil || !strings.Contains(err.Error(), "never displayed") {
-		t.Fatalf("a line the command changed must be refused, got %v", err)
+	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 11:\n+changed", tag)); err == nil || !strings.Contains(err.Error(), "lines 11 of a.txt, which moved since you saw or wrote them") {
+		t.Fatalf("a changed line shown as a row, then moved, must need a ~ check, got %v", err)
 	}
 	tag = tagOf(t, f.run("sed -i '1i top' a.txt"))
 	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+moved", tag)); err == nil || !strings.Contains(err.Error(), "lines 4 of a.txt, which moved since you saw or wrote them") {

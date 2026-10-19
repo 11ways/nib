@@ -674,6 +674,13 @@ func (c *call) adopt(j *job) {
 	}
 }
 
+const (
+	// changedLines is the most lines a program may change in a file the agent saw for the change to show as rows; past it only counts show.
+	changedLines = 10
+	// changedRows caps the rows of all changed files one command shows; a file past it shows its counts.
+	changedRows = 30
+)
+
 // changed lists the files the command created or changed: those the session held versions of, and those it wrote through a redirect.
 // A held file something else was already changing is left out unless the command redirected to it, since its change need not be the
 // command's. A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
@@ -708,7 +715,8 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		sorted = append(sorted, path)
 	}
 	slices.Sort(sorted)
-	var listed []string
+	var listed, blocks []string
+	budget := changedRows
 	for _, path := range sorted {
 		if strings.HasPrefix(path, "/dev/") || strings.HasPrefix(path, "/proc/") {
 			continue
@@ -735,7 +743,16 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		case found.created:
 			entry += " (new)"
 		case found.was != "" && found.was != view.Tag:
-			entry += fmt.Sprintf(" (was #%s)", found.was)
+			change := c.engine.Changed(c.tools, path, found.was, view, changedLines, budget)
+			if !change.Counted {
+				entry += fmt.Sprintf(" (was #%s)", found.was)
+				break
+			}
+			entry += fmt.Sprintf(" (was #%s, +%d -%d)", found.was, change.Added, change.Removed)
+			if len(change.Rows) > 0 {
+				budget -= len(change.Rows)
+				blocks = append(blocks, fmt.Sprintf("[%s#%s]", c.tools.Display(path), view.Tag), strings.Join(change.Rows, "\n"))
+			}
 		case found.was == "":
 			entry += " (written)"
 		default:
@@ -746,5 +763,5 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 	if len(listed) == 0 {
 		return ""
 	}
-	return "[changed by this command: " + strings.Join(listed, ", ") + "]"
+	return strings.Join(append([]string{"[changed by this command: " + strings.Join(listed, ", ") + "]"}, blocks...), "\n")
 }
