@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -115,6 +116,32 @@ func TestVagueRulesAreJudgedByTheDecisionModel(t *testing.T) {
 	}
 }
 
+func TestAVagueRuleWithAMatchIsAskedOnlyWhenTheCommandTextMatches(t *testing.T) {
+	rules := `{"rules": [{"rule": "Do not pipe or filter zenit-dev's output.", "match": "zenit-dev"}, {"rule": "Do not run whole test suites directly.", "match": "gradle|test"}, {"rule": "Never push to master."}]}`
+	f := newFixture(t, map[string]string{"nib.json": rules})
+	j := newJudge(func(q decider.RuleQuestion) []int {
+		if strings.Contains(q.Command, "| grep") {
+			return []int{0}
+		}
+		return nil
+	})
+	f.shell.Deciding(j)
+	if out := f.run("zenit-dev status | grep fail"); !strings.Contains(out, "against a rule in "+filepath.Join(f.directory, "nib.json")+": Do not pipe or filter zenit-dev's output.]") {
+		t.Fatalf("got %q", out)
+	}
+	f.run("echo zenit-dev test")
+	if len(j.asked) != 2 || !slices.Equal(j.asked[0].Rules, []string{"Do not pipe or filter zenit-dev's output.", "Never push to master."}) || len(j.asked[1].Rules) != 3 {
+		t.Fatalf("asked %+v", j.asked)
+	}
+	// With every vague rule scoped, a command no pattern matches asks nothing.
+	scoped := newFixture(t, map[string]string{"nib.json": `{"rules": [{"rule": "Do not pipe or filter zenit-dev's output.", "match": "zenit-dev"}]}`})
+	quiet := newJudge(func(decider.RuleQuestion) []int { return []int{0} })
+	scoped.shell.Deciding(quiet)
+	if out := scoped.run("echo fine | cat"); out != "fine" || len(quiet.asked) != 0 {
+		t.Fatalf("got %q, asked %+v", out, quiet.asked)
+	}
+}
+
 func TestVagueRulesUncheckedRunTheCommandAndSaySoOnce(t *testing.T) {
 	rules := `{"rules": [{"rule": "Do not run long builds directly."}]}`
 	f := newFixture(t, map[string]string{"nib.json": rules})
@@ -182,7 +209,7 @@ func TestARefusedCommandReadingANibLogPointsAtSkim(t *testing.T) {
 }
 
 func TestAMalformedRulesFileRefusesNamingIt(t *testing.T) {
-	for _, content := range []string{`{"rules": [{"program": "gradle"}]}`, `{"rules": [{"program": "x", "rule": "y", "why": "z"}]}`, `{"rules": [{"program": "x", "args": "(", "why": "z"}]}`, `{"rules": `} {
+	for _, content := range []string{`{"rules": [{"program": "gradle"}]}`, `{"rules": [{"program": "x", "rule": "y", "why": "z"}]}`, `{"rules": [{"program": "x", "args": "(", "why": "z"}]}`, `{"rules": [{"program": "x", "match": "y", "why": "z"}]}`, `{"rules": [{"rule": "y", "match": "("}]}`, `{"rules": `} {
 		f := newFixture(t, map[string]string{"nib.json": content})
 		out := f.run("echo x")
 		if !strings.HasPrefix(out, "[nothing ran: the rules in "+filepath.Join(f.directory, "nib.json")+" cannot be read: ") || !strings.HasSuffix(out, "\n[exit 126]") {

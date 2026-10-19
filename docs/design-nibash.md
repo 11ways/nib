@@ -437,7 +437,8 @@ AGENTS.md's sandbox rule gains this paragraph: system directories are readable b
 
 A repository forbids commands in its `nib.json` (`rules`; `names.ConfigFile` is the one place the file is named). An entry
 is exact (`program`, a name or list matched by base name, with an optional `args` regular expression over the arguments
-joined by spaces, and a required `why`) or vague (`rule`, text, with an optional `why`); anything else makes the file's
+joined by spaces, and a required `why`) or vague (`rule`, text, with an optional `match` regular expression over the
+command as written, without which it is always asked, and an optional `why`); anything else makes the file's
 rules unreadable, which refuses every call under it, naming the file. `rules.go` checks a parsed call before anything
 runs, background calls included:
 - **What it finds:** every `CallExpr` the AST holds, behind wrappers (`env`, `timeout`, `nice`, `xargs`, `sudo` and
@@ -447,7 +448,8 @@ runs, background calls included:
 - **Where:** the nearest `nib.json` holding rules at or above the call's directory and at or above each directory a
   literal `cd` names; a `cd` only roughly says where later commands run, so every found file's rules apply to the whole
   call. Under the sandbox only files inside the roots count.
-- **Exact rules** refuse at once. **Vague rules** go to the decision model as one `noul` question per rule
+- **Exact rules** refuse at once. **Vague rules** whose `match` finds nothing in the command text are dropped; the rest
+  go to the decision model as one `noul` question per rule, and none at all asks no model
   (`decider.RuleJudge`, the same models, endpoint, cache and observers as the decider; the band shows a `rules` card),
   with the whole command, its description and its directory; a rule counts as broken from `RuleThreshold` (0.7). With no
   decision model, or when every model fails, the command runs with a note, once per agent, file and reason.

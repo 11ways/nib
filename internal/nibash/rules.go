@@ -28,8 +28,11 @@ type rule struct {
 	// Args is a regular expression the command's arguments, joined by spaces, must match; empty matches any.
 	Args string `json:"args"`
 	Rule string `json:"rule"`
-	Why  string `json:"why"`
-	args *regexp.Regexp
+	// Match is a regular expression a vague rule's command text must match before the decision model is asked; empty asks always.
+	Match string `json:"match"`
+	Why   string `json:"why"`
+	args  *regexp.Regexp
+	match *regexp.Regexp
 }
 
 func (r rule) exact() bool { return len(r.Program) > 0 }
@@ -107,9 +110,16 @@ func parseRules(path string) *ruleFile {
 			return &ruleFile{path: path, err: fmt.Errorf("rule %d names programs but no \"why\" to tell the agent", i+1)}
 		case !r.exact() && r.Args != "":
 			return &ruleFile{path: path, err: fmt.Errorf("rule %d has \"args\" but no \"program\"", i+1)}
+		case r.exact() && r.Match != "":
+			return &ruleFile{path: path, err: fmt.Errorf("rule %d has \"match\", which only a vague \"rule\" takes; \"args\" narrows a program", i+1)}
 		}
 		if r.Args != "" {
 			if r.args, err = regexp.Compile(r.Args); err != nil {
+				return &ruleFile{path: path, err: fmt.Errorf("rule %d: %v", i+1, err)}
+			}
+		}
+		if r.Match != "" {
+			if r.match, err = regexp.Compile(r.Match); err != nil {
 				return &ruleFile{path: path, err: fmt.Errorf("rule %d: %v", i+1, err)}
 			}
 		}
@@ -361,7 +371,10 @@ func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File
 		}
 		for _, r := range f.rules {
 			if !r.exact() {
-				vagues = append(vagues, vague{f, r})
+				// A vague rule whose pattern the command text misses cannot apply, so no model is asked about it.
+				if r.match == nil || r.match.MatchString(request.Command) {
+					vagues = append(vagues, vague{f, r})
+				}
 				continue
 			}
 			for _, c := range sc.commands {

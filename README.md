@@ -902,7 +902,7 @@ builds and tests through nibash:
 {"rules": [
   {"program": "zenit-dev", "args": "^(build|test)( |$)", "why": "builds and tests go through the zd_build / zd_test tools"},
   {"program": ["gradlew", "gradle"], "why": "Gradle runs through zenit-dev's MCP tools"},
-  {"rule": "Do not run full test suites or long builds directly.", "why": "Use the zenit-dev MCP tools."}
+  {"rule": "Do not run full test suites or long builds directly.", "match": "gradle|test", "why": "Use the zenit-dev MCP tools."}
 ]}
 ```
 
@@ -911,7 +911,9 @@ Before a call runs, nibash finds every command it may run: in pipelines, lists, 
 matches by its base name, so `~/tools/zenit-dev` is `zenit-dev`; `args`, a regular expression, is matched against its
 arguments joined by spaces, a word nibash cannot know before running (`$cmd`) standing as written. An exact rule
 (`program`) refuses a matching call always. A vague rule (`rule`) is judged by the decision model
-(`NIB_DECIDER=openrouter`) against the whole command and its `description`; its answers are cached, so the same command
+(`NIB_DECIDER=openrouter`) against the whole command and its `description`, only when its `match`, a regular expression
+over the command as written, finds something (a rule without one is always asked; a call no vague rule matches asks no
+model at all), and only a score of 0.7 or more refuses; its answers are cached, so the same command
 asks once. A refused call runs nothing, background calls included, and prints one line per broken rule,
 `[nothing ran: zenit-dev build is against a rule in /path/nib.json: builds and tests go through the zd_build / zd_test tools]`,
 then `[exit 126]`; the agent cannot override it. When the refused call reads one of nibash's saved logs, as an argument
