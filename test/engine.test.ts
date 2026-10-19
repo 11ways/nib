@@ -77,7 +77,7 @@ describe("read", () => {
     expect((await f.read(":2-")).text).toBe(`[file.txt#${tag}]\n2:two\n3:three\n${ending}\n[3 lines total]`)
     expect((await f.read(":1+2")).text).toBe(`[file.txt#${tag}]\n1:one\n2:two\n[3 lines total]`)
     expect((await f.read(":-1")).text).toBe(`[file.txt#${tag}]\n3:three\n${ending}\n[3 lines total]`)
-    expect((await f.read(":1,3")).text).toBe(`[file.txt#${tag}]\n1:one\n...\n3:three\n${ending}\n[3 lines total]`)
+    expect((await f.read(":1,3")).text).toBe(`[file.txt#${tag}]\n1:one\n3:three\n${ending}\n[3 lines total]`)
     await expect(f.read(":4")).rejects.toThrow("beyond the end")
     await expect(f.read(":3-1")).rejects.toThrow("reversed")
   })
@@ -555,9 +555,9 @@ describe("edit", () => {
     expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]\n${movedLesson}`)
     expect(first.tag).toBe(fileTag(await readFile(f.filePath, "utf8")))
     const second = await f.edit(first.tag, [{ start: 2, content: "LINE 2", operation: "replace" }, { start: 12, content: "INSERTED B", operation: "replace" }])
-    expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n2:LINE 2\n3:line 3\n...\n11:inserted a\n12:INSERTED B\n13:line 11`)
+    expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n2:LINE 2\n3:line 3\n11:inserted a\n12:INSERTED B\n13:line 11`)
     const long = await f.edit(second.tag, [{ start: 1, content: Array.from({ length: 10 }, (_, index) => `new ${index}`).join("\n"), operation: "before" }])
-    expect(long.text).toBe(`[file.txt#${long.tag}]\n1:new 0\n...\n10:new 9\n11:line 1\n[lines 12-32 are old lines 2-22, moved down by 10]`)
+    expect(long.text).toBe(`[file.txt#${long.tag}]\n1:new 0\n10:new 9\n11:line 1\n[lines 12-32 are old lines 2-22, moved down by 10]`)
   })
 
   test("lines outside the tagged output are rejected with their content, then a straight retry succeeds", async () => {
@@ -1729,7 +1729,7 @@ describe("grep options", () => {
     // An import, the definition, a use in a value and a use in a body; 3 lines before and 12 after each would be 57 context lines.
     expect((await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], before: 3, after: 12 })).text).toBe([
       "4 matches in 1 files",
-      [`[size.ts#${fileTag(source)}]`, row(1), "...", ...rows(18, 33), "...", row(56), "...", row(80)].join("\n"),
+      [`[size.ts#${fileTag(source)}]`, row(1), ...rows(18, 33), row(56), row(80)].join("\n"),
       "[all 4 match rows shown, context lines only around the definition at size.ts:21: around all 4 they would be 57 lines, over grep's budget of 40; for another match's, read a range like size.ts:1-13]",
     ].join("\n\n"))
     await f.patch(`[size.ts#${fileTag(source)}]\nPUT 56:\n+const half = formatSize(1024)`)
@@ -1740,7 +1740,7 @@ describe("grep options", () => {
     // A hit every fifth line: 20 matches.
     const f = await fixture(Array.from({ length: 100 }, (_, index) => (index + 1) % 5 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const asked = (await f.engine.grep(f.ctx, { pattern: "hit", before: 0, after: 5 })).text
-    expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n...\n*60:hit 60\n")
+    expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n*60:hit 60\n")
     expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines only around the first 10: around all 20 they would be 76 lines, over grep's budget of 40; for another match's, read a range like file.txt:55-60]")
     // The default context goes to none of them once it would pass the budget: a hit every third line is 50 matches.
     const g = await fixture(Array.from({ length: 150 }, (_, index) => (index + 1) % 3 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
@@ -1748,7 +1748,7 @@ describe("grep options", () => {
     expect(plain).not.toContain("miss")
     expect(plain).toEndWith("\n\n[all 50 match rows shown, without context lines: around all 50 they would be 99 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:2-4]")
     // hit 5 to hit 25 of the first file: few enough for the default context.
-    expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n...\n 9:miss 9\n*10:hit 10\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n 9:miss 9\n*10:hit 10\n")
   })
 
   test("a definition is a match naming what its line declares: after a declaring word, as a container member or as a Markdown heading", async () => {
@@ -1772,7 +1772,7 @@ describe("grep options", () => {
     expect(await given("formatSize", ["notes.md"])).toBe("the definition at notes.md:3")
     // The definition wins over matches in a file earlier on the page.
     const python = (await grep("format_size", ["a.py", "b.py"])).text
-    expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n...\n*28:value = format_size(2)\n\n[b.py#")
+    expect(python).toContain("\n*1:from b import format_size\n*2:print(format_size(1))\n*28:value = format_size(2)\n\n[b.py#")
     expect(python).toContain("\n*1:def format_size(bytes):\n 2:    return bytes\n 3:# pad\n")
     expect(python).toContain("context lines only around the definition at b.py:1:")
   })
@@ -1783,8 +1783,8 @@ describe("grep options", () => {
     const lines = Array.from({ length: 30 }, (_, index) => [index % 2 ? `/** Doc ${index}. */` : "", `function f${index}() {`, `  return ${index}`, "}"]).flat()
     await writeFile(path.join(f.directory, "fns.ts"), lines.join("\n") + "\n")
     const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"], before: 2, after: 0 })).text
-    expect(text).toStartWith(`30 matches in 1 files\n\n[fns.ts#${fileTag(lines.join("\n") + "\n")}]\n 1:\n*2:function f0() {\n...\n 4:}\n 5:/** Doc 1. */\n*6:function f1() {\n`)
-    expect(text).toEndWith("\n...\n 116:}\n 117:/** Doc 29. */\n*118:function f29() {")
+    expect(text).toStartWith(`30 matches in 1 files\n\n[fns.ts#${fileTag(lines.join("\n") + "\n")}]\n 1:\n*2:function f0() {\n 4:}\n 5:/** Doc 1. */\n*6:function f1() {\n`)
+    expect(text).toEndWith("\n*114:function f28() {\n 116:}\n 117:/** Doc 29. */\n*118:function f29() {")
   })
 
   test("past the budget, definitions that did not ask for context share it and the rest stay a list", async () => {
@@ -1793,7 +1793,7 @@ describe("grep options", () => {
     await writeFile(path.join(f.directory, "fns.ts"), lines.join("\n") + "\n")
     const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"] })).text
     // One line before and one after: each definition comes to 2 lines, so 20 fit in 40.
-    expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n...\n 53:/** Doc 13. */\n*54:function f13() {\n")
+    expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n 53:/** Doc 13. */\n*54:function f13() {\n")
     expect(text).toEndWith("\n\n[all 30 match rows shown, context lines only around the first 20 of 30 definitions: around all 30 they would be 60 lines, over grep's budget of 40; for another match's, read a range like fns.ts:81-83]")
   })
 
@@ -2283,8 +2283,8 @@ describe("changes since a tag (read path#TAG)", () => {
     const now = fileTag(changed.join("\n") + "\n")
     expect((await f.read(`#${first.tag}`)).text).toBe([
       `[file.txt#${now}] changed since #${first.tag}: 2 lines added, 2 removed`,
-      " 3:l3", " 4:l4", "-|l5", "+5:FIVE", " 6:l6", " 7:l7", "...",
-      " 10:l10", " 11:l11", "-|l12", " 12:l13", " 13:l14", "...",
+      " 3:l3", " 4:l4", "-|l5", "+5:FIVE", " 6:l6", " 7:l7",
+      " 10:l10", " 11:l11", "-|l12", " 12:l13", " 13:l14",
       " 18:l19", " 19:l20", "+20:l21",
       "[lines 12-19 are old lines 13-20, moved up by 1]",
     ].join("\n"))

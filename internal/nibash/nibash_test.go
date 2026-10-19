@@ -98,7 +98,7 @@ func TestFileViewsPrintAnchoredRowsThatEditAccepts(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	out := f.run("grep -n needle a.txt")
 	tag := tagOf(t, out)
-	expect(t, out, fmt.Sprintf("[a.txt#%s]\n*2:two needle\n...\n*4:four needle", tag))
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n*2:two needle\n*4:four needle", tag))
 	// The rows were shown whole, so an edit anchored on them needs no read first.
 	result, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+four NEEDLE", tag))
 	if err != nil {

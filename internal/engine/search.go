@@ -1166,12 +1166,8 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 		covers []int
 	}
 	var groups []group
-	previous := 0
 	for _, line := range sortedSet(f.listed) {
 		g := group{line: line}
-		if previous != 0 && line > previous+1 {
-			g.rows = append(g.rows, "...")
-		}
 		marker := " "
 		if hits[line] {
 			marker = "*"
@@ -1200,7 +1196,6 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 				g.rows = append(g.rows, replacementRow(line, part, s, f.shape.columns))
 			}
 			groups = append(groups, g)
-			previous = line
 			continue
 		}
 		// A long matched line shows the stretches around its matches when cutting it at the start would hide them, and past matchColumns,
@@ -1236,7 +1231,6 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 			}
 		}
 		groups = append(groups, g)
-		previous = line
 	}
 	if f.anchored != nil {
 		groups = HeldGroups(groups, e.HeldLines(ctx, t.canonical, *f.anchored), func(g group) int {
@@ -1245,12 +1239,7 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 			}
 			return g.line
 		}, func(run []group, r HeldRun) group {
-			first := run[0]
-			marker := group{line: first.line, rows: []string{r.Marker()}, covers: r.Lines()}
-			if len(first.rows) > 1 {
-				marker.rows = append([]string{first.rows[0]}, marker.rows...)
-			}
-			return marker
+			return group{line: run[0].line, rows: []string{r.Marker()}, covers: r.Lines()}
 		})
 	}
 	notes := func(kept []group, stop int) []string {

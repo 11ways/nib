@@ -178,7 +178,7 @@ what changed since that version:
 ```
 
 Added lines print as `+N:TEXT`, unchanged context (2 lines around each change) as ` N:TEXT`, both numbered as the file
-is now and anchorable, and removed lines as `-|TEXT`, which carry no number. Gaps print as `...`. For each stretch of
+is now and anchorable, and removed lines as `-|TEXT`, which carry no number. For each stretch of
 unchanged lines that moved and holds a line the agent saw or wrote, a note gives the old numbers (at most 10 notes). The
 new version is recorded like an edit response: lines that kept both number and content stay seen, the rows shown are
 seen, and moved lines the agent knew stay known, so a `~` check anchors them. An unchanged file answers

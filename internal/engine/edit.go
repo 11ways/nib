@@ -1060,15 +1060,10 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 		indexes[k] = true
 	}
 	var out previewed
-	previous := -1
-	previousFull := false
 	for _, index := range sortedSet(indexes) {
 		whole := full[index]
-		// Map rows and notes carry their own numbers, so only a gap between two full rows gets an ellipsis.
 		if note, ok := notes[index]; ok {
 			out.output = append(out.output, note)
-		} else if whole && previousFull && index > previous+1 {
-			out.output = append(out.output, "...")
 		}
 		r := rows[index]
 		if whole {
@@ -1101,8 +1096,6 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 			out.output = append(out.output, fmt.Sprintf("%d~%s", index+1, clip(lines()[index])))
 			out.shown = append(out.shown, index+1)
 		}
-		previous = index
-		previousFull = whole
 	}
 	out.moved = len(notes) > 0
 	return out

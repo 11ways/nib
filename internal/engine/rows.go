@@ -223,11 +223,7 @@ func contextRows(lines []string, marked []int, radius, columns int) framed {
 		}
 	}
 	var out framed
-	previous := 0
 	for _, line := range sortedSet(display) {
-		if previous != 0 && line > previous+1 {
-			out.rows = append(out.rows, "...")
-		}
 		r := lineRow(line, lines[line-1], columns)
 		prefix := " "
 		if flagged[line] {
@@ -239,7 +235,6 @@ func contextRows(lines []string, marked []int, radius, columns int) framed {
 		} else {
 			out.marks = append(out.marks, r.marks)
 		}
-		previous = line
 	}
 	return out
 }

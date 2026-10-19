@@ -450,7 +450,6 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 	var rows []row
 	var current *engine.Source
 	headerAt := -1
-	previous := 0
 	for _, it := range items {
 		if it.plain {
 			if current != nil && engine.RowShaped.MatchString(it.text) {
@@ -463,13 +462,10 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		source := it.source
 		if current != source {
 			current = source
-			previous = 0
 			rows = append(rows, row{text: header(e, ctx, source), header: -1})
 			headerAt = len(rows) - 1
 		}
 		if it.display {
-			// A line under the header that is not the file's own breaks the run of its lines, so no "..." follows it.
-			previous = 0
 			text := it.text
 			if js.Len(text) > rowLimit {
 				text = string([]rune(text)[:rowLimit]) + "..."
@@ -477,10 +473,6 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 			rows = append(rows, row{text: text, header: headerAt, first: it.first, last: it.first})
 			continue
 		}
-		if previous != 0 && it.line != previous+1 && it.line != previous {
-			rows = append(rows, row{text: "...", header: headerAt})
-		}
-		previous = it.line
 		content, latest := lineOf(e, ctx, source, it.line)
 		if it.kept != nil {
 			// Part of the line is no anchor, whatever version it shows.

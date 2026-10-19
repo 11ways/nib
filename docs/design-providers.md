@@ -28,7 +28,7 @@ choice. The rows nib prints for it are still confined to the roots.
   - `{"path": "/absolute/file", "start": 10, "end": 20, "indexed": "..."}`: lines `start` to `end` of a file, shown as
     `[PATH#TAG]` and `N:TEXT` rows. `indexed`, optional, is the text of those lines (joined by `\n`) as the provider saw
     them, so nib can tell when the file changed since.
-- Locations of one file that follow each other with no text between them print as one block, with `...` between ranges.
+- Locations of one file that follow each other with no text between them print as one block.
 - `content` still carries a plain-text rendering for clients without nib. nib uses it only when `structuredContent` is
   missing, has another `nib` version, or holds a part it does not know: then the text is shown as prose and no rows are
   printed, so nothing is ever guessed.

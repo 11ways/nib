@@ -33,7 +33,7 @@ func TestShowPrintsLocationsAsReadRowsThatAnchorEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	tagValue := got.Text[strings.Index(got.Text, "#")+1 : strings.Index(got.Text, "]\n")]
-	want := fmt.Sprintf("1. a.py:1-2 score 0.9\n\n[a.py#%s]\n1:def a():\n2:    return 1\n...\n5:def b():\n[6 lines total]\n\ndone", tagValue)
+	want := fmt.Sprintf("1. a.py:1-2 score 0.9\n\n[a.py#%s]\n1:def a():\n2:    return 1\n5:def b():\n[6 lines total]\n\ndone", tagValue)
 	if got.Text != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got.Text, want)
 	}
@@ -62,7 +62,7 @@ func TestShowFollowsLinesThatMovedSinceTheProviderIndexedThem(t *testing.T) {
 	for _, part := range []string{
 		"[a.py changed since zemble indexed it: its lines 1-2 are now 3-4]",
 		"[a.py changed since zemble indexed it: lines 1-1 no longer hold what it found]",
-		"\n1:import os\n...\n3:def a():\n4:    return 1\n",
+		"\n1:import os\n3:def a():\n4:    return 1\n",
 		"[a.py has 4 lines now: zemble's lines 9-12 are past its end]",
 	} {
 		if !strings.Contains(got.Text, part) {

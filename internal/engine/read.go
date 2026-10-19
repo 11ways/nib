@@ -1115,11 +1115,7 @@ func (e *Engine) sinceBlock(ctx *Context, t *target, source *text, since string,
 		}
 	}
 	var rows []blockRow
-	previous := -1
 	for _, index := range sortedSet(listed) {
-		if previous >= 0 && index > previous+1 {
-			rows = append(rows, blockRow{text: "..."})
-		}
 		en := entries[index]
 		if en.removed != nil {
 			shown := visible(*en.removed)
@@ -1139,7 +1135,6 @@ func (e *Engine) sinceBlock(ctx *Context, t *target, source *text, since string,
 				rows = append(rows, blockRow{text: marker + r.text, marks: r.marks})
 			}
 		}
-		previous = index
 	}
 	knew := func(line int) bool { return old.Seen != nil && knownLine(old, line) }
 	// Unchanged lines that moved by one offset, as stretches; only those holding a line the agent knew get a note.
@@ -1517,9 +1512,6 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 	var rows []blockRow
 	last := 0
 	for _, r := range selected {
-		if last > 0 && r.start > last+1 {
-			rows = append(rows, blockRow{text: "...", at: r.start})
-		}
 		for line := r.start; line <= r.end; line++ {
 			rows = append(rows, rowFor(line))
 		}
