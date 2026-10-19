@@ -28,6 +28,8 @@ type selection struct {
 	ranges  []lineRange
 	tail    int
 	symbols []string
+	// query is a SQL statement read runs on a database, everything after its path.
+	query string
 }
 
 var selectorPattern = regexp.MustCompile(`^(.*?):((?:[1-9]\d*(?:-(?:[1-9]\d*)?|\+[1-9]\d*)?|-[1-9]\d*)(?:,[1-9]\d*(?:-(?:[1-9]\d*)?|\+[1-9]\d*)?)*)$`)
@@ -832,12 +834,16 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 	var images []Image
 	single := false
 	for _, entry := range args.Paths {
-		selected, sel, err := splitSelector(entry, ctx)
-		if err != nil {
+		var selected string
+		var sel selection
+		var err error
+		if path, query := databaseQuery(ctx, entry); query != "" {
+			selected, sel = path, selection{query: query}
+		} else if selected, sel, err = splitSelector(entry, ctx); err != nil {
 			return Result{}, err
 		}
 		input, since := splitSince(selected, ctx)
-		narrowed := sel.ranges != nil || sel.tail > 0 || sel.symbols != nil
+		narrowed := sel.ranges != nil || sel.tail > 0 || sel.symbols != nil || sel.query != ""
 		if since != "" && (narrowed || args.Info || args.Plain) {
 			return Result{}, fmt.Errorf("%s: path#TAG shows what changed since that tag, so it takes no line selector, info or plain", entry)
 		}

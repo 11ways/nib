@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -56,7 +57,7 @@ func TestReadOfADatabaseOutlinesItsTablesAndViews(t *testing.T) {
 		"table runs, 30 rows: id INTEGER, status TEXT, log TEXT, data BLOB",
 		"table pins, 2 rows, without rowid: name TEXT, rev TEXT, pinned timestamp",
 		"view failed, 3 rows: id INTEGER, status TEXT",
-		"[read state.db:TABLE for its rows, state.db:TABLE:-15 for the last 15]",
+		"[read state.db:TABLE for its rows, state.db:TABLE:-15 for the last 15, state.db:SELECT ... for a query]",
 	}, "\n")
 	if got := readText(t, e, ctx, "state.db"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
@@ -167,5 +168,93 @@ func TestReadOfSeveralTablesOrALargeOneNotesWhatItLeftOut(t *testing.T) {
 	shown := len(lines) - 3
 	if want := fmt.Sprintf("[rows %d-3000 not shown; read big.db:events:%d+50 for more]", shown+1, shown+1); lines[len(lines)-1] != want {
 		t.Fatalf("ends %q, want %q, %d chars", lines[len(lines)-1], want, len(big))
+	}
+}
+
+func TestReadOfADatabaseQueryPrintsItsRowsLikeATableRead(t *testing.T) {
+	e, ctx, _ := databaseFixture(t)
+	for query, want := range map[string]string{
+		"SELECT id, status FROM runs WHERE status = 'fail' ORDER BY id DESC LIMIT 2": "[state.db] query, 2 rows\nid | status\n30 | fail\n20 | fail",
+		" with f as (select id, log from runs where id between 2 and 4) select * from f": "[state.db] query, 3 rows\nid | log\n" +
+			`2 | first line\nsecond \| line` + "\n3 | " + strings.Repeat("x", 120) + "... (+380 chars)\n4 | run 4",
+		// A colon inside a literal belongs to the query, and a timestamp column's text stays as stored.
+		"select name, pinned from pins where pinned = '2026-10-19 10:00:00' or rev = 'a:1' order by name desc": "[state.db] query, 1 row\nname | pinned\nzeta | 2026-10-19 10:00:00",
+		"select name, pinned from pins order by name desc":                                                     "[state.db] query, 2 rows\nname | pinned\nzeta | 2026-10-19 10:00:00\nalpha | NULL",
+		"PRAGMA table_info(pins)":                        "[state.db] query, 3 rows\ncid | name | type | notnull | dflt_value | pk\n0 | name | TEXT | 1 | NULL | 1\n1 | rev | TEXT | 0 | NULL | 0\n2 | pinned | timestamp | 0 | NULL | 0",
+		"values (1, 'a:b');":                             "[state.db] query, 1 row\ncolumn1 | column2\n1 | a:b",
+		"select data from runs where id = 4 -- the blob": "[state.db] query, 1 row\ndata\n<blob 3 bytes>",
+	} {
+		if got := readText(t, e, ctx, "state.db:"+query); got != want {
+			t.Errorf("%s: got\n%s\nwant\n%s", query, got, want)
+		}
+	}
+}
+
+func TestADatabaseQueryNeverWritesAndRunsOneStatement(t *testing.T) {
+	e, ctx, directory := databaseFixture(t)
+	original, _ := os.ReadFile(filepath.Join(directory, "state.db"))
+	for _, query := range []string{
+		"WITH x AS (SELECT 1) INSERT INTO runs (status) SELECT 'x' FROM x",
+		"PRAGMA user_version=5",
+	} {
+		if got := readText(t, e, ctx, "state.db:"+query); !strings.HasPrefix(got, "[state.db: ") || !strings.Contains(got, "readonly") || strings.Contains(got, "\n") {
+			t.Errorf("%s: got %q", query, got)
+		}
+	}
+	if got := readText(t, e, ctx, "state.db:INSERT INTO runs (status) VALUES ('x')"); !strings.Contains(got, "a query starts with SELECT, WITH, VALUES, PRAGMA or EXPLAIN") {
+		t.Errorf("an insert got %q", got)
+	}
+	if got := readText(t, e, ctx, "state.db:SELECT 1; DELETE FROM runs"); got != "[state.db: read runs one statement; drop what follows its first ;]" {
+		t.Errorf("two statements got %q", got)
+	}
+	if got := readText(t, e, ctx, "state.db:SELECT ';' AS semi; -- done"); got != "[state.db] query, 1 row\nsemi\n;" {
+		t.Errorf("a quoted semicolon got %q", got)
+	}
+	if got := readText(t, e, ctx, "state.db:SELECT FROM"); !strings.HasPrefix(got, "[state.db: ") || !strings.Contains(got, "syntax error") {
+		t.Errorf("a syntax error got %q", got)
+	}
+	if now, _ := os.ReadFile(filepath.Join(directory, "state.db")); string(now) != string(original) {
+		t.Fatal("the database changed")
+	}
+	check, err := sql.Open("sqlite", "file:"+filepath.Join(directory, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	var runs, version int
+	if err := check.QueryRow("select count(*), (select user_version from pragma_user_version) from runs").Scan(&runs, &version); err != nil || runs != 30 || version != 0 {
+		t.Fatalf("runs %d, user_version %d, %v", runs, version, err)
+	}
+}
+
+func TestALargeOrEndlessDatabaseQueryIsCappedOrStopped(t *testing.T) {
+	e, ctx, directory := databaseFixture(t)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(directory, "big.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("create table events (n integer, body text)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("with recursive c(n) as (select 1 union all select n + 1 from c where n < 3000) insert into events select n, printf('%0100d', n) from c"); err != nil {
+		t.Fatal(err)
+	}
+	capped := readText(t, e, ctx, "big.db:select n from events")
+	if lines := strings.Split(capped, "\n"); lines[0] != "[big.db] query, first 500 rows; more follow, narrow it with LIMIT/OFFSET or WHERE" || len(lines) != 502 || lines[501] != "500" {
+		t.Fatalf("got %d lines starting %q", len(lines), lines[0])
+	}
+	budget := readText(t, e, ctx, "big.db:select n, body from events where n <= 450")
+	lines := strings.Split(budget, "\n")
+	shown := len(lines) - 3
+	if want := fmt.Sprintf("[rows %d-450 not shown; narrow it with LIMIT/OFFSET or WHERE]", shown+1); lines[0] != "[big.db] query, 450 rows" || lines[len(lines)-1] != want {
+		t.Fatalf("starts %q, ends %q, want %q", lines[0], lines[len(lines)-1], want)
+	}
+	queryTimeout = 300 * time.Millisecond
+	defer func() { queryTimeout = 5 * time.Second }()
+	start := time.Now()
+	endless := readText(t, e, ctx, "big.db:WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c")
+	if endless != "[big.db: the query ran past 300ms and was stopped]" || time.Since(start) > 5*time.Second {
+		t.Fatalf("got %q after %s", endless, time.Since(start))
 	}
 }

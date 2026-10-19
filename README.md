@@ -21,7 +21,7 @@ bun typecheck           # go vet and tsgo --noEmit
 
 | Tool | Input | Purpose |
 | --- | --- | --- |
-| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `path@REV` reads a file as of a git commit, or a folder's commit with its diff; a SQLite database reads as its tables and their rows; `info` gives one line of facts per file instead of content. |
+| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `path@REV` reads a file as of a git commit, or a folder's commit with its diff; a SQLite database reads as its tables, their rows and queries; `info` gives one line of facts per file instead of content. |
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search whose output rows are valid edit anchors; can also just list matching files or count matches; `replace` previews a search-and-replace and returns a token that applies it. |
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files recursively with line counts, sizes and ages; filters by size and age, sorts by path, size or age. |
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
@@ -236,6 +236,21 @@ as a binary file. nib opens it the way it opens OpenCode's database (`internal/s
 refused by the connection too, attached to the shared memory a writer holds, or opened immutable when no one holds a
 WAL database, since even a read-only connection would otherwise create its `-wal` and `-shm` files. `info` still gives
 the file's facts.
+
+`db:` followed by a statement starting with `SELECT`, `WITH`, `VALUES`, `PRAGMA` or `EXPLAIN` (any case) runs it as a
+query: everything after the colon is the statement, so a colon inside it stays and no row selector follows it. It runs
+on the same read-only connection, so a write fails with SQLite's own error on one line, and one statement at most (a
+second one after `;` is refused); a query still running after 5 seconds is stopped. Its rows print exactly as a
+table's do, under `[state.db] query, N rows`; past 500 the heading says the first 500 came and more follow. A column
+declared `DATE`, `DATETIME` or `TIMESTAMP` shows its text as stored: such a statement runs held in a CTE that drops the
+declared types, in its own order.
+
+```
+[state.db] query, 2 rows
+id | status
+30 | fail
+20 | fail
+```
 
 #### File facts
 

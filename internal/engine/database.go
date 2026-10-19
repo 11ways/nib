@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/11ways/nib/internal/sqlitero"
 )
@@ -20,11 +22,53 @@ const (
 	cellChars = 120
 )
 
+// queryTimeout stops a query that runs too long, as a recursive one can forever.
+var queryTimeout = 5 * time.Second
+
+// queryWords start what read runs as a query, in the order a note names them; held is whether a CTE can hold the statement, which lets
+// its values be read as stored.
+var queryWords = []struct {
+	word string
+	held bool
+}{{"SELECT", true}, {"WITH", true}, {"VALUES", true}, {"PRAGMA", false}, {"EXPLAIN", false}}
+
+// queryWord finds the word text starts with, space aside, among queryWords.
+func queryWord(text string) (held, ok bool) {
+	text = strings.TrimSpace(text)
+	end := strings.IndexFunc(text, func(r rune) bool { return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z') })
+	if end < 0 {
+		end = len(text)
+	}
+	for _, w := range queryWords {
+		if strings.EqualFold(text[:end], w.word) {
+			return w.held, true
+		}
+	}
+	return false, false
+}
+
 // isDatabase reports whether file starts like a SQLite 3 database.
 func isDatabase(file *os.File) bool {
 	start := make([]byte, len(sqlitero.Magic))
 	n, _ := file.ReadAt(start, 0)
 	return bytes.Equal(start[:n], sqlitero.Magic)
+}
+
+// databaseAt resolves path when it names a SQLite database.
+func databaseAt(ctx *Context, path string) *target {
+	t, err := resolveTarget(path, ctx, false)
+	if err != nil {
+		return nil
+	}
+	file, err := os.Open(t.canonical)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	if !isDatabase(file) {
+		return nil
+	}
+	return t
 }
 
 // databaseTable resolves input as DATABASE:TABLE, the path a row selector was split from, when DATABASE is a SQLite database.
@@ -33,19 +77,32 @@ func databaseTable(ctx *Context, input string) (*target, string) {
 	if at <= 0 || at == len(input)-1 {
 		return nil, ""
 	}
-	t, err := resolveTarget(input[:at], ctx, false)
-	if err != nil {
-		return nil, ""
+	if t := databaseAt(ctx, input[:at]); t != nil {
+		return t, input[at+1:]
 	}
-	file, err := os.Open(t.canonical)
-	if err != nil {
-		return nil, ""
+	return nil, ""
+}
+
+// databaseQuery splits entry as DATABASE:QUERY at the first colon after a SQLite database's path whose text starts with a query word, so
+// a colon inside the query stays in it; an entry naming an existing file is never a query.
+func databaseQuery(ctx *Context, entry string) (path, query string) {
+	if exists(ctx.resolve(entry)) {
+		return "", ""
 	}
-	defer file.Close()
-	if !isDatabase(file) {
-		return nil, ""
+	for at := strings.Index(entry, ":"); at >= 0; at = nextColon(entry, at) {
+		if _, ok := queryWord(entry[at+1:]); ok && at > 0 && databaseAt(ctx, entry[:at]) != nil {
+			return entry[:at], strings.TrimSpace(entry[at+1:])
+		}
 	}
-	return t, input[at+1:]
+	return "", ""
+}
+
+func nextColon(text string, at int) int {
+	next := strings.Index(text[at+1:], ":")
+	if next < 0 {
+		return -1
+	}
+	return at + 1 + next
 }
 
 // quoted is name as an SQL identifier.
@@ -72,6 +129,9 @@ func (e *Engine) databaseBlock(ctx *Context, t *target, sel selection) (*block, 
 	if background == nil {
 		background = context.Background()
 	}
+	if sel.query != "" {
+		return databaseQueryBlock(background, db, t, sel.query)
+	}
 	objects, err := databaseObjects(background, db)
 	if err != nil {
 		return noteBlock(fmt.Sprintf("[%s: %s]", t.display, err)), nil
@@ -95,7 +155,15 @@ func (e *Engine) databaseBlock(ctx *Context, t *target, sel selection) (*block, 
 			for _, o := range objects {
 				names = append(names, o.name)
 			}
-			return noteBlock(fmt.Sprintf("[%s has no table or view %s; it has %s]", t.display, name, strings.Join(names, ", "))), nil
+			note := fmt.Sprintf("[%s has no table or view %s; it has %s", t.display, name, strings.Join(names, ", "))
+			if strings.ContainsAny(name, " \t\n") {
+				words := make([]string, len(queryWords))
+				for i, w := range queryWords {
+					words[i] = w.word
+				}
+				note += "; a query starts with " + strings.Join(words[:len(words)-1], ", ") + " or " + words[len(words)-1]
+			}
+			return noteBlock(note + "]"), nil
 		}
 		section, err := databaseRowsOf(background, db, t, found, sel)
 		if err != nil {
@@ -233,7 +301,7 @@ func databaseOutline(ctx context.Context, db *sql.DB, t *target, objects []dbObj
 		if shown < len(b.rows) {
 			notes = append(notes, fmt.Sprintf("[%d more tables and views not shown]", len(b.rows)-shown))
 		}
-		return append(notes, fmt.Sprintf("[read %s:TABLE for its rows, %s:TABLE:-15 for the last 15]", t.display, t.display))
+		return append(notes, fmt.Sprintf("[read %s:TABLE for its rows, %s:TABLE:-15 for the last 15, %s:SELECT ... for a query]", t.display, t.display, t.display))
 	}
 	return b, nil
 }
@@ -306,20 +374,12 @@ func databaseRowsOf(ctx context.Context, db *sql.DB, t *target, o *dbObject, sel
 		}
 		position := span.start
 		for rows.Next() {
-			cells := make([]any, len(o.columns))
-			pointers := make([]any, len(cells))
-			for i := range cells {
-				pointers[i] = &cells[i]
-			}
-			if err := rows.Scan(pointers...); err != nil {
+			text, err := scanRow(rows, len(o.columns))
+			if err != nil {
 				rows.Close()
 				return nil, err
 			}
-			texts := make([]string, len(cells))
-			for i, v := range cells {
-				texts[i] = cell(v)
-			}
-			b.rows = append(b.rows, blockRow{text: strings.Join(texts, " | ")})
+			b.rows = append(b.rows, blockRow{text: text})
 			positions = append(positions, position)
 			position++
 			fetched++
@@ -400,4 +460,165 @@ func cell(value any) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+// scanRow is the row rows stands at, its n values shown as cell shows them.
+func scanRow(rows *sql.Rows, n int) (string, error) {
+	cells := make([]any, n)
+	pointers := make([]any, n)
+	for i := range cells {
+		pointers[i] = &cells[i]
+	}
+	if err := rows.Scan(pointers...); err != nil {
+		return "", err
+	}
+	texts := make([]string, n)
+	for i, v := range cells {
+		texts[i] = cell(v)
+	}
+	return strings.Join(texts, " | "), nil
+}
+
+// databaseQueryBlock runs one statement on the read-only connection and shows its rows as a table read does, at most databaseRows of
+// them; an error, a write included, is SQLite's own on one line.
+func databaseQueryBlock(ctx context.Context, db *sql.DB, t *target, query string) (*block, error) {
+	statement, more := oneStatement(query)
+	if more {
+		return noteBlock(fmt.Sprintf("[%s: read runs one statement; drop what follows its first ;]", t.display)), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	failed := func(err error) (*block, error) {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return noteBlock(fmt.Sprintf("[%s: the query ran past %s and was stopped]", t.display, queryTimeout)), nil
+		}
+		return noteBlock(fmt.Sprintf("[%s: %s]", t.display, strings.Join(strings.Fields(err.Error()), " "))), nil
+	}
+	rows, err := db.QueryContext(ctx, statement)
+	if err != nil {
+		return failed(err)
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		rows.Close()
+		return failed(err)
+	}
+	if held, _ := queryWord(statement); held && timed(rows) {
+		// The driver turns the text of a column declared DATE, DATETIME or TIMESTAMP into a time; held in a CTE whose values carry a unary
+		// plus, the column loses its declared type and its text comes as stored, the rows in the statement's own order.
+		rows.Close()
+		names, values := make([]string, len(columns)), make([]string, len(columns))
+		for i := range columns {
+			names[i] = quoted(fmt.Sprintf("c%d", i+1))
+			values[i] = "+" + names[i]
+		}
+		wrapped := "with nib_query(" + strings.Join(names, ", ") + ") as (\n" + statement + "\n) select " + strings.Join(values, ", ") + " from nib_query"
+		if rows, err = db.QueryContext(ctx, wrapped); err != nil {
+			return failed(err)
+		}
+	}
+	b := &block{rows: []blockRow{{text: strings.Join(columns, " | ")}}}
+	fetched, capped := 0, false
+	for rows.Next() {
+		if fetched == databaseRows {
+			capped = true
+			break
+		}
+		text, err := scanRow(rows, len(columns))
+		if err != nil {
+			rows.Close()
+			return failed(err)
+		}
+		b.rows = append(b.rows, blockRow{text: text})
+		fetched++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return failed(err)
+	}
+	b.head = fmt.Sprintf("[%s] query, %s", t.display, plural(fetched, "row"))
+	if capped {
+		b.head = fmt.Sprintf("[%s] query, first %d rows; more follow, narrow it with LIMIT/OFFSET or WHERE", t.display, fetched)
+	}
+	b.finish = func(shown int) []string {
+		// The first row is the columns' names.
+		if kept := max(0, shown-1); kept < fetched {
+			return []string{fmt.Sprintf("[rows %s not shown; narrow it with LIMIT/OFFSET or WHERE]", spanText(kept+1, fetched))}
+		}
+		return nil
+	}
+	return b, nil
+}
+
+// timed reports whether a column of rows is declared as one whose text the driver turns into a time.
+func timed(rows *sql.Rows) bool {
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return false
+	}
+	for _, c := range types {
+		switch strings.ToUpper(c.DatabaseTypeName()) {
+		case "DATE", "DATETIME", "TIMESTAMP":
+			return true
+		}
+	}
+	return false
+}
+
+// oneStatement is query up to its first ; outside quotes and comments, and whether anything but space, comments and more ; follows it.
+func oneStatement(query string) (string, bool) {
+	end := statementEnd(query)
+	if end == len(query) {
+		return query, false
+	}
+	for rest := query[end+1:]; ; {
+		rest = strings.TrimSpace(rest)
+		switch {
+		case rest == "":
+			return query[:end], false
+		case strings.HasPrefix(rest, ";"):
+			rest = rest[1:]
+		case strings.HasPrefix(rest, "--") || strings.HasPrefix(rest, "/*"):
+			rest = rest[skipComment(rest, 0):]
+		default:
+			return query[:end], true
+		}
+	}
+}
+
+// statementEnd is where the first ; outside quotes and comments sits in query, or its length.
+func statementEnd(query string) int {
+	for i := 0; i < len(query); i++ {
+		switch c := query[i]; {
+		case c == ';':
+			return i
+		case c == '\'' || c == '"' || c == '`' || c == '[':
+			closing := c
+			if c == '[' {
+				closing = ']'
+			}
+			// A doubled quote inside closes and opens again, which comes to the same.
+			next := strings.IndexByte(query[i+1:], closing)
+			if next < 0 {
+				return len(query)
+			}
+			i += next + 1
+		case strings.HasPrefix(query[i:], "--") || strings.HasPrefix(query[i:], "/*"):
+			i = skipComment(query, i) - 1
+		}
+	}
+	return len(query)
+}
+
+// skipComment is where the comment starting at i in text ends.
+func skipComment(text string, i int) int {
+	closing := "\n"
+	if strings.HasPrefix(text[i:], "/*") {
+		closing = "*/"
+	}
+	end := strings.Index(text[i+2:], closing)
+	if end < 0 {
+		return len(text)
+	}
+	return i + 2 + end + len(closing)
 }
