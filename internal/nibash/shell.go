@@ -425,11 +425,15 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		return engine.Result{}, err
 	}
 	if request.Background {
-		j, err := sess.launch(runner, file, request.Command, tools, view)
+		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description)
 		if err != nil {
 			return engine.Result{}, err
 		}
-		return engine.Result{Text: strings.Join(append(reports, fmt.Sprintf("[job %%%d started; output: %s]", j.id, j.log)), "\n")}, nil
+		started := fmt.Sprintf("[job %%%d started; output: %s]", j.id, j.log)
+		if request.Push != nil {
+			started = fmt.Sprintf("[job %%%d started; output: %s; its end comes to you as a message]", j.id, j.log)
+		}
+		return engine.Result{Text: strings.Join(append(reports, started), "\n")}, nil
 	}
 	jobs, piped := classify(file, 0)
 	bodies := heredocs(file)
@@ -504,7 +508,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 }
 
 // detach turns a call still running at its timeout into a job: the call returns the output so far, and the job's log gets all of it, that
-// output included, while the run goes on.
+// output included, while the run goes on; with a way to reach the agent, the job's end is pushed to it.
 func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, timeout time.Duration, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string) (engine.Result, error) {
 	// The job carries on the call's command, so it keeps the call's start.
 	started := time.Now()
@@ -520,18 +524,24 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		return engine.Result{}, err
 	}
 	c.adopt(j)
-	c.sink.detach(out)
+	j.push, j.purpose = request.Push, request.Description
+	j.shown = c.sink.detach(out)
 	go func() {
 		err := <-done
 		cancel()
 		c.killAll()
 		j.finish(err, out)
+		s.pushEnd(c.session, j)
 	}()
 	// The output so far renders under the request's context; what runs on must not see it cancelled when the request ends.
 	rendering := *c.tools
 	rendering.Ctx = ctx
 	text := c.sink.render(s.engine, &rendering, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
-	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
+	next := fmt.Sprintf("wait %%%d or kill %%%d", j.id, j.id)
+	if request.Push != nil {
+		next = fmt.Sprintf("its end comes to you as a message; kill %%%d stops it", j.id)
+	}
+	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; %s]", timeout, j.id, j.log, next)}
 	return c.result(reports, text, tail, before, bodies), nil
 }
 

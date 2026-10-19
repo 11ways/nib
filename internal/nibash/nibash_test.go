@@ -308,13 +308,12 @@ func TestJobsRunDetachedAndReportWhenDone(t *testing.T) {
 	out := f.run("sleep 0.2 &\necho $!")
 	expect(t, out, "%1")
 	expect(t, f.run("wait %1; echo waited $?"), "waited 0")
-	if out := f.run("echo next"); !strings.HasPrefix(out, "[job %1 finished, exit 0; output: ") {
-		t.Fatalf("got %s", out)
-	}
+	// The wait told the job's end, so the next call does not report it again.
+	expect(t, f.run("echo next"), "next")
 	out = f.run("sleep 30 &\nkill $!; wait $!; echo $?")
 	expect(t, out, "143")
 	out = f.call(server.ShellCall{Command: "echo detached", Background: true})
-	if !strings.HasPrefix(out, "[job %2 finished, exit 143; output: ") || !strings.Contains(out, "\n[job %3 started; output: ") {
+	if !strings.HasPrefix(out, "[job %3 started; output: ") {
 		t.Fatalf("got %s", out)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -336,9 +335,8 @@ func TestATimedOutCommandGoesOnAsAJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, string(data), "before\nafter\n")
-	if out := f.run("true"); !strings.HasPrefix(out, "[job %1 finished, exit 0; output: "+log+"]") {
-		t.Fatalf("got %s", out)
-	}
+	// The wait told the end, so the next call does not report it again.
+	expect(t, f.run("true"), "(no output)")
 }
 
 func TestCallsRunInParallelAndCancellingStopsAWaitingCall(t *testing.T) {

@@ -611,13 +611,20 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
 - **Jobs.** `background: true` runs the whole command as a job and returns its id and log at once. `cmd &` starts a job
   too, and `$!` is its spec (`%3`) for `kill`, `wait` and `jobs`, which nibash implements for real processes; jobs
   outlive the call that starts them, and a later call reaches them by their spec. Finished jobs are reported at the top
-  of the next call, and only the end of the connection ends the rest. A call still running in its request is no job:
-  when `wait` finds no such job, or no running one, while another call of the agent runs, a note after the output names
-  that call and says its result comes back to it (`[no job %2 to wait for: the call "make test" still runs as a call, not
-  a job, and its result comes back to that call]`); `wait`'s own message and exit status stay bash's. `nibash_status`
-  lists the client's commands in flight and its jobs across all its agents, `[agent] running 0:42: command
-  (description)` and `job %1 [agent] exit 0 after 1:05: command; output: LOG`, their last output lines behind `  | ` with
-  `tail`.
+  of the next call, unless a `wait` already told their end, and only the end of the connection ends the rest. In a
+  Claude Code session started naming nib's channel (`--channels server:nib`, or
+  `--dangerously-load-development-channels server:nib` while channels are a research preview), the end of a
+  `background: true` job, or of a call that went on as a job, comes to the main agent on its own as a channel message,
+  waking it: `[job %1 finished, exit 0; output: LOG]` and what the job printed after its call returned, shaped as long
+  output is, so no `wait` is needed; the job's note says so. For this, nib speaks MCP 2025-11-25 with such a session,
+  the last revision on which Claude Code takes a message a server sends unasked. A subagent's jobs keep the report,
+  since a channel message lands in the main conversation, and so does every job when nib's hook cannot tell the main
+  agent's calls apart. A call still running in its request is no job: when `wait` finds no such job, or no running one,
+  while another call of the agent runs, a note after the output names that call and says its result comes back to it
+  (`[no job %2 to wait for: the call "make test" still runs as a call, not a job, and its result comes back to that
+  call]`); `wait`'s own message and exit status stay bash's. `nibash_status` lists the client's commands in flight and
+  its jobs across all its agents, `[agent] running 0:42: command (description)` and `job %1 [agent] exit 0 after 1:05:
+  command; output: LOG`, their last output lines behind `  | ` with `tail`.
 - **Differences from bash** are in the tool description: `$!` holds a job spec, a pipeline's last stage runs in the
   shell itself (`... | read v` sets `v`), `type cat` names the system program, which is what runs where nib's own does
   not, a program does not start in a directory deleted under the call (bash's child would inherit it; nibash says why

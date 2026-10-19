@@ -105,8 +105,9 @@ func (s *sink) add(r record) {
 	s.entries = append(s.entries, entry{record: &copied})
 }
 
-// detach writes what the sink holds to w as its log text and sends all that comes later there too; what it holds stays for render.
-func (s *sink) detach(w io.Writer) {
+// detach writes what the sink holds to w as its log text and sends all that comes later there too; what it holds stays for render. It returns
+// how many whole lines it wrote.
+func (s *sink) detach(w io.Writer) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	log := &rawLog{w: w}
@@ -118,6 +119,7 @@ func (s *sink) detach(w io.Writer) {
 		}
 	}
 	s.detached = log
+	return log.newlines
 }
 
 // rawLog writes the log text of what a sink takes: bytes as they come, and each record on a line of its own.

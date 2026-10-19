@@ -56,6 +56,9 @@ type Options struct {
 	Compacted func(session string) (compacted time.Time, ok bool)
 	// Providers are the programs whose tools nib offers as its own, as NAME_TOOL.
 	Providers []*providers.Provider
+	// Channel is whether the session was started naming this server in a Claude Code channel option (ChannelNamed), which lets nibash tell the
+	// main agent a job's end on its own.
+	Channel bool
 	// NamesFile, when set, turns on naming the directories an agent's paths keep running through, and keeps the names agents get there
 	// for the next server of Names.Base.
 	NamesFile string
@@ -129,6 +132,8 @@ type ShellCall struct {
 	Expect      string
 	Timeout     *int
 	Background  bool
+	// Push, when set, puts a message in the calling agent's conversation on its own, waking it; nil when nothing reaches that agent.
+	Push func(content string, meta map[string]string) error
 }
 
 // session is per-client state: its roots, cached until the client says they changed, the directories the user approved writing to, the
@@ -153,6 +158,7 @@ type paused struct {
 	agent    string
 	worktree string
 	markers  bool
+	hooked   bool
 }
 
 // pausedLimit bounds the paused calls a session remembers; a client that never sends one again leaves it to be dropped.
@@ -196,6 +202,8 @@ type Server struct {
 	defined *names.Defined
 	// shapes is what the nib shape requests this server answered returned.
 	shapes usageLog
+	// channel is where channel messages go out, nil without Options.Channel.
+	channel *channel
 }
 
 // originDepth bounds how far up a chain of OpenCode sessions that never called nib a session's start goes to start them first.
@@ -254,9 +262,17 @@ func New(options Options) *Server {
 		s.defined.Automatic(options.NamesFile, options.Names.Base)
 	}
 	instructions := Instructions(options)
+	capabilities := &mcp.ServerCapabilities{}
+	var versions []string
+	if options.Channel {
+		s.channel = &channel{}
+		capabilities.Experimental = map[string]any{channelCapability: map[string]any{}}
+		versions = channelVersions()
+	}
 	s.Server = mcp.NewServer(&mcp.Implementation{Name: "nib", Version: options.Version}, &mcp.ServerOptions{
-		Instructions: instructions,
-		Capabilities: &mcp.ServerCapabilities{},
+		Instructions:              instructions,
+		Capabilities:              capabilities,
+		SupportedProtocolVersions: versions,
 		RootsListChangedHandler: func(ctx context.Context, request *mcp.RootsListChangedRequest) {
 			state := s.state(request.Session)
 			state.mu.Lock()
@@ -347,14 +363,15 @@ func (s *Server) shell(c *call) shellKey {
 }
 
 // call is one tool call's exchange with its client: the agent making it, the worktree it works in ("" for the server's directory), whether
-// this is its first call as a subagent, whether rows it already holds may print as held markers, and the answers it carries, from this round
-// and the earlier rounds of the same call.
+// this is its first call as a subagent, whether rows it already holds may print as held markers, whether nib's hook filed the call, and
+// the answers it carries, from this round and the earlier rounds of the same call.
 type call struct {
 	key      *mcp.ServerSession
 	agent    string
 	worktree string
 	first    bool
 	markers  bool
+	hooked   bool
 	answers  mcp.InputResponseMap
 }
 
@@ -374,7 +391,7 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		state.mu.Lock()
 		if earlier, ok := state.paused[token]; ok {
 			maps.Copy(c.answers, earlier.answers)
-			c.agent, c.worktree, c.markers, resumed = earlier.agent, earlier.worktree, earlier.markers, true
+			c.agent, c.worktree, c.markers, c.hooked, resumed = earlier.agent, earlier.worktree, earlier.markers, earlier.hooked, true
 			delete(state.paused, token)
 			state.order = slices.DeleteFunc(state.order, func(t string) bool { return t == token })
 		}
@@ -401,6 +418,7 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		}
 		s.seeding.Unlock()
 		c.markers = known && !s.repeated(c.agent, request)
+		c.hooked = known
 	}
 	maps.Copy(c.answers, request.Params.InputResponses)
 	return c
@@ -548,7 +566,7 @@ func (s *Server) pause(c *call, q question) *mcp.CallToolResult {
 	state := s.state(c.key)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.paused[token] = paused{c.answers, c.agent, c.worktree, c.markers}
+	state.paused[token] = paused{c.answers, c.agent, c.worktree, c.markers, c.hooked}
 	state.order = append(state.order, token)
 	for len(state.order) > pausedLimit {
 		delete(state.paused, state.order[0])
@@ -1319,6 +1337,7 @@ func (s *Server) nibash(ctx *engine.Context, args arguments, notes *[]string, c 
 	if call.Background, _, err = args.flag("background", notes); err != nil {
 		return engine.Result{}, err
 	}
+	call.Push = s.pushes(c)
 	return s.options.Shell.Run(ctx.Ctx, s.shell(c), call, ctx)
 }
 

@@ -22,15 +22,23 @@ import (
 // job is work running detached from the calls: a whole command run with background: true, a statement run with &, or a call still running
 // at its timeout.
 type job struct {
-	id       int
-	command  string
-	log      string
-	cancel   context.CancelFunc
-	done     chan struct{}
-	mu       sync.Mutex
-	groups   map[int]bool
-	exit     int
+	id      int
+	command string
+	log     string
+	cancel  context.CancelFunc
+	done    chan struct{}
+	mu      sync.Mutex
+	groups  map[int]bool
+	exit    int
+	// reported is whether the job's end was told, by a call's report, a wait or a push; waiters counts the waits on it now. The table's
+	// lock guards both.
 	reported bool
+	waiters  int
+	// push tells the agent that started the job its end on its own, nil when nothing reaches that agent; purpose is the call's description,
+	// and shown how many lines of the log the call that went on as the job already showed.
+	push    func(content string, meta map[string]string) error
+	purpose string
+	shown   int
 	// started and ended are when the job began and, once done is closed, when it ended.
 	started, ended time.Time
 	// killed is the signal kill sent; a process the job starts after it gets it at once, and the job starts nothing more.
@@ -127,6 +135,45 @@ func (t *jobTable) finished() []string {
 	return lines
 }
 
+// claim takes the telling of j's end for a push: not when it was told already, nor while a wait on it will tell it.
+func (t *jobTable) claim(j *job) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if j.reported || j.waiters > 0 {
+		return false
+	}
+	j.reported = true
+	return true
+}
+
+// unclaim gives a push's telling back when the push failed, so the next call reports the end.
+func (t *jobTable) unclaim(j *job) {
+	t.mu.Lock()
+	j.reported = false
+	t.mu.Unlock()
+}
+
+// await waits for j within ctx; the wait tells its end, so it is neither pushed while the wait runs nor reported again after.
+func (t *jobTable) await(ctx context.Context, j *job) error {
+	t.mu.Lock()
+	j.waiters++
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		j.waiters--
+		t.mu.Unlock()
+	}()
+	select {
+	case <-j.done:
+		t.mu.Lock()
+		j.reported = true
+		t.mu.Unlock()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (t *jobTable) killAll() {
 	for _, j := range t.all() {
 		if j.running() {
@@ -193,14 +240,18 @@ func (j *job) finish(err error, out *cappedWriter) {
 	close(j.done)
 }
 
-// launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal.
-func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer) (*job, error) {
+// launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal; push, when set, tells the
+// agent its end, with purpose as what the call was for.
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string) (*job, error) {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
 	j, out, err := sess.jobs.open(sess.shell.logs, command, cancel, time.Now())
+	if err == nil {
+		j.push, j.purpose = push, purpose
+	}
 	if err != nil {
 		cancel()
 		devnull.Close()
@@ -219,6 +270,7 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 	go func() {
 		defer devnull.Close()
 		j.finish(runner.Run(ctx, node), out)
+		sess.shell.pushEnd(sess, j)
 	}()
 	return j, nil
 }
@@ -237,7 +289,7 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	}
 	var text strings.Builder
 	syntax.NewPrinter().Print(&text, stmt)
-	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names)
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "")
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
 		return interp.ExitStatus(1)
@@ -365,12 +417,10 @@ func (c *call) wait(ctx context.Context, args []string) error {
 	}
 	status := 0
 	for _, j := range targets {
-		select {
-		case <-j.done:
-			status = j.exit
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := c.session.jobs.await(ctx, j); err != nil {
+			return err
 		}
+		status = j.exit
 	}
 	if status == 0 {
 		// The interpreter takes a zero exit status given as an error for an internal error.

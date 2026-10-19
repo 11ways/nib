@@ -108,6 +108,8 @@ func main() {
 		Sandbox:             os.Getenv("NIB_SANDBOX") == "1",
 		Names:               table,
 		Version:             version(),
+		// Claude Code takes channel messages only from a server its command line names in a channel option.
+		Channel: server.ChannelNamed(server.ChannelName),
 	}
 	// The names agents got in this directory before, theirs and nib's, are named from the start; NIB_AUTO_NAMES=0 turns both off.
 	if file := names.LearnedFile(table.Base); file != "" && os.Getenv("NIB_AUTO_NAMES") != "0" {
@@ -125,7 +127,7 @@ func main() {
 		go s.ServeShape(ctx, listener)
 		defer listener.Close()
 	}
-	err = s.Run(ctx, &mcp.StdioTransport{})
+	err = s.Run(ctx, s.Transport(&mcp.StdioTransport{}))
 	s.Close()
 	for _, p := range options.Providers {
 		p.Close()

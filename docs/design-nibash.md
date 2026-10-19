@@ -369,7 +369,29 @@ When the command finishes or its time runs out, the sink is rendered once:
   the command shortened to 60 characters. It is nib's own line, so it shows when the command sends `wait`'s message to
   `/dev/null`; that message and the exit status stay bash's.
 - **Reporting:** finished jobs are reported at the top of the next nibash result (`[job 3 finished, exit 0]`), since MCP
-  cannot notify on its own.
+  cannot notify on its own; a `wait` that saw a job end tells it, so no result repeats it.
+- **Pushing a job's end.** Claude Code's channels let a server put a message in the session's conversation
+  (`notifications/claude/channel` with `content` and `meta`, under the experimental capability `claude/channel`): it
+  shows as `<channel source="nib" job="1" exit="0">`, wakes an idle session and joins a running turn at its next
+  request. Claude Code takes it only from a server its command line names in `--channels` or
+  `--dangerously-load-development-channels` (`server:nib`, or `plugin:nib@MARKET`) and tells the server nothing, so nib
+  reads its ancestors' command lines (`/proc`), up to the nearest one with a channel option, and declares the capability
+  only then. It writes the notification on the stdio connection itself, as the SDK sends no method it does not know.
+  - Claude Code registers a channel only on a connection of a revision before 2026-07-28 (on 2026-07-28 its debug log
+    says "connection negotiated a modern protocol revision with no unsolicited notification path"), so a server with a
+    channel offers only the earlier revisions and the session speaks 2025-11-25. There the SDK turns nib's input
+    requests into elicitation and roots requests as before multi-round trips, and Claude Code still sends the
+    `claudecode/toolUseId` the hook's records are matched by.
+  - Only Claude Code's main agent is pushed to: a message pushed while a subagent runs lands in the main conversation,
+    and none ever reaches the subagent (tried with background agents, which are all Agent calls in Claude Code 2.1.303:
+    `run_in_background: false` still starts one in the background). So a call gets a way to push only when nib's hook
+    filed it and found no subagent; a subagent's jobs, and every job without the hook, keep the next call's report.
+  - Pushed are the ends of `background: true` jobs and of calls that went on as jobs at their timeout, not of `cmd &`
+    jobs, which are servers and helpers more often than results. The job's note says its end comes as a message.
+  - The message is the report line, then what nibash shows of what the job printed after its call returned (the
+    detached call's lines are left out and named), shaped as long output is, with the call's description as purpose.
+  - The end is told once: a push claims it, a `wait` running on the job keeps it from being pushed, and a push that
+    fails leaves it to the next call's report.
 - **Connection end:** jobs are killed when the connection ends, never sooner.
 
 ### 5.8 Sandbox [M5, M8]

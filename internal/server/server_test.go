@@ -481,6 +481,8 @@ type fakeShell struct {
 	// expects is what Expects says; logs are the read calls with expect that reached the shell.
 	expects bool
 	logs    []string
+	// calls are the nibash calls that reached the shell.
+	calls []ShellCall
 }
 
 func (f *fakeShell) ReadLog(_ context.Context, key any, paths []string, expect string, _ *engine.Context) (engine.Result, error) {
@@ -520,10 +522,11 @@ func (f *fakeShell) Status(owns func(key any) (string, bool), _ int) ShellStatus
 	return status
 }
 
-func (f *fakeShell) Run(_ context.Context, key any, _ ShellCall, _ *engine.Context) (engine.Result, error) {
+func (f *fakeShell) Run(_ context.Context, key any, call ShellCall, _ *engine.Context) (engine.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ran = append(f.ran, key.(shellKey))
+	f.calls = append(f.calls, call)
 	return engine.Result{Text: "ok"}, nil
 }
 
