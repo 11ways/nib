@@ -674,8 +674,9 @@ type blockRow struct {
 	text string
 	line int
 	at   int
-	// covers are the lines a held marker stands for.
+	// covers are the lines a held marker or row-map row stands for; mapped marks such a row-map row, which needs no lesson.
 	covers []int
+	mapped bool
 	marks
 }
 
@@ -1532,7 +1533,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		markers := false
 		for i, r := range rows {
 			m[i] = r.marks
-			markers = markers || r.covers != nil
+			markers = markers || (r.covers != nil && !r.mapped)
 		}
 		if t.rev != "" {
 			// No row of a revision is an anchor, so there is nothing to change in place.
@@ -1678,9 +1679,18 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 	}}, nil
 }
 
-// heldRows puts each run of rows the agent already holds as its marker, which covers the run's lines.
+// heldRows puts each run of rows the agent already holds as its marker, which covers the run's lines, or, for a short run, as a row-map row
+// per line, each covering its own.
 func (e *Engine) heldRows(ctx *Context, canonical string, view snapshots.View, rows []blockRow) []blockRow {
-	return HeldGroups(rows, e.HeldLines(ctx, canonical, view), func(r blockRow) int { return r.line }, func(run []blockRow, r HeldRun) blockRow {
-		return blockRow{text: r.Marker(), at: run[0].at, covers: r.Lines()}
+	return HeldGroups(rows, e.HeldLines(ctx, canonical, view), func(r blockRow) int { return r.line }, func(run []blockRow, r HeldRun) []blockRow {
+		if !r.Mapped() {
+			return []blockRow{{text: r.Marker(), at: run[0].at, covers: r.Lines()}}
+		}
+		mapped := make([]blockRow, len(run))
+		for i, row := range run {
+			line := r.First + i
+			mapped[i] = blockRow{text: MapRow(line, lineContent(view.Lines[line-1])), at: row.at, covers: []int{line}, mapped: true}
+		}
+		return mapped
 	})
 }

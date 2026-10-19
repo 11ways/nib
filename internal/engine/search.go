@@ -1250,8 +1250,10 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 		seen   bool
 		mark   *marks
 		change *change
-		// covers are the lines a held marker stands for, context lines only: a match row is what the search is for, so it always prints.
+		// covers are the lines a held marker or its row-map rows stand for, context lines only: a match row is what the search is for, so it
+		// always prints. mapped marks the row-map rows, which need no lesson.
 		covers []int
+		mapped bool
 	}
 	var groups []group
 	for _, line := range sortedSet(f.listed) {
@@ -1326,8 +1328,15 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 				return 0
 			}
 			return g.line
-		}, func(run []group, r HeldRun) group {
-			return group{line: run[0].line, rows: []string{r.Marker()}, covers: r.Lines()}
+		}, func(run []group, r HeldRun) []group {
+			if !r.Mapped() {
+				return []group{{line: run[0].line, rows: []string{r.Marker()}, covers: r.Lines()}}
+			}
+			rows := make([]string, 0, len(run))
+			for line := r.First; line <= r.Last; line++ {
+				rows = append(rows, MapRow(line, lineContent(f.anchored.Lines[line-1])))
+			}
+			return []group{{line: run[0].line, rows: rows, covers: r.Lines(), mapped: true}}
 		})
 	}
 	notes := func(kept []group, stop int) []string {
@@ -1360,7 +1369,7 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 		}
 		out = append(out, rowNotes(t.display, m)...)
 		// Only a peek: notes are also worked out to size the block, so the lesson counts as taught once the block is final.
-		if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil }) && !e.Store.Taught(ctx.Session, heldLessonKey) {
+		if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil && !g.mapped }) && !e.Store.Taught(ctx.Session, heldLessonKey) {
 			out = append(out, heldLesson)
 		}
 		return out
@@ -1399,7 +1408,7 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 	}
 	block := strings.Join(append(append([]string{head}, allRows(kept)...), notes(kept, stop)...), "\n")
 	*left -= len(block) + 2
-	if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil }) {
+	if slices.ContainsFunc(kept, func(g group) bool { return g.covers != nil && !g.mapped }) {
 		e.Store.Teach(ctx.Session, heldLessonKey)
 	}
 	if f.anchored != nil {

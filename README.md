@@ -1056,13 +1056,15 @@ line shown, and `path#TAG` reads record it like an edit response.
   displayed is confirmed (a block's end, which nib finds itself, needs no check). Lines the agent neither saw nor wrote
   stay refused for replacement, check or not.
 - **Held markers.** Where nib can tell when an agent's context is dropped (below), a run of 3 or more rows that agent
-  was shown whole before, in this version or one it still holds, and that have not changed since, prints as one row:
-  `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit moved
-  them. This holds in `read`, in `grep`'s context rows and in nibash's own commands; a grep match row always prints,
-  since it is what the search is for. The lines a marker stands for stay seen at their current numbers, so an edit
-  anchors on them with no read. The first marker an agent gets ends with a line saying what it means; the same call sent
-  again straight away, or a read with `full: true`, prints the rows. Edit responses are unchanged: their kept rows are
-  one on each side of a change, never a run of 3, and the agent's own new rows always print.
+  was shown whole before, in this version or one it still holds, and that have not changed since, prints shorter. A run
+  of up to 30 lines in `read` and in `grep`'s context rows prints as row-map rows under the lines' current numbers, each
+  line's indentation and start: `41~    return row`. A longer run, and any run in nibash's own commands, prints as one
+  row: `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit
+  moved them. A grep match row always prints, since it is what the search is for. The lines a marker or a row-map row
+  stands for stay seen at their current numbers, so an edit anchors on them with no read. The first marker an agent gets
+  ends with a line saying what it means; the same call sent again straight away, or a read with `full: true`, prints the
+  rows. Edit responses are unchanged: their kept rows are one on each side of a change, never a run of 3, and the agent's
+  own new rows always print.
 - **Dropped contexts.** When Claude Code compacts an agent's conversation, or a session starts anew (`/clear`, a
   resume), the agent no longer has what it was shown: every line it saw or knew before that moment stops counting, for
   markers and for edits, which then need the lines shown again (the usual refusal, and an unchanged resend), and the

@@ -10,6 +10,10 @@ import (
 // heldRun is the fewest rows an agent already holds that one marker replaces; a shorter run costs about what its marker does.
 const heldRun = 3
 
+// heldMapped is the most lines a held run prints as row-map rows instead of one marker: an agent checking a few lines it holds would
+// otherwise call again to see them, translating earlier numbers by hand on the way, which is where its line numbers go wrong.
+const heldMapped = 30
+
 // heldLessonKey is the lesson heldLesson teaches; heldLesson explains held markers, once per agent and again after its context was dropped.
 const heldLessonKey = "held"
 
@@ -61,6 +65,12 @@ func (r HeldRun) Marker() string {
 	return fmt.Sprintf("[lines %d-%d = your earlier %d-%d, unchanged]", r.First, r.Last, r.From, r.From+r.Last-r.First)
 }
 
+// Mapped reports whether the run prints as one MapRow per line, under its current numbers, rather than as its Marker.
+func (r HeldRun) Mapped() bool { return r.Last-r.First+1 <= heldMapped }
+
+// MapRow is the N~ row of line, whose content the agent saw whole: its indentation and start.
+func MapRow(line int, content string) string { return fmt.Sprintf("%d~%s", line, clip(content)) }
+
 // Lines are the lines the run stands for, which stay seen in the version it prints from.
 func (r HeldRun) Lines() []int {
 	lines := make([]int, 0, r.Last-r.First+1)
@@ -70,9 +80,9 @@ func (r HeldRun) Lines() []int {
 	return lines
 }
 
-// HeldGroups puts each run of items the agent already holds, by the line each stands for (0 for one that may not join a run), as the one
-// item marker makes from the run's items.
-func HeldGroups[T any](items []T, held map[int]int, line func(T) int, marker func(run []T, r HeldRun) T) []T {
+// HeldGroups puts each run of items the agent already holds, by the line each stands for (0 for one that may not join a run), as the items
+// marker makes from the run's items.
+func HeldGroups[T any](items []T, held map[int]int, line func(T) int, marker func(run []T, r HeldRun) []T) []T {
 	if len(held) == 0 {
 		return items
 	}
@@ -84,7 +94,7 @@ func HeldGroups[T any](items []T, held map[int]int, line func(T) int, marker fun
 	next := 0
 	for _, r := range runs {
 		out = append(out, items[next:r.Start]...)
-		out = append(out, marker(items[r.Start:r.End], r))
+		out = append(out, marker(items[r.Start:r.End], r)...)
 		next = r.End
 	}
 	return append(out, items[next:]...)

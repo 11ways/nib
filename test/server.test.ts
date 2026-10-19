@@ -118,10 +118,10 @@ describe("MCP server", () => {
     expect(await readFile(path.join(directory, "a.go"), "utf8")).toBe("package a\n\nfunc A() { return 1 }\n")
   })
 
-  test("with nib's hook, rows an agent holds print as one marker until its context is compacted", async () => {
+  test("with nib's hook, rows an agent holds print as row-map rows, past 30 lines as one marker, until its context is compacted", async () => {
     const directory = await workspace()
     const runtime = await workspace()
-    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
+    await writeFile(path.join(directory, "a.txt"), Array.from({ length: 120 }, (_, i) => `line ${i + 1}`).join("\n") + "\n")
     const env = { XDG_RUNTIME_DIR: runtime }
     const hook = async (input: Record<string, unknown>) => {
       const run = Bun.spawn([await binary(), "hook"], { stdin: new Blob([JSON.stringify({ session_id: "6d0b5e1c", ...input })]), stdout: "pipe", env: { ...process.env, ...env } })
@@ -130,19 +130,32 @@ describe("MCP server", () => {
     }
     const { client } = await connect(directory, { env })
     let uses = 0
-    const read = async (selector: string) => {
+    const call = async (name: string, args: Record<string, unknown>) => {
       const id = `toolu_${++uses}`
-      await hook({ hook_event_name: "PreToolUse", tool_name: "mcp__nib__read", tool_input: {}, tool_use_id: id })
-      const result = await client.callTool({ name: "read", arguments: { paths: [`a.txt:${selector}`] }, _meta: { "claudecode/toolUseId": id } }) as { content: { text: string }[] }
+      await hook({ hook_event_name: "PreToolUse", tool_name: `mcp__nib__${name}`, tool_input: {}, tool_use_id: id })
+      const result = await client.callTool({ name, arguments: args, _meta: { "claudecode/toolUseId": id } }) as { content: { text: string }[] }
       return result.content[0]!.text
     }
+    const read = (selector: string) => call("read", { paths: [`a.txt:${selector}`] })
     await hook({ hook_event_name: "SessionStart", source: "startup" })
     await read("1-5")
-    expect(await read("1-6")).toContain("\n[lines 1-5 unchanged since you saw them]\n6:line 6\n")
+    const short = await read("1-6")
+    expect(short).toContain("\n1~line 1\n2~line 2\n3~line 3\n4~line 4\n5~line 5\n6:line 6\n")
+    expect(short).not.toContain("[lines")
+    await read("10-109")
+    expect(await read("10-110")).toContain("\n[lines 10-109 unchanged since you saw them]\n110:line 110\n")
+    // Rows an edit moved print under their current numbers, and an edit anchors on one with a ~ check.
+    const inserted = await call("edit", { input: `[a.txt#${tagOf(short)}]\nPUT <1:\n+line 0` })
+    // Line 2 the edit's own response showed; the rest moved under it.
+    expect(await read("2-7")).toContain("\n2:line 1\n3~line 2\n4~line 3\n5~line 4\n6~line 5\n7~line 6\n")
+    const anchored = await call("edit", { input: `[a.txt#${tagOf(inserted)}]\nPUT 3:\n~line 2\n+line two` })
+    expect(anchored).not.toContain("refused")
+    expect((await readFile(path.join(directory, "a.txt"), "utf8")).split("\n").slice(0, 4)).toEqual(["line 0", "line 1", "line two", "line 3"])
     await hook({ hook_event_name: "PostCompact", trigger: "manual", compact_summary: "the summary" })
     const after = await read("1-7")
-    expect(after).toContain("\n1:line 1\n")
+    expect(after).toContain("\n1:line 0\n")
     expect(after).not.toContain("[lines")
+    expect(after).not.toContain("~line")
   })
 
   test("named directories from nib.json are announced, resolve in every tool and print in short form", async () => {

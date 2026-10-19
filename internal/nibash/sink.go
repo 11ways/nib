@@ -569,8 +569,8 @@ func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
 				return 0
 			}
 			return r.line
-		}, func(run []row, h engine.HeldRun) row {
-			return row{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}
+		}, func(run []row, h engine.HeldRun) []row {
+			return []row{{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}}
 		})
 	}
 	return rows
