@@ -252,9 +252,8 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	if echoed {
 		texts = append(texts, e.EchoNote(ctx)...)
 	}
-	if slices.ContainsFunc(rows, func(r row) bool { return r.plain && slices.Contains(own, r.first) }) &&
-		e.Store.Teach(ctx.Session, "own-author") {
-		texts = append(texts, ownAuthorLesson)
+	if slices.ContainsFunc(rows, func(r row) bool { return r.plain && slices.Contains(own, r.first) }) {
+		texts = append(texts, e.OwnAuthorNote(ctx)...)
 	}
 	out := strings.Join(texts, "\n")
 	for _, t := range tails {

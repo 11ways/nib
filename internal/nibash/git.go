@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/gitform"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // errForeign means a command nib's own never handles in that form, such as a git subcommand whose output it does not reshape; the system
@@ -274,10 +276,6 @@ func (p *gitPlan) run(inv *invocation) int {
 	return status
 }
 
-// statWidth is the --stat-width and --stat-graph-width that print every path whole and draw each changed line as one bar character, so a
-// row's bar holds its exact counts; a file with more changed lines gets a scaled bar, which prints as git printed it.
-const statWidth = "1000000"
-
 // command is the git that runs for output the model gets: the command line's own, with --abbrev-commit where nib prints commit headers as
 // one line, and with a --stat wide enough for every path whole and every changed line its own bar character, when wide.
 func (p *gitPlan) command(wide bool) []string {
@@ -286,37 +284,9 @@ func (p *gitPlan) command(wide bool) []string {
 		extra = append(extra, "--abbrev-commit")
 	}
 	if wide {
-		extra = append(extra, "--stat-width="+statWidth, "--stat-graph-width="+statWidth)
+		extra = append(extra, gitform.StatArgs...)
 	}
 	return append(append(append([]string{"git"}, p.args[:p.at+1]...), extra...), p.args[p.at+1:]...)
-}
-
-// gitStatBar matches a --stat file row with its count and bar: the path, the count and the bar, which a file with no changed lines lacks.
-var gitStatBar = regexp.MustCompile(`^ (\S.*?) +\| +(\d+)(?: ([+-]+))?$`)
-
-// statCounts is a --stat file row as it prints for the model, " PATH +A -D", its bar given as the counts it draws; ok is false for a line
-// that is no such row or whose bar git scaled, so it does not draw each changed line. listed is that row's path, plain or not.
-func statCounts(line string) (shown string, l listed, ok bool) {
-	m := gitStatBar.FindStringSubmatch(line)
-	if m == nil {
-		return "", listed{}, false
-	}
-	added, removed := strings.Count(m[3], "+"), strings.Count(m[3], "-")
-	if total, _ := strconv.Atoi(m[2]); total != added+removed {
-		return "", listed{}, false
-	}
-	var counts []string
-	if added > 0 {
-		counts = append(counts, "+"+strconv.Itoa(added))
-	}
-	if removed > 0 {
-		counts = append(counts, "-"+strconv.Itoa(removed))
-	}
-	if len(counts) == 0 {
-		counts = []string{"0"}
-	}
-	l = listed{before: " ", path: m[1], after: " " + strings.Join(counts, " ")}
-	return l.before + l.path + l.after, l, true
 }
 
 // shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, a wide stat's rows with their
@@ -351,12 +321,17 @@ func (p *gitPlan) shown(lines []string) int {
 	}))
 }
 
-// statCounts is statCounts for a wide stat, the only one whose bars nib asked to draw every changed line.
+// statCounts is gitform.StatCounts for a wide stat, the only one whose bars nib asked to draw every changed line, with the row's path as
+// the listing reads it.
 func (p *gitPlan) statCounts(line string) (string, listed, bool) {
 	if !p.wide {
 		return "", listed{}, false
 	}
-	return statCounts(line)
+	shown, path, ok := gitform.StatCounts(line)
+	if !ok {
+		return "", listed{}, false
+	}
+	return shown, listed{before: " ", path: path, after: shown[1+len(path):]}, true
 }
 
 func textSize(lines []string) int {
@@ -524,4 +499,46 @@ func stripPrefix(path *string) bool {
 		}
 	}
 	return false
+}
+
+// revisionLesson points an agent that saves git's diff of a commit to a file at reading the commit itself, once per agent.
+const revisionLesson = "[read and skim take PATH@REV: a repository's directory for that commit with its diff, a file for it as it was then]"
+
+// savesGitPatch is whether a statement of file writes a git diff, show or format-patch to a file, to read it back.
+func savesGitPatch(file *syntax.File) bool {
+	found := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		stmt, ok := node.(*syntax.Stmt)
+		if !ok || found {
+			return !found
+		}
+		call, ok := stmt.Cmd.(*syntax.CallExpr)
+		if !ok || !slices.ContainsFunc(stmt.Redirs, func(r *syntax.Redirect) bool {
+			return (r.Op == syntax.RdrOut || r.Op == syntax.AppOut) && (r.N == nil || r.N.Value == "1") || r.Op == syntax.RdrAll || r.Op == syntax.AppAll
+		}) {
+			return true
+		}
+		var words []string
+		for _, w := range call.Args {
+			words = append(words, w.Lit())
+		}
+		if len(words) == 0 || words[0] != "git" {
+			return true
+		}
+		for i := 1; i < len(words); i++ {
+			switch words[i] {
+			case "-C", "-c":
+				i++
+			case "diff", "show", "format-patch":
+				found = true
+				return false
+			default:
+				if !strings.HasPrefix(words[i], "-") {
+					return true
+				}
+			}
+		}
+		return true
+	})
+	return found
 }

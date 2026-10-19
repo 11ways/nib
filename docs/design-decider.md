@@ -510,8 +510,9 @@ server offers `skim` wherever it offers nibash and hands each call to `Shell.Rea
 read always gives rows to edit from. The tool's name is declared once, as `engine.Skim`; the registration, the notes
 and the tests derive from it, so a rename is that one Go edit plus the docs.
 
-`engine.ReadLog` resolves each path as read does (sandbox, links, named directories, selectors) and returns the file's
-bytes from an offset on, at most `logLimit`, and the ranges a selector chose; an open range runs to the end. nibash
+`engine.ReadLog` resolves each path as read does (sandbox, links, named directories, selectors, and `PATH@REV`, whose
+text git gives and whose key is the path and the commit's full hash) and returns the file's bytes from an offset on, at
+most `logLimit`, and the ranges a selector chose; an open range runs to the end. nibash
 turns them into plain lines (`plainLines`, as for program output), collapses exact repeats (`plainItems`, the same
 code `collect` uses) and calls `fit`, the function `render` calls, so the limits, `shape`, `choose`, the summary and
 every note are nibash's own. Only three things differ, all carried by `saved`: notes say `skim` instead of `nibash`,

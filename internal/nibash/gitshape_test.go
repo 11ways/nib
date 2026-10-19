@@ -5,14 +5,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/11ways/nib/internal/gitform"
 )
 
 // historyFixture is a repository whose user.email is t@t, with commits at fixed moments: "first" and "second" by t@t, "third" by o@o, and
 // a.go changed since, while headers print in a zone four hours behind UTC.
 func historyFixture(t *testing.T) (*fixture, []string) {
 	t.Helper()
-	headerZone = time.FixedZone("", -4*3600)
-	t.Cleanup(func() { headerZone = nil })
+	gitform.Zone = time.FixedZone("", -4*3600)
+	t.Cleanup(func() { gitform.Zone = nil })
 	at := func(moment string) {
 		t.Setenv("GIT_AUTHOR_DATE", moment)
 		t.Setenv("GIT_COMMITTER_DATE", moment)
@@ -36,7 +38,7 @@ func TestGitLogPrintsEachCommitHeaderAsOneLine(t *testing.T) {
 	want := fmt.Sprintf("commit %s o@o Fri 2026-10-16 19:30\nthird\n\ncommit %s Fri 2026-10-16 04:38\nsecond\n\nbody line\n\ncommit %s Thu 2026-10-15 03:00\nfirst",
 		hashes[0], hashes[1], hashes[2])
 	// The first header left without its author's email says once what that means.
-	expect(t, f.run("git log"), want+"\n"+ownAuthorLesson)
+	expect(t, f.run("git log"), want+"\n"+gitform.OwnAuthorLesson)
 	expect(t, f.run("git log"), want)
 	// The repository's user.email is the one git runs in, as -C and -c give it.
 	expect(t, f.run("cd /tmp && git -C "+f.directory+" log -1 HEAD~1"), fmt.Sprintf("commit %s Fri 2026-10-16 04:38\nsecond\n\nbody line", hashes[1]))
@@ -77,8 +79,8 @@ func TestGitHeadersInOtherFormatsPrintAsGitPrintsThem(t *testing.T) {
 }
 
 func TestGitThroughNibsHeadAndTailPrintsAsAtTheTerminal(t *testing.T) {
-	headerZone = time.FixedZone("", -4*3600)
-	t.Cleanup(func() { headerZone = nil })
+	gitform.Zone = time.FixedZone("", -4*3600)
+	t.Cleanup(func() { gitform.Zone = nil })
 	t.Setenv("GIT_AUTHOR_DATE", "2026-10-16T10:38:01+02:00")
 	t.Setenv("GIT_COMMITTER_DATE", "2026-10-16T10:38:01+02:00")
 	f := operationFixture(t)
@@ -87,7 +89,7 @@ func TestGitThroughNibsHeadAndTailPrintsAsAtTheTerminal(t *testing.T) {
 	hash := strings.TrimSpace(f.git("log", "-1", "--format=%h"))
 	header := "commit " + hash + " Fri 2026-10-16 04:38"
 	// head counts git's lines, those a header's one line stands for included: five are the newest commit's header and message.
-	expect(t, f.run("git log | head -5"), header+"\nchange\n"+ownAuthorLesson)
+	expect(t, f.run("git log | head -5"), header+"\nchange\n"+gitform.OwnAuthorLesson)
 	expect(t, f.run("git log -1 | head -n -1 | cat"), header)
 	// A header head or tail cut prints as git printed it, its message with git's indent.
 	expect(t, f.run("git log | head -2"), "commit "+hash+"\nAuthor: t <t@t>")
@@ -182,6 +184,22 @@ func TestGitStatRowsGiveTheExactCountsTheirBarsDraw(t *testing.T) {
 	// A width the command line asks for prints as git prints it.
 	if sized := f.run("git diff --cached --stat=60"); !strings.Contains(sized, " big.txt") || !strings.Contains(sized, "| 500 +") {
 		t.Errorf("sized stat:\n%s", sized)
+	}
+}
+
+func TestSavingAGitDiffToAFilePointsAtReadingTheRevisionOnce(t *testing.T) {
+	f, _ := historyFixture(t)
+	count := func(out string) int { return strings.Count(out, revisionLesson) }
+	if out := f.run("git -C . show HEAD > p.diff; echo saved"); count(out) != 1 {
+		t.Errorf("first save:\n%s", out)
+	}
+	if out := f.run("git diff HEAD~1 >> p.diff; echo saved"); count(out) != 0 {
+		t.Errorf("told twice:\n%s", out)
+	}
+	// Into a pipe, or a log without a diff, it is not that.
+	g, _ := historyFixture(t)
+	if out := g.run("git log --oneline > l.txt; git show HEAD | wc -l > n.txt; echo saved"); count(out) != 0 {
+		t.Errorf("no diff saved:\n%s", out)
 	}
 }
 

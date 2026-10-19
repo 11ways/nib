@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/11ways/nib/internal/gitform"
 	"github.com/11ways/nib/internal/snapshots"
 )
 
@@ -93,6 +94,14 @@ func HeldGroups[T any](items []T, held map[int]int, line func(T) int, marker fun
 func (e *Engine) HeldNote(ctx *Context) []string {
 	if e.Store.Teach(ctx.Session, heldLessonKey) {
 		return []string{heldLesson}
+	}
+	return nil
+}
+
+// OwnAuthorNote is gitform.OwnAuthorLesson the first time an agent is shown a commit header without its author, else nothing.
+func (e *Engine) OwnAuthorNote(ctx *Context) []string {
+	if e.Store.Teach(ctx.Session, "own-author") {
+		return []string{gitform.OwnAuthorLesson}
 	}
 	return nil
 }

@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/gitform"
 )
 
 // gitPart is a commit's header or one file's part of a diff in git's output that nib reshapes for the model. Its lines print reshaped only
@@ -76,7 +75,7 @@ func (s *shaped) view(text string, reached map[*gitPart]int) (string, bool) {
 		}
 	case commitMessage:
 		if whole {
-			return strings.TrimPrefix(text, "    "), true
+			return gitform.Message(text), true
 		}
 	case diffHeader:
 		if reached[s.part] > 0 {
@@ -89,22 +88,6 @@ func (s *shaped) view(text string, reached map[*gitPart]int) (string, bool) {
 	}
 	return text, true
 }
-
-// ownAuthorLesson explains a commit header's one line without an email, once per agent.
-const ownAuthorLesson = "[a commit header names its author's email only when it is not the repository's own user.email]"
-
-// The lines of a commit's header in git's default format.
-var (
-	gitCommit = regexp.MustCompile(`^commit [0-9a-f]{4,64}(?: \(.+\))?$`)
-	gitMerge  = regexp.MustCompile(`^Merge:(?: [0-9a-f]{4,64}){2,}$`)
-	gitAuthor = regexp.MustCompile(`^Author: (?:.* )?<([^<>]+)>$`)
-)
-
-// gitDateLayout is git's default date, which a header's "Date:" line holds after "Date:   ".
-const gitDateLayout = "Mon Jan 2 15:04:05 2006 -0700"
-
-// headerZone is the zone a header's one line gives its date in, nil for the machine's; a variable so a test can set it.
-var headerZone *time.Location
 
 type shaperState int
 
@@ -195,7 +178,7 @@ func (s *gitShaper) between(text string) bool {
 	case s.plan.patch && gitDiff.MatchString(text):
 		s.held, s.state = []string{text}, inFileHeader
 		return true
-	case s.plan.headers && gitCommit.MatchString(text):
+	case s.plan.headers && gitform.Commit.MatchString(text):
 		s.held, s.state = []string{text}, inCommitHeader
 		return true
 	}
@@ -211,16 +194,12 @@ func (s *gitShaper) between(text string) bool {
 
 // headerLine takes the next line of a commit header: a merge's parents, the author, the date and the blank line after them, in that order.
 func (s *gitShaper) headerLine(text string) bool {
-	last := s.held[len(s.held)-1]
-	switch {
-	case len(s.held) == 1 && gitMerge.MatchString(text),
-		gitAuthor.MatchString(text) && (len(s.held) == 1 || gitMerge.MatchString(last)),
-		strings.HasPrefix(text, "Date:   ") && gitAuthor.MatchString(last):
+	if takes, complete := gitform.HeaderTakes(s.held, text); takes {
 		s.held = append(s.held, text)
+		if complete {
+			return s.openCommit()
+		}
 		return true
-	case text == "" && strings.HasPrefix(last, "Date:   "):
-		s.held = append(s.held, text)
-		return s.openCommit()
 	}
 	if !s.release() {
 		return false
@@ -240,33 +219,13 @@ func (s *gitShaper) release() bool {
 	return true
 }
 
-// openCommit prints a whole commit header's lines as the part its one line stands for: git's commit line, the author's email unless it is
-// the repository's user.email, and the author date in local time to the minute.
+// openCommit prints a whole commit header's lines as the part its one line stands for.
 func (s *gitShaper) openCommit() bool {
-	header, email, date := s.held[0], "", ""
-	for _, line := range s.held[1:] {
-		if m := gitAuthor.FindStringSubmatch(line); m != nil {
-			email = m[1]
-		}
-		if value, ok := strings.CutPrefix(line, "Date:   "); ok {
-			t, err := time.Parse(gitDateLayout, value)
-			if err != nil || t.Format(gitDateLayout) != value {
-				return s.release()
-			}
-			zone := headerZone
-			if zone == nil {
-				zone = time.Local
-			}
-			date = t.In(zone).Format("Mon 2006-01-02 15:04")
-		}
+	header, own, ok := gitform.Header(s.held, s.ownEmail())
+	if !ok {
+		return s.release()
 	}
-	part := &gitPart{lines: len(s.held)}
-	if own := s.ownEmail(); own != "" && strings.EqualFold(email, own) {
-		part.own = true
-	} else {
-		header += " " + email
-	}
-	part.header = header + " " + date
+	part := &gitPart{lines: len(s.held), header: header, own: own}
 	held := s.held
 	s.held, s.part, s.state = nil, part, inMessage
 	for i, line := range held {
@@ -274,7 +233,7 @@ func (s *gitShaper) openCommit() bool {
 		switch {
 		case i == 0:
 			role = commitLine
-		case strings.HasPrefix(line, "Merge:"):
+		case gitform.IsMerge(line):
 			role = commitMerge
 		}
 		if !s.emit(record{text: line, shape: &shaped{part: part, role: role}}) {

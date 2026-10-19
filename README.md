@@ -21,14 +21,14 @@ bun typecheck           # go vet and tsgo --noEmit
 
 | Tool | Input | Purpose |
 | --- | --- | --- |
-| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `info` gives one line of facts per file instead of content. |
+| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `path@REV` reads a file as of a git commit, or a folder's commit with its diff; `info` gives one line of facts per file instead of content. |
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search whose output rows are valid edit anchors; can also just list matching files or count matches; `replace` previews a search-and-replace and returns a token that applies it. |
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files recursively with line counts, sizes and ages; filters by size and age, sorts by path, size or age. |
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
 | `write` | `path`, `content`, optional `tag` | Creates a file (with parents), or overwrites one when given its current tag, keeping a CRLF file's line endings and a BOM; answers with a row map of the new file. |
 | `nibash` | `command`, optional `description`, `expect` (offered with a decision model or a summarizer), `timeout`, `background` | A shell whose calls each start afresh in the project directory and run in parallel; its own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n`, `cut -c` and `wc` print anchored rows, everything else runs as real programs, and output is shaped for the model. |
 | `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists what nibash runs for the client, every agent of it: commands still in their call and jobs (running, or ended in the last 10 minutes), with how long each ran, its log and, with `tail`, its last output lines; as text and as structured content, which Claude Code's nib mod polls. `view` adds one more list for the mod's panes (`trash`, `seen`, `names`, `tokens`); `restore` puts one trashed path back through the trash code behind `trash restore`, refusing, as it does, a path where a file is now; `summaries` turns summaries of long output on or off for the session. |
-| `skim` | `paths[]`, `expect` | Offered with nibash. Reads any long text file the agent wants answers from rather than to edit (logs, test reports, data dumps, generated output) for what it expects to learn: plain lines, the long ones shaped as nibash shapes long output, and a reread of a whole file shows only what was added. |
+| `skim` | `paths[]`, `expect` | Offered with nibash. Reads any long text file the agent wants answers from rather than to edit (logs, test reports, data dumps, generated output, `PATH@REV`) for what it expects to learn: plain lines, the long ones shaped as nibash shapes long output, and a reread of a whole file shows only what was added. |
 
 ### read
 
@@ -187,6 +187,31 @@ seen, and moved lines the agent knew stay known, so a `~` check anchors them. An
 `unchanged since #TAG`. A tag nib no longer keeps (it keeps 4 versions per file), or one issued for another file, gets a
 note saying so instead of a diff; a diff that takes over a second asks for a new read. `path#TAG` takes no line selector
 and cannot be combined with `info` or `plain`; an existing file whose name ends in `#TAG` is read literally.
+
+#### Revisions: `path@REV`
+
+A `paths` entry written `PATH@REV`, where `PATH` names nothing as typed and git resolves `REV` (a hash, a branch,
+`origin/x`, `HEAD~2`) to a commit in the repository holding `PATH` (the nearest `.git` above it, a worktree's too, so a
+folder holding many repositories needs no setting), reads that revision. Each `@` is tried from the left, so a path
+holding `@` still works, and a path that exists as typed is always that file. A file prints as it was in that commit,
+deleted since or not, with read's selectors (`File.java@abc123:40-80`, `File.java@abc123:Class.method`) and its
+outline when large. A folder prints the commit limited to that folder: its header as one line, the message, each file
+changed with its exact counts and then the diff, as git shows it otherwise. A large commit prints its header and
+files first, naming the line its diff starts at; `repo@REV:Foo.java` narrows it to the files the commit changed that
+are or end in that path, and a range pages it.
+
+```
+[zenit-cms@c3c30be5]
+1|commit c3c30be5 Sun 2026-10-18 23:12
+2|A row operation's hiding condition can be read once per page
+3|---
+4| src/common/RowOperation.java +12 -3
+```
+
+Every row is `N|TEXT`, never an anchor, and nothing of it counts as seen, since it is not the file as it is now. A
+revision that does not resolve says so in one line (`a.go@nope: nope is no commit in zenit`). It takes no `info`, and
+`plain` prints the same rows. `skim` takes `PATH@REV` the same way. nibash points at it once per agent when a command
+writes `git diff`, `show` or `format-patch` to a file.
 
 #### File facts
 

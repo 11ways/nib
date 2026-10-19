@@ -298,6 +298,8 @@ type call struct {
 	rows *rowBand
 	// piped are the row commands whose output went through a real program to the model, which an agent is told of once.
 	piped []pipe
+	// savedPatch is whether the command wrote a git diff to a file, which read's PATH@REV makes needless; an agent is told so once.
+	savedPatch bool
 	// waitless is the note of a wait that found nothing to wait for while other calls of the agent were running.
 	waitless string
 	// waited are the jobs the call's waits waited for, which a call that only waits names when its timeout ends it.
@@ -441,6 +443,8 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		}
 		return engine.Result{Text: strings.Join(append(reports, started), "\n")}, nil
 	}
+	// Before classify, which renames nib's own commands.
+	savedPatch := savesGitPatch(file)
 	jobs, piped := classify(file, 0)
 	bodies := heredocs(file)
 	before := map[string]held{}
@@ -458,7 +462,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
 	callTools := *tools
-	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped}
+	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped, savedPatch: savedPatch}
 	sess.track(c, request)
 	defer func() { sess.untrack(c) }()
 	devnull, err := os.Open(os.DevNull)
@@ -628,6 +632,9 @@ func (c *call) result(reports []string, text string, tail []string, before map[s
 	c.mu.Unlock()
 	if note := c.pipedNote(); note != "" {
 		parts = append(parts, note)
+	}
+	if c.savedPatch && c.engine.Store.Teach(c.tools.Session, "path-at-rev") {
+		parts = append(parts, revisionLesson)
 	}
 	if note := c.trashNote(); note != "" {
 		parts = append(parts, note)

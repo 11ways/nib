@@ -95,6 +95,9 @@ type target struct {
 	canonical string
 	display   string
 	check     func() error
+	// rev is "@REV" for a file or commit as of a revision, whose rows are never anchors, else ""; commit is whether it is the commit.
+	rev    string
+	commit bool
 }
 
 // allowed is true when the sandbox is off, or canonical lies inside a workspace root.

@@ -849,8 +849,28 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 		}
 		single = len(args.Paths) == 1 && len(sel.ranges) == 1 && sel.ranges[0].end == sel.ranges[0].start
 		t, err := resolveTarget(input, ctx, false)
+		var nf *NotFound
+		if errors.As(err, &nf) {
+			// A path that names nothing may be PATH@REV, which only then reads as one.
+			rev, revErr := e.revisionOf(ctx, entry)
+			var none *noCommit
+			switch {
+			case errors.As(revErr, &none):
+				absent = append(absent, none.message)
+				blocks = append(blocks, noteBlock("["+none.message+"]"))
+				continue
+			case revErr != nil:
+				return Result{}, revErr
+			case rev != nil:
+				b, err := e.revisionBlock(ctx, rev, args, maxLineLength)
+				if err != nil {
+					return Result{}, err
+				}
+				blocks = append(blocks, b)
+				continue
+			}
+		}
 		if err != nil {
-			var nf *NotFound
 			var out *Outside
 			switch {
 			case errors.As(err, &out):
@@ -1439,19 +1459,37 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 	squeezed := !explicit && maxLineLength > minifiedColumns && slices.ContainsFunc(anchored.Lines, func(l string) bool { return js.Len(l) > minifiedColumns }) &&
 		minifiedReason(t.canonical, size, anchored.Lines) != ""
 	limit := maxLineLength
+	// name is how the path prints in what the block says: with @REV for a revision, so a range from it reads the same revision.
+	name := t.display + t.rev
 	head := fmt.Sprintf("[%s#%s]", t.display, anchored.Tag)
+	if t.rev != "" {
+		head = "[" + name + "]"
+	}
 	if squeezed {
 		limit = minifiedColumns
 		head += fmt.Sprintf(" minified, so lines are cut at %d chars; pass maxLineLength for more", minifiedColumns)
 	}
 	rowFor := func(line int) blockRow {
 		r := lineRow(line, anchored.Lines[line-1], limit)
+		if r.anchor && t.rev != "" {
+			// A revision's line is no line of the file as it is now.
+			return blockRow{text: itoa(line) + "|" + anchored.Lines[line-1], at: line}
+		}
 		if r.anchor {
 			return blockRow{text: r.text, line: line, at: line}
 		}
 		return blockRow{text: r.text, at: line, marks: r.marks}
 	}
+	held := func(rows []blockRow) []blockRow {
+		if t.rev != "" {
+			return rows
+		}
+		return e.heldRows(ctx, t.canonical, anchored, rows)
+	}
 	record := func(rows []blockRow) {
+		if t.rev != "" {
+			return
+		}
 		seen := []int{}
 		for _, r := range rows {
 			if r.line > 0 {
@@ -1468,7 +1506,14 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 			m[i] = r.marks
 			markers = markers || r.covers != nil
 		}
-		notes := rowNotes(t.display, m)
+		if t.rev != "" {
+			// No row of a revision is an anchor, so there is nothing to change in place.
+			if slices.ContainsFunc(m, func(m marks) bool { return m.cut }) {
+				return []string{fmt.Sprintf("[cut rows: read %s:N with maxLineLength to see one whole]", name)}
+			}
+			return nil
+		}
+		notes := rowNotes(name, m)
 		if markers {
 			notes = append(notes, e.HeldNote(ctx)...)
 		}
@@ -1477,17 +1522,34 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 	// A row bigger than a whole call's budget never fits, so continuing from it would repeat the same cut.
 	stop := func(line int, text string) string {
 		if len(text)+1 > OutputLimit {
-			return fmt.Sprintf("[line %d has %d chars, more than one call's output; read %s:%d alone]", line, js.Len(anchored.Lines[line-1]), t.display, line)
+			return fmt.Sprintf("[line %d has %d chars, more than one call's output; read %s:%d alone]", line, js.Len(anchored.Lines[line-1]), name, line)
 		}
-		return fmt.Sprintf("[output limit reached; continue with %s:%d-]", t.display, line)
+		return fmt.Sprintf("[output limit reached; continue with %s:%d-]", name, line)
 	}
 	sizeText := fmt.Sprintf("%d lines, %s", total, approximateTokens(size))
 	if sel.ranges == nil && sel.tail == 0 {
 		if reason := junk(t.canonical, size, anchored.Lines); reason != "" {
-			return noteBlock(fmt.Sprintf("[%s] skipped: %s, %s. Read %s:1- to read it anyway, a range like %s:1-100, or grep it.", t.display, reason, sizeText, t.display, t.display)), nil
+			return noteBlock(fmt.Sprintf("[%s] skipped: %s, %s. Read %s:1- to read it anyway, a range like %s:1-100, or grep it.", name, reason, sizeText, name, name)), nil
 		}
 		large := total > outlineLines || size > outlineBytes
-		if large || total > codeOutlineLines || size > codeOutlineBytes {
+		if t.commit {
+			if diffAt := slices.IndexFunc(anchored.Lines, isDiffStart); large && diffAt > 0 {
+				rows := make([]blockRow, diffAt)
+				for i := range rows {
+					rows[i] = rowFor(i + 1)
+				}
+				return &block{
+					head: fmt.Sprintf("%s %s; header and files only. Read the diff with %s:%d-, or one file's with %s:PATH.", head, sizeText, name, diffAt+1, name),
+					rows: rows,
+					finish: func(shown int) []string {
+						if shown < len(rows) {
+							return []string{stop(rows[shown].at, rows[shown].text)}
+						}
+						return nil
+					},
+				}, nil
+			}
+		} else if large || total > codeOutlineLines || size > codeOutlineBytes {
 			s := outline(t.display, anchored.Lines)
 			anchors := 0
 			for _, r := range s.rows {
@@ -1511,9 +1573,9 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 						rows[i] = blockRow{text: r.text}
 					}
 				}
-				rows = e.heldRows(ctx, t.canonical, anchored, rows)
+				rows = held(rows)
 				return &block{
-					head: fmt.Sprintf("%s %s; outline only. Read the ranges you need, like %s:120-180, or %s:1- for everything.", head, sizeText, t.display, t.display),
+					head: fmt.Sprintf("%s %s; outline only. Read the ranges you need, like %s:120-180, or %s:1- for everything.", head, sizeText, name, name),
 					rows: rows,
 					finish: func(shown int) []string {
 						record(rows[:shown])
@@ -1531,9 +1593,9 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 				for i := range rows {
 					rows[i] = rowFor(i + 1)
 				}
-				rows = e.heldRows(ctx, t.canonical, anchored, rows)
+				rows = held(rows)
 				return &block{
-					head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, t.display, count+1),
+					head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, name, count+1),
 					rows: rows,
 					finish: func(shown int) []string {
 						record(rows[:shown])
@@ -1559,7 +1621,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		last = r.end
 	}
-	rows = e.heldRows(ctx, t.canonical, anchored, rows)
+	rows = held(rows)
 	return &block{head: head, rows: rows, finish: func(shown int) []string {
 		record(rows[:shown])
 		notes := cuts(rows[:shown])
@@ -1569,7 +1631,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		whole := len(selected) == 1 && selected[0].start == 1 && selected[0].end == total
 		// The missing final newline shows only with the last line, where a task to add one would look for it.
 		var ending []string
-		if last == total && source.body != "" && !strings.HasSuffix(source.body, "\n") {
+		if last == total && t.rev == "" && source.body != "" && !strings.HasSuffix(source.body, "\n") {
 			ending = []string{"[no final newline; " + finalNewlineHint + "]"}
 		}
 		if whole {
@@ -1582,7 +1644,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		open := sel.tail == 0 && !slices.ContainsFunc(rangesWanted, func(r lineRange) bool { return r.end != 0 })
 		footer := fmt.Sprintf("[%d lines total]", total)
 		if open && last < total {
-			footer = fmt.Sprintf("[%d lines total; continue with %s:%d-]", total, t.display, last+1)
+			footer = fmt.Sprintf("[%d lines total; continue with %s:%d-]", total, name, last+1)
 		}
 		return append(append(ending, footer), notes...)
 	}}, nil
