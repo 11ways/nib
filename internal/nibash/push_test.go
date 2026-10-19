@@ -170,3 +170,9 @@ func TestAJobStartedWithAmpersandIsNeverPushed(t *testing.T) {
 		t.Errorf("pushed %v", p.got)
 	}
 }
+
+func TestTheLaunchersChannelWordStaysOutOfTheShell(t *testing.T) {
+	t.Setenv("NIB_CHANNEL", "1")
+	f := newFixture(t, map[string]string{})
+	expect(t, f.run(`echo "${NIB_CHANNEL-unset}"; env | grep -c NIB_CHANNEL; true`), "unset\n0")
+}

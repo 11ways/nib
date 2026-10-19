@@ -239,13 +239,14 @@ func (s *Shell) Close(key any) {
 	}
 }
 
-// environment is the process environment with the settings that keep programs from waiting on a terminal the model does not have.
+// environment is the process environment with the settings that keep programs from waiting on a terminal the model does not have, and
+// without the launcher's word that this session names nib's channel, which a Claude Code started inside it must not take for its own.
 func environment(pairs []string) []string {
 	quiet := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "TERM": "dumb"}
 	var env []string
 	for _, pair := range pairs {
 		name, _, _ := strings.Cut(pair, "=")
-		if _, replaced := quiet[name]; !replaced {
+		if _, replaced := quiet[name]; !replaced && name != server.ChannelEnv {
 			env = append(env, pair)
 		}
 	}

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"os"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -16,111 +14,29 @@ import (
 
 // Claude Code's channels: a server that declares channelCapability may put a message in the session's conversation with channelMethod, which
 // wakes an idle session and joins a running turn at its next request. Claude Code takes them only from a server its command line names in a
-// channel option, and tells the server nothing of that, so the server reads its ancestors' command lines; and only on a connection of a
-// protocol revision before channelRevision, the first with no way for a server to send a notification unasked.
+// channel option and tells the server nothing of that, but passes its environment on, so the launcher that names nib's channel sets
+// ChannelEnv; and only on a connection of a protocol revision before channelRevision, the first with no way to send a notification unasked.
 const (
 	channelCapability = "claude/channel"
 	channelMethod     = "notifications/claude/channel"
 	// channelClient is Claude Code's clientInfo name.
 	channelClient = "claude-code"
-	// channelDepth bounds the ancestors searched for a channel option: a wrapper or two may sit between Claude Code and the server.
-	channelDepth = 8
 	// channelRevision is the first MCP revision a channel cannot use.
 	channelRevision = "2026-07-28"
-	// ChannelName is the name nib setup registers the server under, which a channel option names it by.
-	ChannelName = "nib"
+	// ChannelEnv is set by the launcher that starts Claude Code naming nib's channel (server:nib).
+	ChannelEnv = "NIB_CHANNEL"
 )
-
-// channelFlags are Claude Code's options that list a session's channels.
-var channelFlags = []string{"--channels", "--dangerously-load-development-channels"}
 
 // channelVersions are the protocol versions a server with a channel offers: those before channelRevision.
 func channelVersions() []string {
 	return slices.DeleteFunc(mcp.SupportedProtocolVersions(), func(v string) bool { return v >= channelRevision })
 }
 
-// ArgvNamesChannel says whether argv lists name's channel, server:NAME or plugin:NAME@MARKETPLACE, after a channel option, which takes each
-// following word up to the next option, or in its =value; known is false when argv has no channel option at all.
-func ArgvNamesChannel(argv []string, name string) (named, known bool) {
-	listing := false
-	for _, word := range argv {
-		if strings.HasPrefix(word, "-") {
-			listing = false
-			for _, flag := range channelFlags {
-				if word == flag {
-					listing, known = true, true
-				}
-				if value, ok := strings.CutPrefix(word, flag+"="); ok {
-					known = true
-					if entryNames(value, name) {
-						return true, true
-					}
-				}
-			}
-			continue
-		}
-		if listing && entryNames(word, name) {
-			return true, true
-		}
-	}
-	return false, known
-}
-
-func entryNames(entry, name string) bool {
-	if rest, ok := strings.CutPrefix(entry, "server:"); ok {
-		return rest == name
-	}
-	if rest, ok := strings.CutPrefix(entry, "plugin:"); ok {
-		plugin, _, found := strings.Cut(rest, "@")
-		return found && plugin == name
-	}
-	return false
-}
-
-// ChannelNamed says whether the nearest ancestor of this process started with a channel option names name's channel; one farther up is
-// another session, whose channels never reach this one. It is false where /proc cannot be read.
-func ChannelNamed(name string) bool { return channelNamed(os.Getppid(), name, procArgv, procParent) }
-
-func channelNamed(pid int, name string, argv func(int) ([]string, bool), parent func(int) (int, bool)) bool {
-	for depth := 0; depth < channelDepth && pid > 1; depth++ {
-		if args, ok := argv(pid); ok {
-			if named, known := ArgvNamesChannel(args, name); known {
-				return named
-			}
-		}
-		next, ok := parent(pid)
-		if !ok {
-			return false
-		}
-		pid = next
-	}
-	return false
-}
-
-func procArgv(pid int) ([]string, bool) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
-	if err != nil || len(data) == 0 {
-		return nil, false
-	}
-	return strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00"), true
-}
-
-// procParent reads a process's parent from its stat line, after the command name, which may hold spaces and parentheses.
-func procParent(pid int) (int, bool) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return 0, false
-	}
-	at := strings.LastIndexByte(string(data), ')')
-	if at < 0 {
-		return 0, false
-	}
-	fields := strings.Fields(string(data[at+1:]))
-	if len(fields) < 2 {
-		return 0, false
-	}
-	parent, err := strconv.Atoi(fields[1])
-	return parent, err == nil
+// ChannelOn says whether the launcher said the session names nib's channel; nibash keeps ChannelEnv from the programs it starts, so a Claude
+// Code started inside the session does not take it for its own.
+func ChannelOn() bool {
+	value := os.Getenv(ChannelEnv)
+	return value != "" && value != "0"
 }
 
 // channel is the connection channel messages go out on, which the transport from Transport keeps; nib serves one client over stdio.

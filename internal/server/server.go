@@ -56,7 +56,7 @@ type Options struct {
 	Compacted func(session string) (compacted time.Time, ok bool)
 	// Providers are the programs whose tools nib offers as its own, as NAME_TOOL.
 	Providers []*providers.Provider
-	// Channel is whether the session was started naming this server in a Claude Code channel option (ChannelNamed), which lets nibash tell the
+	// Channel is whether the session was started naming this server in a Claude Code channel option (ChannelOn), which lets nibash tell the
 	// main agent a job's end on its own.
 	Channel bool
 	// NamesFile, when set, turns on naming the directories an agent's paths keep running through, and keeps the names agents get there

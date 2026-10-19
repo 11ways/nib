@@ -374,9 +374,11 @@ When the command finishes or its time runs out, the sink is rendered once:
   (`notifications/claude/channel` with `content` and `meta`, under the experimental capability `claude/channel`): it
   shows as `<channel source="nib" job="1" exit="0">`, wakes an idle session and joins a running turn at its next
   request. Claude Code takes it only from a server its command line names in `--channels` or
-  `--dangerously-load-development-channels` (`server:nib`, or `plugin:nib@MARKET`) and tells the server nothing, so nib
-  reads its ancestors' command lines (`/proc`), up to the nearest one with a channel option, and declares the capability
-  only then. It writes the notification on the stdio connection itself, as the SDK sends no method it does not know.
+  `--dangerously-load-development-channels` (`server:nib`, or `plugin:nib@MARKET`) and tells the server nothing, but it
+  passes its environment on: the launcher that names nib's channel sets `NIB_CHANNEL=1` (claude-capture does), and nib
+  declares the capability only then. nibash leaves `NIB_CHANNEL` out of the programs it starts, so a Claude Code started
+  inside the session does not take it for its own. nib writes the notification on its connection, as the SDK sends no
+  method it does not know.
   - Claude Code registers a channel only on a connection of a revision before 2026-07-28 (on 2026-07-28 its debug log
     says "connection negotiated a modern protocol revision with no unsolicited notification path"), so a server with a
     channel offers only the earlier revisions and the session speaks 2025-11-25. There the SDK turns nib's input

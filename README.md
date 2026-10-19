@@ -613,7 +613,8 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   outlive the call that starts them, and a later call reaches them by their spec. Finished jobs are reported at the top
   of the next call, unless a `wait` already told their end, and only the end of the connection ends the rest. In a
   Claude Code session started naming nib's channel (`--channels server:nib`, or
-  `--dangerously-load-development-channels server:nib` while channels are a research preview), the end of a
+  `--dangerously-load-development-channels server:nib` while channels are a research preview) and with `NIB_CHANNEL=1`
+  in its environment, since Claude Code tells a server nothing of its channels (claude-capture sets both), the end of a
   `background: true` job, or of a call that went on as a job, comes to the main agent on its own as a channel message,
   waking it: `[job %1 finished, exit 0; output: LOG]` and what the job printed after its call returned, shaped as long
   output is, so no `wait` is needed; the job's note says so. For this, nib speaks MCP 2025-11-25 with such a session,

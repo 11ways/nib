@@ -15,52 +15,12 @@ import (
 	"github.com/11ways/nib/internal/hookstate"
 )
 
-func TestArgvNamesChannelReadsTheOptionAsClaudeCodeDoes(t *testing.T) {
-	for _, c := range []struct {
-		argv         []string
-		named, known bool
-	}{
-		{[]string{"claude", "--dangerously-load-development-channels", "server:nib"}, true, true},
-		{[]string{"claude", "--channels", "server:tg", "server:nib", "--model", "haiku"}, true, true},
-		{[]string{"claude", "--channels=plugin:nib@market"}, true, true},
-		{[]string{"claude", "--channels", "plugin:nib@m"}, true, true},
-		{[]string{"claude", "--dangerously-load-development-channels", "server:sketerm", "server:nib"}, true, true},
-		// Another server's channel, a bare name, or an entry after the list ended: a session with channels, not this server's.
-		{[]string{"claude", "--channels", "server:telegram"}, false, true},
-		{[]string{"claude", "--channels=server:telegram"}, false, true},
-		{[]string{"claude", "--channels", "nib"}, false, true},
-		{[]string{"claude", "--channels", "server:tg", "--model", "server:nib"}, false, true},
-		{[]string{"claude", "--channels", "server:nib2"}, false, true},
-		{[]string{"claude", "--channels", "plugin:nib"}, false, true},
-		// No channel option: a wrapper, so the search goes on.
-		{[]string{"claude", "--model", "server:nib"}, false, false},
-		{[]string{"/bin/sh", "-c", "exec nib"}, false, false},
-	} {
-		if named, known := ArgvNamesChannel(c.argv, "nib"); named != c.named || known != c.known {
-			t.Errorf("%q: got %v %v, want %v %v", c.argv, named, known, c.named, c.known)
+func TestChannelOnIsWhatTheLauncherSays(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "0": false, "1": true} {
+		t.Setenv(ChannelEnv, value)
+		if got := ChannelOn(); got != want {
+			t.Errorf("%s=%q: got %v, want %v", ChannelEnv, value, got, want)
 		}
-	}
-}
-
-func TestChannelNamedLooksAsFarAsTheNearestChannelOption(t *testing.T) {
-	// 40 is a wrapper shell, 30 the Claude Code session, 20 an outer Claude Code that named the channel.
-	argvs := map[int][]string{
-		40: {"/bin/sh", "-c", "nib"},
-		30: {"claude", "--model", "haiku"},
-		20: {"claude", "--channels", "server:nib"},
-	}
-	parents := map[int]int{40: 30, 30: 20, 20: 1}
-	argv := func(pid int) ([]string, bool) { a, ok := argvs[pid]; return a, ok }
-	parent := func(pid int) (int, bool) { p, ok := parents[pid]; return p, ok }
-	if !channelNamed(40, "nib", argv, parent) {
-		t.Error("a channel two processes up, past a wrapper, is this session's")
-	}
-	argvs[30] = []string{"claude", "--channels", "server:other"}
-	if channelNamed(40, "nib", argv, parent) {
-		t.Error("the nearest channel option names another server, so an outer one does not count")
-	}
-	if channelNamed(40, "nib", func(int) ([]string, bool) { return nil, false }, parent) {
-		t.Error("unreadable processes name no channel")
 	}
 }
 
