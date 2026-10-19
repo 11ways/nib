@@ -124,9 +124,9 @@ The tool description says plainly:
   server instructions name too);
 - `git` is nib's own for the forms it reshapes (status, `add -v`, `rm`, `ls-files`, diffs and stats of `diff`, `show`
   and `log`, and `show` and `log` in git's default format) when its output goes to the model: it runs the real git and
-  prints each folder of a path list once, a diff's lines as rows of the files as they are now, and each commit header as
-  one line (short hash, the author's email unless it is the user's own, local date to the minute), the one place its
-  output differs in content;
+  prints each folder of a path list once, a stat row's bar as the exact counts it draws, a diff's lines as rows of the
+  files as they are now, and each commit header as one line (short hash, the author's email unless it is the user's own,
+  local date to the minute), the one place its output differs in content;
 - `find` and `ls` are nib's own the same way for the forms that print one path a line: the real program runs, and each
   folder of its paths prints once;
 - every other command, and those names in any other position or written as a path (`/usr/bin/grep`), is the real

@@ -259,8 +259,8 @@ func (p *gitPlan) run(inv *invocation) int {
 		shaper.flush()
 		return status
 	}
-	// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars at
-	// most 20 wide, it prints the form that is shorter laid out. A stat only reads, so running it twice changes nothing.
+	// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars that
+	// draw every changed line, it prints the form that is shorter laid out. A stat only reads, so running it twice changes nothing.
 	lines, status := captured(inv, p.command(false), false)
 	if wide, wideStatus := captured(inv, p.command(true), true); wideStatus == status && p.shown(wide) < p.shown(lines) {
 		lines = wide
@@ -274,27 +274,68 @@ func (p *gitPlan) run(inv *invocation) int {
 	return status
 }
 
+// statWidth is the --stat-width and --stat-graph-width that print every path whole and draw each changed line as one bar character, so a
+// row's bar holds its exact counts; a file with more changed lines gets a scaled bar, which prints as git printed it.
+const statWidth = "1000000"
+
 // command is the git that runs for output the model gets: the command line's own, with --abbrev-commit where nib prints commit headers as
-// one line, and with a --stat wide enough for every path whole, its bars at most 20 wide, when wide.
+// one line, and with a --stat wide enough for every path whole and every changed line its own bar character, when wide.
 func (p *gitPlan) command(wide bool) []string {
 	var extra []string
 	if p.headers {
 		extra = append(extra, "--abbrev-commit")
 	}
 	if wide {
-		extra = append(extra, "--stat-width=1000", "--stat-graph-width=20")
+		extra = append(extra, "--stat-width="+statWidth, "--stat-graph-width="+statWidth)
 	}
 	return append(append(append([]string{"git"}, p.args[:p.at+1]...), extra...), p.args[p.at+1:]...)
 }
 
-// shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, and the rest as they are.
+// gitStatBar matches a --stat file row with its count and bar: the path, the count and the bar, which a file with no changed lines lacks.
+var gitStatBar = regexp.MustCompile(`^ (\S.*?) +\| +(\d+)(?: ([+-]+))?$`)
+
+// statCounts is a --stat file row as it prints for the model, " PATH +A -D", its bar given as the counts it draws; ok is false for a line
+// that is no such row or whose bar git scaled, so it does not draw each changed line. listed is that row's path, plain or not.
+func statCounts(line string) (shown string, l listed, ok bool) {
+	m := gitStatBar.FindStringSubmatch(line)
+	if m == nil {
+		return "", listed{}, false
+	}
+	added, removed := strings.Count(m[3], "+"), strings.Count(m[3], "-")
+	if total, _ := strconv.Atoi(m[2]); total != added+removed {
+		return "", listed{}, false
+	}
+	var counts []string
+	if added > 0 {
+		counts = append(counts, "+"+strconv.Itoa(added))
+	}
+	if removed > 0 {
+		counts = append(counts, "-"+strconv.Itoa(removed))
+	}
+	if len(counts) == 0 {
+		counts = []string{"0"}
+	}
+	l = listed{before: " ", path: m[1], after: " " + strings.Join(counts, " ")}
+	return l.before + l.path + l.after, l, true
+}
+
+// shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, a wide stat's rows with their
+// counts, and the rest as they are.
 func (p *gitPlan) shown(lines []string) int {
 	parse := gitParser(p.forms)
+	counted := map[string]listed{}
 	total := 0
 	var plain []string
 	for i := 0; i < len(lines); {
 		if !gitDiff.MatchString(lines[i]) {
-			plain = append(plain, lines[i])
+			line := lines[i]
+			if shown, l, ok := p.statCounts(line); ok {
+				line = shown
+				if plainPath(l.path) {
+					counted[shown] = l
+				}
+			}
+			plain = append(plain, line)
 			i++
 			continue
 		}
@@ -302,7 +343,20 @@ func (p *gitPlan) shown(lines []string) int {
 		total += textSize(lines[i:end])
 		i = end
 	}
-	return total + textSize(compactListing(plain, parse))
+	return total + textSize(compactListing(plain, func(line string) (listed, bool) {
+		if l, ok := counted[line]; ok {
+			return l, true
+		}
+		return parse(line)
+	}))
+}
+
+// statCounts is statCounts for a wide stat, the only one whose bars nib asked to draw every changed line.
+func (p *gitPlan) statCounts(line string) (string, listed, bool) {
+	if !p.wide {
+		return "", listed{}, false
+	}
+	return statCounts(line)
 }
 
 func textSize(lines []string) int {

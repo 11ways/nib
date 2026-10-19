@@ -533,10 +533,14 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   effect are git's; what it prints changes form, and in one place content. Path lists name each folder once, as `find`
   does, in a bracketed row (`[src/server/java/be/elevenways/cms/]`) with the rest of each path under it and the rest of
   every line kept (the `XY` of a status, a stat's counts); a folder within a folder gets its own row under it, and a run
-  is laid out so only where that saves at least 16 characters, never making the output longer. A `--stat` without a
-  width runs twice, as git would print it and with `--stat-width=1000 --stat-graph-width=20` (every path whole, bars at
-  most 20 wide), and prints whichever is shorter laid out. A diff prints each changed file under its `[PATH#TAG]` header
-  as it is now: a line the diff adds or keeps is the file's `N:` row (`+N:` for an added one) where the file holds
+  is laid out so only where that saves at least 16 characters, never making the output longer. A `--stat` file row
+  prints its exact counts instead of git's bar, `Store.java +34 -34` (`+25` for a file only grown, `-9` for one only
+  shrunk, `0` for one with no changed lines), read from the bar git drew: a `--stat` without a width runs twice, as git
+  would print it and with `--stat-width=1000000 --stat-graph-width=1000000` (every path whole, one bar character per
+  changed line), and prints whichever is shorter laid out. A row whose bar git still scaled, a binary file's
+  `Bin ...` row, the summary line and a `--stat=N` the command line sized print as git printed them; into anything that
+  reads text the bars stay too. A diff prints each changed file under its `[PATH#TAG]` header as it is now: a line the
+  diff adds or keeps is the file's `N:` row (`+N:` for an added one) where the file holds
   exactly that text at that line, a removed line is `-|TEXT`, and a line the file no longer holds there (a staged change
   since edited, an old commit) is `+N|TEXT`, never an anchor. Those rows count as displayed, so an edit can anchor on
   them with no read. A deleted, binary or quoted-path file's part, and anything else git prints, is as git printed it.

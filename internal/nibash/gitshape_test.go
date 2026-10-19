@@ -62,7 +62,7 @@ func TestGitHeadersInOtherFormatsPrintAsGitPrintsThem(t *testing.T) {
 		"git log --format=%s%n%an":              raw("log", "--format=%s%n%an"),
 		"git log --graph":                       raw("log", "--graph"),
 		"git log --date=iso":                    raw("log", "--date=iso"),
-		"git log --pretty=fuller -1 --stat":     raw("log", "--pretty=fuller", "-1", "--stat"),
+		"git log --pretty=fuller -1 --stat":     strings.Replace(raw("log", "--pretty=fuller", "-1", "--stat"), " d.txt | 2 +-", " d.txt +1 -1", 1),
 		"git -c log.date=iso log -1":            raw("-c", "log.date=iso", "log", "-1", "--abbrev-commit"),
 		"git -c log.date=relative log -1 | cat": raw("-c", "log.date=relative", "log", "-1", "--abbrev-commit"),
 	} {
@@ -97,7 +97,7 @@ func TestGitThroughNibsHeadAndTailPrintsAsAtTheTerminal(t *testing.T) {
 	whole := f.run("git show --stat HEAD~1 HEAD")
 	piped := f.run("git show --stat HEAD~1 HEAD | head -80; echo after")
 	expect(t, piped, whole+"\nafter")
-	if !strings.Contains(piped, header+"\nchange\n\n a.go | 2 +-\n["+operation+"]\n   Operation.java | 2 +-\n") {
+	if !strings.Contains(piped, header+"\nchange\n\n a.go +1 -1\n["+operation+"]\n   Operation.java +1 -1\n") {
 		t.Errorf("show --stat through head:\n%s", piped)
 	}
 	// Through a loop's pipe into head too.
@@ -140,6 +140,48 @@ func TestGitIntoAnythingElseGetsGitsOwnLines(t *testing.T) {
 	expect(t, f.run("for r in HEAD; do git show $r -- d.txt; done | grep -c '^[-+]'"), "4")
 	if hashes[0] != full[:len(hashes[0])] {
 		t.Fatalf("abbreviated %s, full %s", hashes[0], full)
+	}
+}
+
+func TestGitStatRowsGiveTheExactCountsTheirBarsDraw(t *testing.T) {
+	var long, short strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&long, "line %d\n", i)
+	}
+	for i := range 40 {
+		fmt.Fprintf(&short, "kept %d\n", i)
+	}
+	f := gitFixture(t, map[string]string{"big.txt": long.String(), "gone.txt": short.String(), "old name.txt": "same\n"})
+	var grown strings.Builder
+	for i := range 300 {
+		if i%3 == 0 {
+			fmt.Fprintf(&grown, "line %d\n", i)
+		}
+		fmt.Fprintf(&grown, "new %d\n", i)
+	}
+	f.write("big.txt", grown.String())
+	f.write("gone.txt", "kept 0\n")
+	f.write("added.txt", strings.Repeat("a\n", 25))
+	f.git("mv", "old name.txt", "new name.txt")
+	f.git("add", "-A")
+	// More changed lines than git's bars are wide, a file only grown or only shrunk, and a rename whose path is no plain path: each row's
+	// exact counts, from what git drew.
+	out := f.run("git diff --cached --stat")
+	for _, row := range []string{" added.txt +25\n", " big.txt +300 -200\n", " gone.txt -39\n", " old name.txt => new name.txt 0\n"} {
+		if !strings.Contains(out, row) {
+			t.Errorf("no %q in:\n%s", row, out)
+		}
+	}
+	if strings.Contains(out, "|") || strings.Contains(out, "++") {
+		t.Errorf("a bar is left:\n%s", out)
+	}
+	// Through head too, which keeps as many of git's lines.
+	expect(t, f.run("git diff --cached --stat | head -2"), " added.txt +25\n big.txt +300 -200")
+	// Into anything that reads text go git's own lines, bars and all.
+	expect(t, f.run("git diff --cached --stat | grep -c '|'"), "4")
+	// A width the command line asks for prints as git prints it.
+	if sized := f.run("git diff --cached --stat=60"); !strings.Contains(sized, " big.txt") || !strings.Contains(sized, "| 500 +") {
+		t.Errorf("sized stat:\n%s", sized)
 	}
 }
 

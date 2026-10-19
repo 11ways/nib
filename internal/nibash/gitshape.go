@@ -41,6 +41,8 @@ const (
 	diffHeader
 	// diffRow is a line that prints under the file's header: a row of the file, or shown.
 	diffRow
+	// statRow is a --stat file row, which prints as shown, its bar given as counts; it belongs to no part.
+	statRow
 )
 
 // shaped is how a line of git's prints at the terminal: by its role in its part, and as shown when it is a line under a file's header that
@@ -59,6 +61,9 @@ func (s *shaped) counts() bool {
 // view is the line's text at the terminal, given how many counted lines of each part reached it; ok is false for a line that a commit
 // header's one line or a file's header stands for.
 func (s *shaped) view(text string, reached map[*gitPart]int) (string, bool) {
+	if s.role == statRow {
+		return s.shown, true
+	}
 	whole := s.part.lines > 0 && reached[s.part] == s.part.lines
 	switch s.role {
 	case commitLine:
@@ -193,6 +198,13 @@ func (s *gitShaper) between(text string) bool {
 	case s.plan.headers && gitCommit.MatchString(text):
 		s.held, s.state = []string{text}, inCommitHeader
 		return true
+	}
+	if shown, l, ok := s.plan.statCounts(text); ok {
+		r := record{text: text, shape: &shaped{role: statRow, shown: shown}}
+		if plainPath(l.path) {
+			r.listed = &listedLine{text: shown, listed: l}
+		}
+		return s.emit(r)
 	}
 	return s.emit(listingRecord(text, s.parse))
 }

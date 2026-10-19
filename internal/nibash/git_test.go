@@ -76,8 +76,9 @@ func TestGitPathListingsNameEachFolderOnce(t *testing.T) {
 		!strings.HasPrefix(long, "On branch main\n") {
 		t.Errorf("long status:\n%s", long)
 	}
-	// --stat prints every path whole, which git would cut to 80 columns, and lines the files of one folder up under it.
-	expect(t, f.run("git diff --stat"), " a.go | 2 +-\n["+operation+"]\n   Operation.java | 2 +-\n   OperationResult.java | 2 +-\n   ResultStep.java | 2 +-\n 4 files changed, 4 insertions(+), 4 deletions(-)")
+	// --stat prints every path whole, which git would cut to 80 columns, and lines the files of one folder up under it,
+	// each with the exact counts its bar draws.
+	expect(t, f.run("git diff --stat"), " a.go +1 -1\n["+operation+"]\n   Operation.java +1 -1\n   OperationResult.java +1 -1\n   ResultStep.java +1 -1\n 4 files changed, 4 insertions(+), 4 deletions(-)")
 	expect(t, f.run("git diff --name-only"), "a.go\n["+operation+"]\n  Operation.java\n  OperationResult.java\n  ResultStep.java")
 	expect(t, f.run("git ls-files"), "a.go\n["+operation+"]\n  Operation.java\n  OperationResult.java\n  ResultStep.java")
 	f.git("add", "-A")
