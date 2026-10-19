@@ -704,7 +704,8 @@ const (
 // changed lists the files the command created or changed: those the session held versions of, and those it wrote through a redirect.
 // A held file something else was already changing is left out unless the command redirected to it, since its change need not be the
 // command's. A change nib cannot credit to the command (see own) is listed apart, with its counts and no rows, as one that happened while
-// it ran. A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
+// it ran. Files in the temp folder the agent never read or wrote a line of are counted, not named. A file holding exactly a
+// here-document's text is recorded with every line known, since the model typed it.
 func (c *call) changed(before map[string]held, bodies []string) string {
 	type candidate struct {
 		created bool
@@ -737,6 +738,8 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 	}
 	slices.Sort(sorted)
 	var listed, while, blocks []string
+	var tempNew, tempChanged int
+	temp := tempFolder()
 	budget := changedRows
 	for _, path := range sorted {
 		if strings.HasPrefix(path, "/dev/") || strings.HasPrefix(path, "/proc/") {
@@ -780,6 +783,14 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 			while = append(while, entry)
 			continue
 		}
+		if c.scratch(path, temp) && !c.shown(path) && (found.created || found.was != view.Tag) {
+			if found.created {
+				tempNew++
+			} else {
+				tempChanged++
+			}
+			continue
+		}
 		switch {
 		case found.created:
 			entry += " (new)"
@@ -802,6 +813,12 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		listed = append(listed, entry)
 	}
 	var notes []string
+	if tempNew > 0 {
+		listed = append(listed, countOf(tempNew, "new file")+" in the temp folder")
+	}
+	if tempChanged > 0 {
+		listed = append(listed, countOf(tempChanged, "changed file")+" in the temp folder")
+	}
 	if len(listed) > 0 {
 		notes = append(notes, "[changed by this command: "+strings.Join(listed, ", ")+"]")
 		notes = append(notes, blocks...)
@@ -810,4 +827,40 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		notes = append(notes, "[changed while this command ran, by it or another writer: "+strings.Join(while, ", ")+"]")
 	}
 	return strings.Join(notes, "\n")
+}
+
+// tempFolder is the system's temp folder, canonical, or "" when it cannot be resolved.
+func tempFolder() string {
+	folder, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		return ""
+	}
+	return folder
+}
+
+// scratch reports whether path lies in the temp folder but outside the server's directory, which a project in the temp folder still is.
+func (c *call) scratch(path, temp string) bool {
+	if temp == "" || !strings.HasPrefix(path, temp+string(filepath.Separator)) {
+		return false
+	}
+	project, err := filepath.EvalSymlinks(c.tools.Directory)
+	return err != nil || !strings.HasPrefix(path, project+string(filepath.Separator))
+}
+
+// shown reports whether the agent was shown or wrote any line of any version of path this session holds.
+func (c *call) shown(path string) bool {
+	for _, version := range c.engine.Store.Versions(c.tools.Session, path) {
+		if len(version.Seen) > 0 || len(version.Known) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// countOf is n of thing, plural when n is not one.
+func countOf(n int, thing string) string {
+	if n == 1 {
+		return "1 " + thing
+	}
+	return fmt.Sprintf("%d %ss", n, thing)
 }

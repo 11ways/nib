@@ -356,6 +356,9 @@ When the command finishes or its time runs out, the sink is rendered once:
     the change, its header then `-|` rows for removed lines and `+N:` rows of the new version, recorded as seen, and the
     kept line before a hunk that only removes. One command shows at most 30 such rows (`changedRows`); later files, and
     every larger change, give their counts only (`Engine.Changed`).
+  - Files under the temp folder (`os.TempDir`, canonical) of which the session holds no line seen or known are not named
+    but counted, `2 new files in the temp folder` or `1 changed file in the temp folder`, in the same note: an agent's
+    scratch output it never read tells it nothing by name. Reading one makes it a file like any other.
   - A file whose new content equals a here-document or here-string body in the command is recorded with every line
     known, as after `write`, since the model typed it.
   - A held file something else is changing is left out unless a redirect of the command wrote it, so a log a build

@@ -59,6 +59,29 @@ func TestAFileARunningJobNamesIsNotCalledChangedByAnotherCommand(t *testing.T) {
 	expect(t, f.run("wait"), "(no output)")
 }
 
+func TestFilesInTheTempFolderTheAgentNeverReadAreCountedNotNamed(t *testing.T) {
+	f := newFixture(t, nil)
+	temp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", temp)
+	if out := f.run("echo x > " + temp + "/a.json; echo y > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 2 new files in the temp folder]") || strings.Contains(out, ".json") {
+		t.Fatalf("got %q", out)
+	}
+	if out := f.run("echo v > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 1 changed file in the temp folder]") {
+		t.Fatalf("a rewrite of one never read, got %q", out)
+	}
+	if out := f.run("echo q > n.txt; echo r > " + temp + "/c.json"); !regexp.MustCompile(`\[changed by this command: n\.txt#[0-9A-F]{4} \(new\), 1 new file in the temp folder\]$`).MatchString(out) {
+		t.Fatalf("a new file outside it, got %q", out)
+	}
+	// Once read, a file there is like any other.
+	f.run("cat " + temp + "/a.json")
+	if out := f.run("echo w >> " + temp + "/a.json"); !strings.Contains(out, "a.json#") || !strings.Contains(out, "(was #") || strings.Contains(out, "temp folder") {
+		t.Fatalf("a file read before, got %q", out)
+	}
+}
+
 // TestAChangeNibCannotCreditToTheCommandShowsNoRows changes held files while a command sleeps: one outside anything the command reached,
 // written by another program, and one in its own directory, written by nib's edit; neither is called the command's, nor shown as its rows.
 func TestAChangeNibCannotCreditToTheCommandShowsNoRows(t *testing.T) {

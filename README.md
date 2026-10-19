@@ -693,6 +693,9 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   file the agent saw some of, changed in at most 10 lines, then shows the change under its header: removed lines as `-|`
   rows, added ones as `+N:` rows of the new version, which count as seen, so an edit can anchor on them at once, and the
   kept line before a hunk that only removes, so its place shows; at most 30 such rows per command, the rest counts only.
+  Files in the temp folder (`$TMPDIR`, else `/tmp`; `%TEMP%` on Windows) the agent never read or wrote a line of are
+  only counted: `[changed by this command: 2 new files in the temp folder]`, or `1 changed file`; once read, such a file
+  is listed like any other.
   A file whose content is exactly a here-document of the command counts as known, like a `write`, so a checked edit
   needs no read. A held file something else was already changing as the command began (it differed from the version
   the session holds,
