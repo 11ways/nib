@@ -176,10 +176,22 @@ type scan struct {
 	commands  []simpleCommand
 	dirs      []string
 	directory string
+	// reads are the known words of the call that may name files it reads, in source order: arguments and what < redirects in.
+	reads []string
 }
 
 func (s *scan) node(node syntax.Node, depth int) {
 	syntax.Walk(node, func(n syntax.Node) bool {
+		if stmt, ok := n.(*syntax.Stmt); ok {
+			for _, r := range stmt.Redirs {
+				if r.Op == syntax.RdrIn && r.Word != nil {
+					if word, known := s.word(r.Word); known {
+						s.reads = append(s.reads, word)
+					}
+				}
+			}
+			return true
+		}
 		call, ok := n.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
 			return true
@@ -188,6 +200,11 @@ func (s *scan) node(node syntax.Node, depth int) {
 		known := make([]bool, len(call.Args))
 		for i, w := range call.Args {
 			words[i], known[i] = s.word(w)
+		}
+		for i := 1; i < len(words); i++ {
+			if known[i] {
+				s.reads = append(s.reads, words[i])
+			}
 		}
 		s.command(words, known, depth)
 		return true
@@ -356,7 +373,7 @@ func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File
 		}
 	}
 	if len(broken) > 0 {
-		return ruleCheck{refusal: strings.Join(broken, "\n")}
+		return ruleCheck{refusal: strings.Join(broken, "\n") + s.skimHint(sc, tools)}
 	}
 	if len(vagues) == 0 {
 		return ruleCheck{}
@@ -381,7 +398,30 @@ func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File
 		}
 		broken = append(broken, line+"]")
 	}
-	return ruleCheck{refusal: strings.Join(broken, "\n")}
+	if len(broken) == 0 {
+		return ruleCheck{}
+	}
+	return ruleCheck{refusal: strings.Join(broken, "\n") + s.skimHint(sc, tools)}
+}
+
+// skimHint points a refused call that reads logs of nib's shells, as an argument or a redirect, at skim, which answers from a log without a
+// pipe; "" when it reads none.
+func (s *Shell) skimHint(sc *scan, tools *engine.Context) string {
+	var logs []string
+	for _, read := range sc.reads {
+		if !filepath.IsAbs(read) {
+			read = filepath.Join(tools.Directory, read)
+		}
+		if read = filepath.Clean(read); s.logs.holds(read) {
+			if shown := tools.Display(read); !slices.Contains(logs, shown) {
+				logs = append(logs, shown)
+			}
+		}
+	}
+	if len(logs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n[%s %s with an expect answers this without a pipe]", engine.Skim, strings.Join(logs, ", "))
 }
 
 // uncheckedOnce is the note that a file's vague rules went unchecked, shown to an agent once per file and reason.

@@ -447,7 +447,9 @@ runs, background calls included:
   with the whole command, its description and its directory; a rule counts as broken from `PickThreshold`. With no
   decision model, or when every model fails, the command runs with a note, once per agent, file and reason.
 - **A refusal** prints one `[nothing ran: ...]` line per broken rule and `[exit 126]`; nothing starts, no job is made and
-  the finished jobs' reports wait for the next call.
+  the finished jobs' reports wait for the next call. A refused call whose known words or `<` redirects name logs nibash
+  wrote (`<pid>-output-N.log`, `<pid>-job-N.log` in the runtime directory) gets one line before `[exit 126]` pointing
+  at `skim` for them, the cheap way to the answer it wanted from a pipe.
 
 ## 6. Named directories
 

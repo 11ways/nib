@@ -205,7 +205,7 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 
 // open adds a new job that began at started, ended through cancel, with a new log for its output; finish ends it.
 func (t *jobTable) open(logs *logDirectory, command string, cancel context.CancelFunc, started time.Time) (*job, *cappedWriter, error) {
-	path, err := logs.file("job")
+	path, err := logs.file(jobKind)
 	if err != nil {
 		return nil, nil, err
 	}

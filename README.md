@@ -910,8 +910,10 @@ arguments joined by spaces, a word nibash cannot know before running (`$cmd`) st
 (`NIB_DECIDER=openrouter`) against the whole command and its `description`; its answers are cached, so the same command
 asks once. A refused call runs nothing, background calls included, and prints one line per broken rule,
 `[nothing ran: zenit-dev build is against a rule in /path/nib.json: builds and tests go through the zd_build / zd_test tools]`,
-then `[exit 126]`; the agent cannot override it. Without a decision model, or when it fails, a vague rule is not
-checked: the command runs, and the agent is told so once per file and reason. The rules that apply are those of the
+then `[exit 126]`; the agent cannot override it. When the refused call reads one of nibash's saved logs, as an argument
+or through `<`, one more line before `[exit 126]` names them all: `[skim LOG with an expect answers this without a pipe]`.
+Without a decision model, or when it fails, a vague rule is not checked: the command runs, and the agent is told so
+once per file and reason. The rules that apply are those of the
 nearest `nib.json` holding rules at or above the call's directory and at or above every directory the call `cd`s into by
 a literal path; they apply to the whole call. Under `NIB_SANDBOX=1` only a `nib.json` inside the roots counts. A
 `nib.json` whose rules cannot be read refuses every call under it, naming the file and the error.

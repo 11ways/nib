@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/server"
 )
 
@@ -147,6 +148,36 @@ func TestExactRulesNeedNoModelAndNoRulesAskNothing(t *testing.T) {
 	}
 	if len(j.asked) != 0 {
 		t.Fatalf("no vague rule, no question: %+v", j.asked)
+	}
+}
+
+func TestARefusedCommandReadingANibLogPointsAtSkim(t *testing.T) {
+	rules := `{"rules": [{"program": "awk", "why": "no awk here"}, {"rule": "Do not pipe or filter zenit-dev's output."}]}`
+	f := newFixture(t, map[string]string{"nib.json": rules})
+	f.shell.Deciding(newJudge(func(q decider.RuleQuestion) []int {
+		if strings.Contains(q.Command, "sort") {
+			return []int{0}
+		}
+		return nil
+	}))
+	first, second := f.shell.logs.save("a 1\nb 2\n"), f.shell.logs.save("c 3\n")
+	if first.path == "" || second.path == "" {
+		t.Fatal("no log was saved")
+	}
+	hint := func(paths ...string) string {
+		return "\n[" + engine.Skim + " " + strings.Join(paths, ", ") + " with an expect answers this without a pipe]\n[exit 126]"
+	}
+	for command, want := range map[string]string{
+		"awk '{print $1}' " + first.path:                          hint(first.path),
+		"sort < " + first.path + " | uniq -c; cat " + second.path: hint(first.path, second.path),
+	} {
+		if out := f.run(command); !strings.HasPrefix(out, "[nothing ran: ") || !strings.HasSuffix(out, want) || strings.Count(out, engine.Skim+" ") != 1 {
+			t.Errorf("%s: %q, want it to end %q", command, out, want)
+		}
+	}
+	// A refusal reading no log of nib's gets no pointer.
+	if out := f.run("awk '{print $1}' nib.json"); !strings.HasPrefix(out, "[nothing ran: ") || strings.Contains(out, engine.Skim+" ") {
+		t.Errorf("got %q", out)
 	}
 }
 

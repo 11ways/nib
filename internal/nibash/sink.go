@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -645,6 +646,19 @@ func (l *logDirectory) file(kind string) (string, error) {
 	return filepath.Join(l.path, fmt.Sprintf("%d-%s-%d.log", os.Getpid(), kind, l.next)), nil
 }
 
+// The kinds of log a shell writes: a long output's and a job's.
+const (
+	outputKind = "output"
+	jobKind    = "job"
+)
+
+var nibLog = regexp.MustCompile(`^[0-9]+-(?:` + outputKind + `|` + jobKind + `)-[0-9]+\.log$`)
+
+// holds reports whether path, an absolute path, names a log a nib shell wrote, this server's or another's.
+func (l *logDirectory) holds(path string) bool {
+	return filepath.Dir(filepath.Clean(path)) == l.path && nibLog.MatchString(filepath.Base(path))
+}
+
 // saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds. A
 // file read with skim is its own log, whose notes name skim and number its lines from base on: the log's line N is the file's base+N.
 type saved struct {
@@ -676,7 +690,7 @@ func (l saved) span(first, last int) string { return lineSpan(l.base+first, l.ba
 // save writes text to a new log, capped at logLimit.
 func (l *logDirectory) save(text string) saved {
 	s := saved{lines: lineCount(text)}
-	path, err := l.file("output")
+	path, err := l.file(outputKind)
 	if err != nil {
 		return s
 	}
