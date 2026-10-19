@@ -224,7 +224,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	s.mu.Lock()
 	facts, tails := s.facts, s.tails
 	s.mu.Unlock()
-	rows, raw, echoed := s.collect(e, ctx)
+	rows, raw, echoed, own := s.collect(e, ctx)
 	rows, footer := fit(ctx.Ctx, rows, raw, d, func() saved { return logs.save(raw) })
 	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
 	rows = groupListings(rows)
@@ -249,6 +249,10 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	}
 	if echoed {
 		texts = append(texts, e.EchoNote(ctx)...)
+	}
+	if slices.ContainsFunc(rows, func(r row) bool { return r.plain && slices.Contains(own, r.first) }) &&
+		e.Store.Teach(ctx.Session, "own-author") {
+		texts = append(texts, ownAuthorLesson)
 	}
 	out := strings.Join(texts, "\n")
 	for _, t := range tails {
@@ -314,26 +318,35 @@ func summaryDue(rows []row, raw string) bool {
 }
 
 // collect lays out what the sink holds as rows, each with the log lines it stands for, and the log's text; echoed is whether a recurring block
-// of program output got [#N] markers.
-func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bool) {
+// of program output got [#N] markers, and own are the log lines of commit headers printed without their author's email.
+func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bool, []int) {
 	s.mu.Lock()
 	entries := s.entries
 	s.mu.Unlock()
+	// How far each part of git's reshaped output reached the terminal decides how its lines print.
+	reached := map[*gitPart]int{}
+	for _, en := range entries {
+		if r := en.record; r != nil && r.shape != nil && r.shape.counts() {
+			reached[r.shape.part]++
+		}
+	}
 	var items []item
 	var raw strings.Builder
 	log := &rawLog{w: &raw}
 	var plain []engine.PlainLine
 	echoed := false
-	var plainAt []int
+	var plainAt, own []int
 	var plainListed []*listedLine
+	// plainEnd is the last log line the plain lines stand for, past the last of them when lines that print as part of it follow.
+	plainEnd := 0
 	flushPlain := func() {
 		if len(plain) == 0 {
 			return
 		}
-		more, echo := plainItems(plain, plainAt, plainListed)
+		more, echo := plainItems(plain, plainAt, plainListed, plainEnd)
 		items = append(items, more...)
 		echoed = echoed || echo
-		plain, plainAt, plainListed = nil, nil, nil
+		plain, plainAt, plainListed, plainEnd = nil, nil, nil, 0
 	}
 	for _, en := range entries {
 		if en.record == nil {
@@ -361,8 +374,23 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 		if r.separator {
 			continue
 		}
+		text := r.text
+		if r.shape != nil {
+			shown, ok := r.shape.view(text, reached)
+			if !ok {
+				// A line the row before it stands for: a commit header's one line, or a file's header.
+				if len(plain) > 0 {
+					plainEnd = at
+				}
+				continue
+			}
+			if r.shape.role == commitLine && r.shape.part.own && shown == r.shape.part.header {
+				own = append(own, at)
+			}
+			text = shown
+		}
 		if r.origin == nil {
-			plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: engine.PlainText(r.text)})
+			plain = append(plain, engine.PlainLine{At: len(plain) + 1, Text: engine.PlainText(text)})
 			plainAt = append(plainAt, at)
 			plainListed = append(plainListed, r.listed)
 			continue
@@ -378,18 +406,18 @@ func (s *sink) collect(e *engine.Engine, ctx *engine.Context) ([]row, string, bo
 			marker = " "
 		}
 		if r.display {
-			items = append(items, item{source: r.origin.source, text: engine.PlainText(r.text), display: true, first: at, last: at})
+			items = append(items, item{source: r.origin.source, text: engine.PlainText(text), display: true, first: at, last: at})
 			continue
 		}
 		items = append(items, item{source: r.origin.source, line: r.origin.line, marker: marker, kept: r.kept, first: at, last: at})
 	}
 	flushPlain()
-	return s.layout(e, ctx, items), raw.String(), echoed
+	return s.layout(e, ctx, items), raw.String(), echoed, own
 }
 
-// plainItems are lines of program output as items, each standing for the log lines at gives it; echoed says a recurring block got [#N]
-// markers.
-func plainItems(plain []engine.PlainLine, at []int, listed []*listedLine) (items []item, echoed bool) {
+// plainItems are lines of program output as items, each standing for the log lines at gives it, the last up to end when that is further;
+// echoed says a recurring block got [#N] markers.
+func plainItems(plain []engine.PlainLine, at []int, listed []*listedLine, end int) (items []item, echoed bool) {
 	// Program output collapses only exact repeats, since lines that differ in a number may differ in what matters, and only when there is
 	// enough of it that collapsing pays.
 	rows := plain
@@ -397,7 +425,7 @@ func plainItems(plain []engine.PlainLine, at []int, listed []*listedLine) (items
 		rows, _, echoed = engine.Compress(plain, false)
 	}
 	// A row stands for the log lines from its own to the next row's, which covers what a collapsed run left out.
-	end := at[len(at)-1]
+	end = max(end, at[len(at)-1])
 	for k, r := range rows {
 		first, last := at[r.At-1], end
 		if k+1 < len(rows) {

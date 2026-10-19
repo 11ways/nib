@@ -123,8 +123,10 @@ The tool description says plainly:
   to the model or into another of them, and then print anchored rows (the list comes from `ownCommands`, which the
   server instructions name too);
 - `git` is nib's own for the forms it reshapes (status, `add -v`, `rm`, `ls-files`, diffs and stats of `diff`, `show`
-  and `log`) when its output goes to the model: it runs the real git and prints each folder of a path list once, and a
-  diff's lines as rows of the files as they are now;
+  and `log`, and `show` and `log` in git's default format) when its output goes to the model: it runs the real git and
+  prints each folder of a path list once, a diff's lines as rows of the files as they are now, and each commit header as
+  one line (short hash, the author's email unless it is the user's own, local date to the minute), the one place its
+  output differs in content;
 - `find` and `ls` are nib's own the same way for the forms that print one path a line: the real program runs, and each
   folder of its paths prints once;
 - every other command, and those names in any other position or written as a path (`/usr/bin/grep`), is the real
@@ -205,6 +207,17 @@ and every other line into a plain record. No program can name a row, since only 
 rows in band cannot step aside for the system program, which would read those lines, so it fails as a linked one does.
 The classifier marks such writers with `+` after their reader mode and such readers with the mode `W`.
 
+**git for the model through head and tail:** a git command whose output goes on through nothing but nib's own `head`
+and `tail` selecting whole lines by count, or `cat` without `-n`, each reading the one before it by a link, to the model
+(the pipeline's last stage writing to the terminal, or into a loop's or block's pipe that such stages read), gets `>`
+at the end of its marker. It then streams the records it would give the terminal, one for each line git prints, whose
+text stays git's line: `head` and `tail` count and keep them as they would the system git's lines, and only the
+terminal reshapes them. Each record of a commit header or of a file's part of a diff names its part, and the terminal
+reshapes a part's lines only as far as it holds them: a commit header's one line only when all of its lines came, its
+message without git's indent only then, and a diff's own header lines (`diff --git`, `index`, `---`, `+++`) left out
+only when a line under the file's header came. Without `>`, into anything else, git sends its own lines as records
+with nothing but path marks, also into a loop's pipe in band, so a nib `grep` there reads git's `+` and `-`.
+
 **Filters keep origin:** `cat`, `head`, `tail`, `grep` (without `-c`, `-l`, `-o`), `rg` (likewise) and `sed -n` line
 selections; `cut -c` keeps it for a line it leaves whole, and for a file's line it shortens keeps the stretches it kept.
 **Aggregates make plain values:** `wc`, `grep -c`, `grep -l`.
@@ -221,7 +234,7 @@ The first wave is small, chosen by measured use and anchor value:
 | Command | Options handled as nib |
 | --- | --- |
 | `cat` | files, `-` (stdin), `-n` |
-| `head`, `tail` | `-n N`, `-N`, `-nN`, `-n +N` (tail), `-c N`, `-c +N` (tail), `--lines=`, `--bytes=`; one or more files |
+| `head`, `tail` | `-n N`, `-N`, `-nN`, `-n +N` (tail), `-n -N` (head: all but the last N), `-c N`, `-c +N` (tail), `--lines=`, `--bytes=`; one or more files |
 | `grep`, `egrep`, `fgrep` | `-n -r -R -E -F -G -v -i -w -x -l -c -h -H -s -q -m N -A N -B N -C N --include= --exclude= --exclude-dir= --color=never` and their bundled forms; basic regex (`\|`, `\(`, `\)`, `\{`, `\}`, `\+`, `\?`) translated to ripgrep's syntax |
 | `rg` | `-n -i -S -F -w -l -c -v -g -t -T -A -B -C --hidden --no-ignore -u -m` |
 | `sed` | `-n` with `Np`, `N,Mp`, `N,$p`, and several joined with `;` or given as repeated `-e` |

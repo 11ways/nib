@@ -170,7 +170,7 @@ func shapeLines(ctx context.Context, lines []string, d decision, log saved) ([]s
 		plain[i] = engine.PlainLine{At: i + 1, Text: line}
 		at[i] = i + 1
 	}
-	items, echoed := plainItems(plain, at, make([]*listedLine, len(lines)))
+	items, echoed := plainItems(plain, at, make([]*listedLine, len(lines)), 0)
 	rows := make([]row, len(items))
 	for i, it := range items {
 		rows[i] = plainRowAt(it.text, log.base+it.first, it.first, it.last, nil)

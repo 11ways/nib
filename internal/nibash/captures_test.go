@@ -241,7 +241,7 @@ func readCapture(t *testing.T, name string) []byte {
 func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize decider.Summarizer) scored {
 	s := &sink{}
 	s.Write(raw)
-	rows, text, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
+	rows, text, _, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
 	logs := &logDirectory{path: t.TempDir()}
 	shown, _ := fit(context.Background(), rows, text, decision{decider: d, summarizer: summarize, command: c.Command,
 		purpose: c.Purpose, expect: expectation(c), exit: c.Exit}, func() saved { return logs.save(text) })

@@ -3,7 +3,6 @@ package nibash
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -19,7 +18,8 @@ import (
 var errForeign = errors.New("form nibash does not handle")
 
 // gitPlan runs the real git with the command line's own arguments and reshapes what it prints for the model: path listings with each folder
-// once, and a diff's lines as rows of the files they belong to. Exit status, standard error and side effects are git's.
+// once, a diff's lines as rows of the files they belong to, and a commit header in git's default format as one line. Exit status, standard
+// error and side effects are git's.
 type gitPlan struct {
 	args []string
 	// dirs are the -C directories in order, which git joins to the working directory.
@@ -34,8 +34,8 @@ type gitPlan struct {
 	wide bool
 	// forms are the kinds of path line the command line asks for, the only lines read as paths.
 	forms []*regexp.Regexp
-	// diffs is whether the output holds a diff's lines.
-	diffs bool
+	// diffs is whether the output holds a diff's lines; headers is whether its commits print in git's default format.
+	diffs, headers bool
 }
 
 // gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
@@ -103,7 +103,7 @@ subcommand:
 	if !ok {
 		return nil, errForeign
 	}
-	verbose, shapes, sized := false, false, false
+	verbose, shapes, sized, formatted := false, false, false, false
 	rest := args[i+1:]
 	for k := 0; k < len(rest); k++ {
 		a := rest[k]
@@ -153,6 +153,11 @@ subcommand:
 			p.forms = append(p.forms, gitNumstat)
 		case "-p", "-u", "--patch":
 			shapes, p.diffs = true, true
+		case "--oneline", "--graph":
+			formatted = true
+		}
+		if strings.HasPrefix(name, "--format=") || strings.HasPrefix(name, "--pretty=") || strings.HasPrefix(name, "--date=") {
+			formatted = true
 		}
 		if strings.HasPrefix(name, "-U") || strings.HasPrefix(name, "--unified=") {
 			shapes = true
@@ -177,13 +182,15 @@ subcommand:
 			return nil, errForeign
 		}
 	case "log":
-		// A log without a diff or a file list is commits only.
-		if !shapes {
+		p.headers = !formatted
+		// A log in another format and without a diff or a file list is commits only, as git prints them.
+		if !shapes && !p.headers {
 			return nil, errForeign
 		}
 		p.patch = true
 	case "diff", "show":
 		p.patch = true
+		p.headers = p.subcommand == "show" && !formatted
 		// Without a list of files they print the diff itself.
 		p.diffs = p.diffs || len(p.forms) == 0
 	}
@@ -231,31 +238,53 @@ func (o gitOptions) takesNext(name string) bool {
 }
 
 func (p *gitPlan) run(inv *invocation) int {
-	command := append([]string{"git"}, p.args...)
-	parse := gitParser(p.forms)
-	if inv.out.link != nil {
-		// Into another nib command go git's own lines, as they come, those that name a path marked so the terminal can lay them out where
-		// they reach it; a diff's rows would not be the lines that command must read, so its lines are left unmarked.
+	if inv.out.sink == nil && !inv.out.model {
+		// Into another nib command, or a pipe nib commands read, go git's own lines, as they come, those that name a path marked so the
+		// terminal can lay them out where they reach it; a diff's rows would not be the lines that command must read, so its lines are left
+		// unmarked.
+		parse := gitParser(p.forms)
 		if p.diffs {
 			parse = nil
 		}
-		return streamed(inv, command, func(line string) record { return listingRecord(line, parse) })
+		return streamed(inv, append([]string{"git"}, p.args...), func(line string) record { return listingRecord(line, parse) })
 	}
-	lines, status := captured(inv, command, false)
-	if p.wide {
-		// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars at
-		// most 20 wide, it prints the form that is shorter laid out. A stat only reads, so running it twice changes nothing.
-		wideCommand := append(append(append([]string{"git"}, p.args[:p.at+1]...), "--stat-width=1000", "--stat-graph-width=20"), p.args[p.at+1:]...)
-		if wide, wideStatus := captured(inv, wideCommand, true); wideStatus == status && p.shown(wide) < p.shown(lines) {
-			lines = wide
+	shaper := newGitShaper(inv, p)
+	if inv.out.sink == nil || !p.wide {
+		// git streams, so what it printed shows when the call returns while it runs, and nib's own head and tail still stop it early. Each
+		// line it prints is one record, so they keep the lines they would of the system git's. A wide stat prints the same lines, one a file
+		// in the same order, and only it lays out a stat whose paths git cut, so through them it is the stat that runs.
+		w := &lineWriter{each: shaper.line}
+		status := runInto(inv, p.command(p.wide), w, false)
+		w.flush()
+		shaper.flush()
+		return status
+	}
+	// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars at
+	// most 20 wide, it prints the form that is shorter laid out. A stat only reads, so running it twice changes nothing.
+	lines, status := captured(inv, p.command(false), false)
+	if wide, wideStatus := captured(inv, p.command(true), true); wideStatus == status && p.shown(wide) < p.shown(lines) {
+		lines = wide
+	}
+	for _, line := range lines {
+		if !shaper.line(line) {
+			break
 		}
 	}
-	if p.patch {
-		p.renderPatch(inv, lines)
-	} else {
-		emitListing(inv, lines, parse)
-	}
+	shaper.flush()
 	return status
+}
+
+// command is the git that runs for output the model gets: the command line's own, with --abbrev-commit where nib prints commit headers as
+// one line, and with a --stat wide enough for every path whole, its bars at most 20 wide, when wide.
+func (p *gitPlan) command(wide bool) []string {
+	var extra []string
+	if p.headers {
+		extra = append(extra, "--abbrev-commit")
+	}
+	if wide {
+		extra = append(extra, "--stat-width=1000", "--stat-graph-width=20")
+	}
+	return append(append(append([]string{"git"}, p.args[:p.at+1]...), extra...), p.args[p.at+1:]...)
 }
 
 // shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, and the rest as they are.
@@ -350,34 +379,6 @@ var gitHunk = regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 var gitExtended = []string{"old mode ", "new mode ", "deleted file mode ", "new file mode ", "copy from ", "copy to ", "rename from ", "rename to ",
 	"similarity index ", "dissimilarity index ", "index ", "--- ", "+++ ", "Binary files "}
 
-// renderPatch prints a diff's files as rows of the files they are now: lines a hunk adds or keeps, where the file holds exactly that text at
-// that line, are the file's rows; removed lines and lines the file no longer holds there print in forms that are never anchors. Everything
-// else, the commits of a log and a stat included, prints as git printed it, its path listings with each folder once.
-func (p *gitPlan) renderPatch(inv *invocation, lines []string) {
-	parse := gitParser(p.forms)
-	base, asked := "", false
-	for i := 0; i < len(lines); {
-		if !gitDiff.MatchString(lines[i]) {
-			inv.out.emit(listingRecord(lines[i], parse))
-			i++
-			continue
-		}
-		end := sectionEnd(lines, i)
-		if !asked {
-			base, asked = p.base(inv), true
-		}
-		if source := p.sectionSource(inv, base, lines[i:end]); source != nil {
-			renderFile(inv, source, lines[i:end])
-		} else {
-			// A file's part with no new side nib can hold prints as git printed it; its lines are never a path list.
-			for _, line := range lines[i:end] {
-				inv.out.emit(record{text: line})
-			}
-		}
-		i = end
-	}
-}
-
 // sectionEnd is where one file's part of a diff that starts at start ends: after its extended header lines and the hunks their headers count,
 // so a log's next commit, whatever its format, is never taken for part of the file.
 func sectionEnd(lines []string, start int) int {
@@ -469,50 +470,4 @@ func stripPrefix(path *string) bool {
 		}
 	}
 	return false
-}
-
-// renderFile prints one file's part of a diff under its header: git's own header lines go, since the file's header names it; mode, rename
-// and similarity lines and hunk headers stay as lines that are not the file's.
-func renderFile(inv *invocation, source *engine.Source, section []string) {
-	view := source.View
-	display := func(text string) { inv.out.emit(record{text: text, origin: &origin{source: source}, display: true}) }
-	next := 0
-	for _, raw := range section {
-		line := strings.TrimSuffix(raw, "\r")
-		if m := gitHunk.FindStringSubmatch(line); m != nil {
-			next, _ = strconv.Atoi(m[2])
-			display(line)
-			continue
-		}
-		if next == 0 {
-			if gitDiff.MatchString(line) || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
-				continue
-			}
-			display(line)
-			continue
-		}
-		if line == "" {
-			// A context line of an empty line, as some tools strip its space.
-			line = " "
-		}
-		mark, text := line[0], line[1:]
-		if mark == '\\' {
-			display(line)
-			continue
-		}
-		if mark == '-' {
-			display("-|" + text)
-			continue
-		}
-		at := next
-		next++
-		if at == 1 {
-			text = strings.TrimPrefix(text, string(rune(0xfeff)))
-		}
-		if at >= 1 && at <= len(view.Lines) && view.Lines[at-1] == text {
-			inv.out.emit(record{text: text, origin: &origin{source: source, line: at}, added: mark == '+', context: mark == ' '})
-			continue
-		}
-		display(fmt.Sprintf("%c%d|%s", mark, at, text))
-	}
 }

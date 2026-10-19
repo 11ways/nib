@@ -36,6 +36,8 @@ type record struct {
 	raw string
 	// kept are the stretches of origin's line a command like cut kept, nil when text shows it whole.
 	kept []engine.Stretch
+	// shape is how the terminal prints a line of git's that nib reshapes for the model, whose text stays git's line; nil prints text.
+	shape *shaped
 }
 
 type origin struct {
@@ -102,11 +104,13 @@ func (l *links) get(file *os.File) *link {
 // output is where a nib command's lines go: the terminal sink, a link to the next nib stage, a pipe whose nib reader takes rows in band
 // (rows), or plain bytes.
 type output struct {
-	ctx      context.Context
-	sink     *sink
-	link     *link
-	rows     *rowBand
-	writer   io.Writer
+	ctx    context.Context
+	sink   *sink
+	link   *link
+	rows   *rowBand
+	writer io.Writer
+	// model is whether what the command writes reaches the model through nothing but nib's own commands passing whole lines on.
+	model    bool
 	stopped  bool
 	sent     int
 	reporter func(record)

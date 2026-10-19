@@ -157,9 +157,10 @@ type standIn interface {
 	standIn(c *call, hc interp.HandlerContext) error
 }
 
-// runNib runs one of nibash's own commands with the input and output its classification set up; a mode ending in bandFlag sends its rows in
-// band to a nib reader of its pipe's bytes.
+// runNib runs one of nibash's own commands with the input and output its classification set up; a mode with bandFlag sends its rows in band
+// to a nib reader of its pipe's bytes, and one ending in modelFlag writes for the model through nib's own head, tail or cat.
 func (c *call) runNib(ctx context.Context, mode string, name string, args []string) error {
+	mode, model := strings.CutSuffix(mode, modelFlag)
 	mode, band := strings.CutSuffix(mode, bandFlag)
 	hc := interp.HandlerCtx(ctx)
 	args = append([]string{name}, args[1:]...)
@@ -207,7 +208,7 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 			}
 		}
 	}
-	inv.out = &output{ctx: ctx}
+	inv.out = &output{ctx: ctx, model: model}
 	switch out := hc.Stdout.(type) {
 	case *sink:
 		inv.out.sink = out

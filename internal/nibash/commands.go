@@ -229,6 +229,7 @@ type edgePlan struct {
 	tail     bool
 	count    int
 	from     bool // tail -n +N or -c +N
+	butLast  bool // head -n -N: all but the last N lines
 	bytes    bool // -c: count counts bytes
 	operands []string
 }
@@ -248,15 +249,16 @@ func prepareEdge(tail bool, args []string) (plan, error) {
 	for _, o := range options {
 		value := o.value
 		from := tail && strings.HasPrefix(value, "+")
-		if from {
+		butLast := !tail && o.name != "c" && strings.HasPrefix(value, "-")
+		if from || butLast {
 			value = value[1:]
 		}
 		n, ok := count(value)
 		if !ok {
-			// A negative count (all but the last N) and suffixes like 5K are left to the real program.
+			// head -c -N (all but the last N bytes) and suffixes like 5K are left to the real program.
 			return nil, errUnsupported
 		}
-		p.count, p.from, p.bytes = n, from, o.name == "c"
+		p.count, p.from, p.butLast, p.bytes = n, from, butLast, o.name == "c"
 	}
 	return p, nil
 }
@@ -310,7 +312,7 @@ func (p *edgePlan) edgeOfFile(inv *invocation, source *engine.Source) {
 	lines(source, func(r record) bool {
 		total++
 		switch {
-		case !p.tail:
+		case !p.tail && !p.butLast:
 			if total > p.count {
 				return false
 			}
@@ -321,15 +323,18 @@ func (p *edgePlan) edgeOfFile(inv *invocation, source *engine.Source) {
 			}
 		default:
 			kept = append(kept, r)
-			if len(kept) > p.count {
+			if p.tail && len(kept) > p.count {
 				kept = kept[1:]
 			}
 		}
 		return true
 	})
+	if p.butLast {
+		kept = kept[:max(0, len(kept)-p.count)]
+	}
 	// A head of a file nib does not hold stops reading, so how many lines it has is unknown.
 	known := true
-	if !p.tail && total > p.count {
+	if !p.tail && !p.butLast && total > p.count {
 		known = source.View != nil
 		if known {
 			total = len(source.View.Lines)
@@ -358,6 +363,20 @@ func (inv *invocation) spanFact(display string, first, last, total int) {
 }
 
 func (p *edgePlan) edgeOfStdin(inv *invocation) {
+	if p.butLast {
+		// All but the last count lines: each goes on once count lines followed it.
+		var held []record
+		inv.stdin(func(r record) bool {
+			held = append(held, r)
+			if len(held) <= p.count {
+				return true
+			}
+			next := held[0]
+			held = held[1:]
+			return inv.out.emit(next)
+		})
+		return
+	}
 	if !p.tail {
 		shown := 0
 		files := map[string]bool{}

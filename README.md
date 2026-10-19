@@ -522,24 +522,40 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
   grep's prefixed lines print the selected text as plain output, as the system `cut` would print it. Its other forms
   (`-b`, `-f`, `-d`, `-s`, `--complement`, `--output-delimiter`) run the system `cut`.
 - **git, reshaped.** `git` is nib's own only where its output goes to the model, directly or through nib's own commands,
-  and only for the forms it reads: `status` (short, porcelain v1, long), `add -v`/`-n`, `rm`, `ls-files`, and `diff`,
-  `show` and `log` with a patch, `--stat`, `--name-only`, `--name-status` or `--numstat`. It runs the real git with the
-  command line's own arguments, so the exit status, standard error and every side effect are git's; only what it prints
-  changes form. Path lists name each folder once, as `find` does, in a bracketed row
-  (`[src/server/java/be/elevenways/cms/]`) with the rest of each path under it and the rest of every line kept (the `XY`
-  of a status, a stat's counts); a folder within a folder gets its own row under it, and a run is laid out so only where
-  that saves at least 16 characters, never making the output longer. A `--stat` without a width runs twice, as git would
-  print it and with `--stat-width=1000 --stat-graph-width=20` (every path whole, bars at most 20 wide), and prints
-  whichever is shorter laid out. Into nib's own `head`, `tail`, `grep` or `cat`, git's lines go as git printed them, so
-  those select exactly what they would from the system git; only the lines that reach the model are laid out, and a line
-  such a command changed (`grep -n`) or a diff's line prints as it came. A diff prints each changed file under its
-  `[PATH#TAG]` header as it is now: a line the diff adds or keeps is the file's `N:` row (`+N:` for an added one) where
-  the file holds exactly that text at that line, a removed line is `-|TEXT`, and a line the file no longer holds there
-  (a staged change since edited, an old commit) is `+N|TEXT`, never an anchor. Those rows count as displayed, so an edit
-  can anchor on them with no read. A deleted, binary or quoted-path file's part, and anything else git prints, is as git
-  printed it. Any other subcommand, a pipe into a real program or a redirect, or `-z` and the like run the system git
-  untouched; an option nib's git lacks on a subcommand it handles ends the call with
-  `[git ran as the system program: ..., so its output is as git printed it]`.
+  and only for the forms it reads: `status` (short, porcelain v1, long), `add -v`/`-n`, `rm`, `ls-files`, `diff`, `show`
+  and `log` with a patch, `--stat`, `--name-only`, `--name-status` or `--numstat`, and `show` and `log` in git's default
+  format. It runs the real git with the command line's own arguments, so the exit status, standard error and every side
+  effect are git's; what it prints changes form, and in one place content. Path lists name each folder once, as `find`
+  does, in a bracketed row (`[src/server/java/be/elevenways/cms/]`) with the rest of each path under it and the rest of
+  every line kept (the `XY` of a status, a stat's counts); a folder within a folder gets its own row under it, and a run
+  is laid out so only where that saves at least 16 characters, never making the output longer. A `--stat` without a
+  width runs twice, as git would print it and with `--stat-width=1000 --stat-graph-width=20` (every path whole, bars at
+  most 20 wide), and prints whichever is shorter laid out. A diff prints each changed file under its `[PATH#TAG]` header
+  as it is now: a line the diff adds or keeps is the file's `N:` row (`+N:` for an added one) where the file holds
+  exactly that text at that line, a removed line is `-|TEXT`, and a line the file no longer holds there (a staged change
+  since edited, an old commit) is `+N|TEXT`, never an anchor. Those rows count as displayed, so an edit can anchor on
+  them with no read. A deleted, binary or quoted-path file's part, and anything else git prints, is as git printed it.
+- **git's commit headers, one line.** A commit header of `log` or `show` in git's default format prints as one line,
+  `commit 1a2b3c4 o@example.com Fri 2026-10-16 10:38`: the hash as git abbreviates it (nib adds `--abbrev-commit`), the
+  author's email, left out where it is the repository's own `user.email` (as `-C` and `-c` give it; the first such
+  header an agent sees ends the call with a note saying so), and the author date in the machine's local time to the
+  minute. Decorations stay on that line, a merge's `Merge:` line stays under it, and the message follows without git's
+  indent and without the blank line before it. This is the one place nibash changes what a program says rather than
+  how: the full hash, the author's name, the seconds and the zone are gone. A header in another format (`--format`,
+  `--pretty`, `--oneline`, `--graph`, `--date`, or a configured date or format that does not read as git's default),
+  and a tag's own header in `git show TAG`, print as git printed them.
+- **git through head and tail.** Into nib's own `head`, `tail` (whole lines by count: `-n N`, `-N`, `tail -n +N`,
+  `head -n -N`) or `cat` without `-n`, one after another and on to the model, git streams, so `head` still stops it
+  early, and every line git prints counts as one line for them. The lines they keep then print as they would at the
+  terminal, as far as they kept each part whole: a commit header they cut prints as git printed it (its hash already
+  abbreviated), its message with git's indent, and a diff's own `diff --git`, `index`, `---` and `+++` lines print only
+  where no row of the file follows them. A stat is always the wide one there, which has the same lines in the same
+  order, one a file. Into anything else (nib's `grep`, `cut -c`, `sed -n` or `wc`, `head -c`, `cat -n`, a real program,
+  a file, `$(...)`), and into a loop's or block's pipe that one of those reads, git's own lines go as git printed them,
+  so what reads them sees exactly what the system git prints; only its path lines carry marks, so a run of them that
+  `grep` passes on whole is still laid out by folder where it reaches the model. Any other subcommand, a pipe into a
+  real program or a redirect, or `-z` and the like run the system git untouched; an option nib's git lacks on a
+  subcommand it handles ends the call with `[git ran as the system program: ..., so its output is as git printed it]`.
 - **find and ls, reshaped.** `find` and `ls` are nib's own the same way: only where their output goes to the model,
   directly or through nib's own commands, and only with what they print one path a line. `find` takes its tests and
   operators (`-name`, `-path`, `-type`, `-maxdepth`, `-newer`, `-mtime`, `-size`, `-not`, `-o`, parentheses, `-prune`,

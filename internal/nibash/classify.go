@@ -27,6 +27,10 @@ const (
 // bandFlag follows the reader mode in a marker for a command whose rows go in band to a nib reader of its pipe's bytes.
 const bandFlag = "+"
 
+// modelFlag ends the marker of a git command whose output reaches the model through nothing but nib's own commands passing whole lines on
+// (passesLines), which may then print it reshaped as at the terminal.
+const modelFlag = ">"
+
 // internal commands nibash adds for builtins mvdan does not run for real processes, and for starting a job.
 const (
 	internalJob  = "job"
@@ -80,6 +84,9 @@ type classifier struct {
 	next int
 	// piped are the row commands whose output reached the model through a real program, in the order the command line names them.
 	piped []pipe
+	// edges is whether the pipe the statements being classified write into in band reaches the model through nothing but nib's own commands
+	// passing whole lines on (passesLines).
+	edges bool
 }
 
 // classify rewrites file in place: nib commands get a marker name, `X &` becomes `NIBASH_JOB=$(job k)` with X kept in jobs, and $! reads
@@ -232,7 +239,11 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 				stageOut = toOther
 			}
 			outs[i] = stageOut
+			// The commands inside write into the pipe in band, and their git may reshape its lines if what reads it passes them on whole.
+			edges := c.edges
+			c.edges = stageOut == toBand && c.throughLines(list, verdicts, outs, all, i, out)
 			c.stmt(s, stageOut)
+			c.edges = edges
 			continue
 		}
 		verdicts[i] = c.check(call, stageOut)
@@ -267,9 +278,66 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 		if outs[i] == toBand {
 			mode += bandFlag
 		}
+		if call := s.Cmd.(*syntax.CallExpr); verdicts[i] == own && isGit(call) && (i == len(list)-1 || outs[i] == toNib) &&
+			c.throughLines(list, verdicts, outs, all, i, out) {
+			mode += modelFlag
+		}
 		rename(s.Cmd.(*syntax.CallExpr), mode)
 	}
 	c.notePiped(list, verdicts, out)
+}
+
+// throughLines says whether what stage i of a pipeline writes reaches the model through nothing but the stages after it passing whole lines
+// on: each nib's own, reading the one before it whole, and passesLines, and the last writing where the pipeline does, which the model reads.
+func (c *classifier) throughLines(list []*syntax.Stmt, verdicts []verdict, outs []destination, all []bool, i int, out destination) bool {
+	if out != toTerminal && (out != toBand || !c.edges) {
+		return false
+	}
+	for j := i + 1; j < len(list); j++ {
+		if verdicts[j] != own || all[j-1] || j > i+1 && outs[j-1] != toNib || !passesLines(list[j]) {
+			return false
+		}
+	}
+	return outs[len(list)-1] == out
+}
+
+// passesLines says whether s is nib's own head or tail selecting whole lines of its standard input, or cat passing all of them, each line it
+// keeps going on as it came.
+func passesLines(s *syntax.Stmt) bool {
+	call, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 || redirectsInput(s) || redirectsOutput(s) {
+		return false
+	}
+	words := make([]string, len(call.Args))
+	for i, word := range call.Args {
+		value, ok := wordLiteral(word)
+		if !ok {
+			return false
+		}
+		words[i] = value
+	}
+	if _, name, marked := parseMarker(words[0]); marked {
+		words[0] = name
+	}
+	stdin := func(operands []string) bool { return len(operands) == 0 || len(operands) == 1 && operands[0] == "-" }
+	switch words[0] {
+	case "head", "tail":
+		p, err := prepareEdge(words[0] == "tail", words[1:])
+		return err == nil && !p.(*edgePlan).bytes && stdin(p.(*edgePlan).operands)
+	case "cat":
+		p, err := prepareCat(words[0], words[1:])
+		return err == nil && !p.(*catPlan).number && stdin(p.(*catPlan).operands)
+	}
+	return false
+}
+
+// isGit says whether call runs git by its literal name.
+func isGit(call *syntax.CallExpr) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	name, ok := wordLiteral(call.Args[0])
+	return ok && name == "git"
 }
 
 // notePiped records each row command that would be nib's own whose output goes into a real program, when what that program prints reaches
@@ -365,11 +433,14 @@ func redirectsInput(s *syntax.Stmt) bool {
 
 // call classifies a command outside a pipeline.
 func (c *classifier) call(call *syntax.CallExpr, out destination) {
-	switch c.check(call, out) {
+	switch verdict := c.check(call, out); verdict {
 	case own, later:
 		mode := fromBytes
 		if out == toBand {
 			mode += bandFlag
+			if verdict == own && c.edges && isGit(call) {
+				mode += modelFlag
+			}
 		}
 		rename(call, mode)
 	case system:

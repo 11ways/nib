@@ -81,7 +81,7 @@ func mixedSink() *sink {
 }
 
 func TestEveryRowStandsForItsOwnLogLines(t *testing.T) {
-	rows, raw, _ := mixedSink().collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
+	rows, raw, _, _ := mixedSink().collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
 	log := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
 	covered := make([]int, len(log)+1)
 	previous := 0
