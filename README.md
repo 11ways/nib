@@ -826,7 +826,10 @@ Long paths cost tokens in every row and header, so nib names deep directories: `
 `zenit/src/server/java/be/elevenways/zenit/server/orm/workflow/Repo.java`. Every path nib prints uses the named directory
 that prints it shortest, but only when that is shorter than the path relative to the server's directory (or whole,
 outside it), and every tool and patch header accepts the short form. In nibash it is ordinary tilde expansion,
-so it works only unquoted, and programs receive the real path; the names never reach a program's environment.
+so it works only unquoted, and programs receive the real path; the names never reach a program's environment. A shell
+knows no names, so a script nibash hands one with `-c` (`bash -c`, `sh -c`, also behind `timeout`, `env`, `nice`,
+`nohup`, `stdbuf`, `setsid` or `xargs`, and in `find -exec`) gets them expanded before it starts, where nibash would
+expand them in that script and nowhere else, also when the script is made at run time (`bash -c "$(declare -f f); f"`).
 
 Names come from `nib.json` in the server's directory (`{"directories": {"orm": "path/to/orm"}}`) and, unless it sets
 `"autoDirectories": false`, from JVM source roots: each `src/<set>/java` or `src/<set>/kotlin` below the server's

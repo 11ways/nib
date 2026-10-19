@@ -415,6 +415,11 @@ runs, background calls included:
   - In nibash it is tilde expansion, provided by an `expand.Environ` wrapper whose `Get("HOME name")` answers and whose
     `Each` never lists it. So children and `env`/`export -p` never see it [M4].
   - Quoting suppresses it, exactly as in bash. The instructions say to leave `~name/` paths unquoted in nibash [M7].
+  - A shell nibash starts with `-c SCRIPT`, directly, behind `timeout`, `env`, `nice`, `nohup`, `stdbuf`, `setsid` or
+    `xargs`, or in `find -exec`, knows no names, so nibash parses SCRIPT with the same parser and expands each `~name/`
+    where it would expand it itself, quoting the directory where the shell would read it otherwise. It does so on the
+    program's final arguments, so a script made at run time (`bash -c "$(declare -f f); f"`) counts too; a wrapper
+    whose options it cannot read for certain, a script that does not parse and an undefined name stay as they are.
   - In `read`, `grep`, `find`, `edit` and `write` arguments and in patch headers, a leading `~name/` resolves the same
     way. An existing literal path wins, as with selectors.
   - `~/` stays the home directory.
@@ -534,7 +539,8 @@ every cut is announced with its log lines.
 3. **Lost shell state:** a model that relies on `cd` or a variable from an earlier call finds it gone. The description
    says so, and Claude Code's Bash already drops everything but the directory.
 4. **Quoted named directories** do not expand (bash semantics). The instructions say so; the alternative, rewriting
-   quoted arguments, was rejected as lying.
+   quoted arguments, was rejected as lying. A shell's `-c` script is no exception: nibash expands names in it only where
+   the script leaves them unquoted, as it would run it itself.
 5. **Port regressions:** the existing suites run unchanged against the binary. A behavior that differs is either a
    failing test or untested.
 

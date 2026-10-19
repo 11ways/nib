@@ -279,6 +279,8 @@ func (c *call) runProgram(ctx context.Context, args []string, printed func()) er
 // output passes; the same writer for both gives the program one descriptor for both, as 2>&1 does.
 func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr io.Writer, printed func()) error {
 	hc := interp.HandlerCtx(ctx)
+	// A shell knows no named directories, so a script it gets with -c has them expanded as nibash would expand them there.
+	args = namedScripts(hc.Env, args)
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
 		fmt.Fprintln(hc.Stderr, err)
