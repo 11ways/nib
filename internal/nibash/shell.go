@@ -127,6 +127,24 @@ func (s *Shell) Expects() bool {
 	return s.summarizer != nil || s.decider != nil && s.decider.Kind() == decider.OpenRouter
 }
 
+// eachHint tells an agent whose server directory holds several repositories of git-each.
+const eachHint = "nibash's " + gitEach + " ARGS runs git ARGS in every repository below the shell's directory and prints only those with output; " +
+	eachBase + " is each one's integration branch (\"base\" in its nib.json, else origin/HEAD)."
+
+// Hint is the line on git-each where directory holds two repositories or more.
+func (s *Shell) Hint(directory string) string {
+	root, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if repositories, _, err := engine.Repositories(ctx, root); err != nil || len(repositories) < 2 {
+		return ""
+	}
+	return eachHint
+}
+
 // session is one agent's jobs, which outlive the calls that start them, and the calls running now; nothing else of a shell carries over from
 // one call to the next.
 type session struct {

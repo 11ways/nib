@@ -70,6 +70,8 @@ type Shell interface {
 	Description() string
 	// Expects says whether a model reads a call's expect argument, which is offered only then.
 	Expects() bool
+	// Hint is a line for the server instructions of a server in directory, "" when none applies.
+	Hint(directory string) string
 	// Run executes one nibash call for the agent under key, one per agent of a client; jobs it starts stay with that key.
 	Run(ctx context.Context, key any, call ShellCall, tools *engine.Context) (engine.Result, error)
 	// ReadLog reads files for what the agent under key expects of them, as plain lines shaped the way long output is.
@@ -229,6 +231,11 @@ func Instructions(options Options) string {
 			names = append(names, p.Name+"_*")
 		}
 		text += "\n" + fmt.Sprintf(providersLine, strings.Join(names, ", "))
+	}
+	if options.Shell != nil {
+		if hint := options.Shell.Hint(options.Directory); hint != "" {
+			text += "\n" + hint
+		}
 	}
 	shell := options.Shell != nil
 	if options.Names == nil || len(options.Names.Entries) == 0 {

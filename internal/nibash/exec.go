@@ -66,6 +66,12 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 		if handled, err := c.trashing(ctx, mode, name, args); handled {
 			return err
 		}
+		// git-each is nib's wherever its output goes; where it reaches neither the model nor a nib command, nothing is shaped.
+		if !ok && name == gitEach {
+			if handled, err := c.eachAsProgram(ctx, args); handled {
+				return err
+			}
+		}
 		if ok {
 			return c.runNib(ctx, mode, name, args)
 		}

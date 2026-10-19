@@ -170,6 +170,7 @@ var (
 // what follows it in the source, which is only roughly where those commands run, so the caller applies every directory's rules to the
 // whole call.
 type scan struct {
+	ctx       context.Context
 	home      string
 	view      namer
 	commands  []simpleCommand
@@ -227,6 +228,12 @@ func (s *scan) command(words []string, known []bool, depth int) {
 		return
 	}
 	switch {
+	case program == gitEach:
+		// git-each runs git in every repository below its directory: rules on git judge that git, and each repository's own rules count.
+		s.commands = append(s.commands, simpleCommand{"git", words[1:]})
+		if repositories, _, err := engine.Repositories(s.ctx, s.directory); err == nil {
+			s.dirs = append(s.dirs, repositories...)
+		}
 	case program == "cd" && len(words) > 1 && known[1]:
 		target := words[1]
 		if !filepath.IsAbs(target) {
@@ -314,7 +321,7 @@ type ruleCheck struct {
 // checkRules judges a parsed call against the rules of the directory it starts in and every directory it cds into, before anything runs.
 func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File, request server.ShellCall, tools *engine.Context, view namer) ruleCheck {
 	home, _ := os.UserHomeDir()
-	sc := &scan{home: home, view: view, directory: tools.Directory}
+	sc := &scan{ctx: ctx, home: home, view: view, directory: tools.Directory}
 	sc.node(file, 0)
 	var files []*ruleFile
 	for _, d := range append([]string{tools.Directory}, sc.dirs...) {

@@ -40,10 +40,21 @@ var skipped = map[string]bool{"node_modules": true, "build": true, "target": tru
 // ConfigFile is the name of the file nib reads a directory's settings from: its named directories here, nibash's command rules too.
 const ConfigFile = "nib.json"
 
-// Config is nib.json's named directories.
+// Config is nib.json's named directories, and Base: the integration branch of the repository it sits in, for git-each's {base}.
 type Config struct {
 	Directories     map[string]string `json:"directories"`
 	AutoDirectories *bool             `json:"autoDirectories"`
+	Base            string            `json:"base"`
+}
+
+// BaseBranch is the integration branch the nib.json in directory names; "" when it names none or cannot be read.
+func BaseBranch(directory string) string {
+	var config Config
+	data, err := os.ReadFile(filepath.Join(directory, ConfigFile))
+	if err != nil || json.Unmarshal(data, &config) != nil {
+		return ""
+	}
+	return strings.TrimSpace(config.Base)
 }
 
 // isUser reports whether name is a user on this machine, whose ~name a shell would expand to that user's home.

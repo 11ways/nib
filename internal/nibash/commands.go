@@ -72,6 +72,7 @@ var ownCommands = []command{
 	{name: "git", prepare: prepareGit, renders: true},
 	{name: "find", prepare: prepareFind, renders: true},
 	{name: "ls", prepare: prepareLs, renders: true},
+	{name: gitEach, prepare: prepareGitEach, renders: true},
 }
 
 // commands are nibash's own commands by name.

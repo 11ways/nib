@@ -485,6 +485,8 @@ type fakeShell struct {
 	logs    []string
 	// calls are the nibash calls that reached the shell.
 	calls []ShellCall
+	// hint is what Hint says.
+	hint string
 }
 
 func (f *fakeShell) ReadLog(_ context.Context, key any, paths []string, expect string, _ *engine.Context) (engine.Result, error) {
@@ -510,6 +512,7 @@ func (f *fakeShell) SetSummaries(on bool) {
 
 func (f *fakeShell) Description() string { return "fake" }
 func (f *fakeShell) Expects() bool       { return f.expects }
+func (f *fakeShell) Hint(string) string  { return f.hint }
 
 // Status lists one command per key a call ran under, so a test sees which keys a client owns.
 func (f *fakeShell) Status(owns func(key any) (string, bool), _ int) ShellStatus {
@@ -984,6 +987,15 @@ func TestInstructionsSayHowToNameADirectoryWhenTheShellIsOffered(t *testing.T) {
 	table := &names.Table{Base: "/p", Entries: []names.Entry{{Name: "core", Directory: "/p/lib/core"}}}
 	if got := Instructions(Options{Shell: &fakeShell{}, Names: table}); !strings.HasSuffix(got, "\n"+namedHeader+"\n~core = lib/core\n"+namedHint) || len(got) > instructionLimit {
 		t.Fatalf("names come before the hint, got %q", got)
+	}
+}
+
+func TestInstructionsCarryTheShellsHintForTheDirectory(t *testing.T) {
+	if got := Instructions(Options{Shell: &fakeShell{hint: "a hint"}}); !strings.Contains(got, "\na hint\n") || len(got) > instructionLimit {
+		t.Fatalf("got %q", got)
+	}
+	if got := Instructions(Options{Shell: &fakeShell{}}); strings.Contains(got, "\n\n") {
+		t.Fatalf("no hint, no line: %q", got)
 	}
 }
 

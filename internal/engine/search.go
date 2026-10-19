@@ -123,13 +123,17 @@ func Ignored(directory string) bool {
 }
 
 // nestedRepositories are the repositories nested in repository (under within, when given) that its ignore rules cover, from git's own list of
-// ignored folders; the folders right inside an ignored folder are looked at too, unless it holds more than containerEntries entries.
-// A worktree of repository is left out, since it repeats the same files.
-func nestedRepositories(ctx context.Context, repository, within string) ([]string, error) {
+// ignored folders, or with ignored false those it neither tracks nor ignores; the folders right inside such a folder are looked at too,
+// unless it holds more than containerEntries entries. A worktree of repository is left out, since it repeats the same files.
+func nestedRepositories(ctx context.Context, repository, within string, ignored bool) ([]string, error) {
 	if within == "" {
 		within = "."
 	}
-	output, err := gitIn(ctx, repository, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", within).Output()
+	args := []string{"ls-files", "-z", "--others", "--exclude-standard", "--directory"}
+	if ignored {
+		args = append(args, "--ignored")
+	}
+	output, err := gitIn(ctx, repository, append(args, "--", within)...).Output()
 	if err != nil {
 		// Without git, ripgrep's own walk is all there is.
 		if ctx.Err() != nil {
@@ -220,6 +224,60 @@ func repositoriesBelow(ctx context.Context, root string) ([]string, bool, error)
 	return repositories, false, nil
 }
 
+// Repositories are the git repositories at and below root, a canonical folder, sorted by path: root itself when it is a repository's own
+// folder, the repositories searches find below it, ignored or untracked ones nested in a repository included, and theirs in turn; capped
+// is true when the walk outside git stopped early. A repository's worktrees are left out, as a submodule is.
+func Repositories(ctx context.Context, root string) (found []string, capped bool, err error) {
+	seen := map[string]bool{}
+	var visit func(repository, within string) error
+	visit = func(repository, within string) error {
+		for _, ignored := range []bool{true, false} {
+			nested, err := nestedRepositories(ctx, repository, within, ignored)
+			if err != nil {
+				return err
+			}
+			for _, folder := range nested {
+				if !seen[folder] {
+					seen[folder] = true
+					found = append(found, folder)
+					if err := visit(folder, ""); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if repository := repositoryOf(root); repository != "" {
+		within := ""
+		if repository == root {
+			seen[root] = true
+			found = append(found, root)
+		} else {
+			within, _ = inside(repository, root)
+		}
+		err = visit(repository, within)
+	} else {
+		var below []string
+		below, capped, err = repositoriesBelow(ctx, root)
+		for _, folder := range below {
+			if err != nil {
+				break
+			}
+			if !seen[folder] {
+				seen[folder] = true
+				found = append(found, folder)
+				err = visit(folder, "")
+			}
+		}
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	slices.Sort(found)
+	return found, capped, nil
+}
+
 // hiddenRepositories are the nested repositories under roots that ripgrep would leave out. Searched as roots of their own, they follow their own
 // rules. Only git's rules are overruled: a repository that .ignore, .rgignore or one of the search's excluding globs keeps out stays out.
 func hiddenRepositories(ctx context.Context, roots []string, globs []string) ([]string, []string, error) {
@@ -242,7 +300,7 @@ func hiddenRepositories(ctx context.Context, roots []string, globs []string) ([]
 		if root != repository {
 			within, _ = filepath.Rel(repository, root)
 		}
-		nested, err := nestedRepositories(ctx, repository, within)
+		nested, err := nestedRepositories(ctx, repository, within, true)
 		if err != nil || len(nested) == 0 {
 			return err
 		}

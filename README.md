@@ -590,6 +590,19 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   `grep` passes on whole is still laid out by folder where it reaches the model. Any other subcommand, a pipe into a
   real program or a redirect, or `-z` and the like run the system git untouched; an option nib's git lacks on a
   subcommand it handles ends the call with `[git ran as the system program: ..., so its output is as git printed it]`.
+- **git-each.** `git-each ARGS...` is a command of nibash's own, which no system program has (one on `PATH` of that
+  name runs instead): it runs `git -C REPOSITORY ARGS...` in every repository at and below the shell's directory, found
+  as searches find them (outside git by walking, inside a repository from git's lists of its ignored and untracked
+  folders, and each one's own in turn; a worktree or submodule is none), one after another in path order. Only those
+  whose git printed anything, to standard output or error, print, each under a `==> PATH <==` header, the path
+  relative to the shell's directory or as nib prints it when that is shorter; where it reaches the model, each git is
+  nib's as above. `{base}` in an argument is that repository's integration branch: `"base"` in its own `nib.json`,
+  else what `origin/HEAD` points at (`origin/master`); a repository with neither prints
+  `[skipped: no "base" in its nib.json and no origin/HEAD]` and runs nothing. Its exit status is 1 when any git
+  failed, 2 for no arguments or for `git rm` and `git clean`, which it refuses: what those delete goes to the trash
+  only when they run in one repository. The command rules see it as `git ARGS...` too, and the rules of every
+  repository it runs in count. The server instructions mention it only where the server's directory holds two
+  repositories or more.
 - **find and ls, reshaped.** `find` and `ls` are nib's own the same way: only where their output goes to the model,
   directly or through nib's own commands, and only with what they print one path a line. `find` takes its tests and
   operators (`-name`, `-path`, `-type`, `-maxdepth`, `-newer`, `-mtime`, `-size`, `-not`, `-o`, parentheses, `-prune`,

@@ -331,13 +331,13 @@ func passesLines(s *syntax.Stmt) bool {
 	return false
 }
 
-// isGit says whether call runs git by its literal name.
+// isGit says whether call runs git by its literal name, or git-each, which runs it.
 func isGit(call *syntax.CallExpr) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
 	name, ok := wordLiteral(call.Args[0])
-	return ok && name == "git"
+	return ok && (name == "git" || name == gitEach)
 }
 
 // notePiped records each row command that would be nib's own whose output goes into a real program, when what that program prints reaches

@@ -106,10 +106,35 @@ type output struct {
 	stopped  bool
 	sent     int
 	reporter func(record)
+	// pending go out before the next record, or before the command's next standard error, and not at all when neither comes: a header
+	// that shows only above output. mu keeps them ahead of what a program's two streams write at once.
+	pending []record
+	mu      sync.Mutex
 }
 
 // emit sends one record; false means nothing reads any more, so the command may stop (or keep counting for a fact).
 func (o *output) emit(r record) bool {
+	if !o.flushPending() {
+		return false
+	}
+	return o.send(r)
+}
+
+// flushPending sends the pending records; false means nothing reads any more.
+func (o *output) flushPending() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	pending := o.pending
+	o.pending = nil
+	for _, r := range pending {
+		if !o.send(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func (o *output) send(r record) bool {
 	if o.stopped {
 		return false
 	}

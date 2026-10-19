@@ -31,7 +31,7 @@ func streamed(inv *invocation, args []string, recordOf func(string) record) int 
 
 func runInto(inv *invocation, args []string, out io.Writer, quiet bool) int {
 	hc := interp.HandlerCtx(inv.ctx)
-	stderr := hc.Stderr
+	stderr := inv.stderr
 	switch {
 	case hc.Stderr == hc.Stdout:
 		stderr = out
