@@ -45,8 +45,10 @@ type Shell struct {
 	decider    decider.Decider
 	summarizer decider.Summarizer
 	logs       *logDirectory
-	mu         sync.Mutex
-	sessions   map[any]*session
+	// recall is what each agent was shown in its latest calls, which output shown again folds against.
+	recall   *recall
+	mu       sync.Mutex
+	sessions map[any]*session
 	// summariesOff is set when a client turned summaries off; models are the model calls running now, for Status.
 	summariesOff atomic.Bool
 	modelMu      sync.Mutex
@@ -63,7 +65,7 @@ type Shell struct {
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
 // expand the named directories of the caller's view that each call's tools carry.
 func New(e *engine.Engine, sandbox bool) *Shell {
-	return &Shell{engine: e, sandbox: sandbox, logs: newLogDirectory(), sessions: map[any]*session{}}
+	return &Shell{engine: e, sandbox: sandbox, logs: newLogDirectory(), recall: newRecall(), sessions: map[any]*session{}}
 }
 
 // Deciding sets the decider that chooses what long output shows; nil is the fixed cut. Call it before serving.
@@ -549,7 +551,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		status = 1
 	}
 	callTools.Ctx = ctx
-	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
 	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
@@ -593,7 +595,7 @@ func (s *Shell) stopWaiting(ctx context.Context, c *call, request server.ShellCa
 	<-done
 	c.killAll()
 	c.tools.Ctx = ctx
-	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
+	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
 	c.mu.Lock()
 	waited := slices.Clone(c.waited)
 	c.mu.Unlock()
@@ -644,7 +646,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 	// The output so far renders under the request's context; what runs on must not see it cancelled when the request ends.
 	rendering := *c.tools
 	rendering.Ctx = ctx
-	text := c.sink.render(s.engine, &rendering, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
+	text := c.sink.render(s.engine, &rendering, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
 	next := fmt.Sprintf("wait %%%d or kill %%%d", j.id, j.id)
 	if request.Push != nil {
 		next = fmt.Sprintf("its end comes to you as a message; kill %%%d stops it", j.id)

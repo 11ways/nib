@@ -489,6 +489,16 @@ func (s *Store) Origins(session, tagValue, except string) []string {
 	return found
 }
 
+// Cleared is the moment session's harness last compacted or cleared its context, as Forget was told it; zero when never.
+func (s *Store) Cleared(session string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at := s.cleared[session]; at != 0 {
+		return time.Unix(0, at)
+	}
+	return time.Time{}
+}
+
 // Paths lists the paths this session has versions of.
 func (s *Store) Paths(session string) []string {
 	s.mu.Lock()

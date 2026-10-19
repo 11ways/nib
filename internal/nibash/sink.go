@@ -211,6 +211,8 @@ type decision struct {
 	timedOut   bool
 	// read says the purpose is skim's expect, not a call's description.
 	read bool
+	// recall folds blocks the agent saw in an earlier call; nil folds none.
+	recall *recall
 }
 
 // asked names the purpose in notes: the call's description, or what skim expects.
@@ -228,7 +230,17 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	facts, tails := s.facts, s.tails
 	s.mu.Unlock()
 	rows, raw, echoed, own := s.collect(e, ctx)
-	rows, footer := fit(ctx.Ctx, rows, raw, d, func() saved { return logs.save(raw) })
+	// One log serves the cut and the folds.
+	var log *saved
+	save := func() saved {
+		if log == nil {
+			written := logs.save(raw)
+			log = &written
+		}
+		return *log
+	}
+	rows, footer := fit(ctx.Ctx, rows, raw, d, save)
+	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), d.command, rows, save)
 	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
 	rows = groupListings(rows)
 	// Only rows that are shown count as seen.
