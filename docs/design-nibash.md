@@ -444,7 +444,7 @@ runs, background calls included:
   call. Under the sandbox only files inside the roots count.
 - **Exact rules** refuse at once. **Vague rules** go to the decision model as one `noul` question per rule
   (`decider.RuleJudge`, the same models, endpoint, cache and observers as the decider; the band shows a `rules` card),
-  with the whole command, its description and its directory; a rule counts as broken from `PickThreshold`. With no
+  with the whole command, its description and its directory; a rule counts as broken from `RuleThreshold` (0.7). With no
   decision model, or when every model fails, the command runs with a note, once per agent, file and reason.
 - **A refusal** prints one `[nothing ran: ...]` line per broken rule and `[exit 126]`; nothing starts, no job is made and
   the finished jobs' reports wait for the next call. A refused call whose known words or `<` redirects name logs nibash

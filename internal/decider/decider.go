@@ -15,6 +15,9 @@ import (
 const (
 	// PickThreshold is the score a pick needs to be shown.
 	PickThreshold = 0.5
+	// RuleThreshold is how sure a model must be that a command breaks a rule before it is refused: a refusal costs the agent its call, and
+	// jev-1.14 scored a command that broke no rule 0.57 to 0.67 and commands that broke one 0.92 to 0.97.
+	RuleThreshold = 0.7
 	// WholeThreshold is how sure a model must be that the purpose needs every line before a selection is refused as misleading.
 	WholeThreshold = 0.7
 	// KeywordScore ranks keyword hits below confident model picks, so a flood of hits cannot displace them.

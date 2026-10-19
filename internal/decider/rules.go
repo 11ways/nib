@@ -52,7 +52,7 @@ func ruleQuestion(id string) noul {
 	}}
 }
 
-// Breaks asks the models in order which rules q's command breaks; a rule counts as broken from PickThreshold on.
+// Breaks asks the models in order which rules q's command breaks; a rule counts as broken from RuleThreshold on.
 func (o *openRouter) Breaks(ctx context.Context, q RuleQuestion) RuleVerdict {
 	if len(q.Rules) == 0 {
 		return RuleVerdict{}
@@ -83,7 +83,7 @@ func (o *openRouter) Breaks(ctx context.Context, q RuleQuestion) RuleVerdict {
 			verdict.Usage.add(got.usage)
 			if failure = got.failure; failure == "" {
 				for i, id := range ids {
-					if got.answers[id] >= PickThreshold {
+					if got.answers[id] >= RuleThreshold {
 						verdict.Broken = append(verdict.Broken, i)
 					}
 				}

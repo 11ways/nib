@@ -61,3 +61,17 @@ func TestBreaksFallsToTheNextModelAndSaysWhyNoneJudged(t *testing.T) {
 		t.Fatalf("verdict %+v", failed)
 	}
 }
+
+func TestARuleCountsAsBrokenOnlyFromRuleThreshold(t *testing.T) {
+	f := &fake{answer: func(_ int, req map[string]any) (int, string) {
+		return 200, answerAll(req, func(id string) float64 {
+			return map[string]float64{"r0": 0.6, "r1": RuleThreshold, "r2": 0.5}[id]
+		})
+	}}
+	server := f.serve(t)
+	o := openRouterFor(server, 5*time.Second, t.TempDir())
+	verdict := o.Breaks(context.Background(), RuleQuestion{Command: "ls", Rules: []string{"a", "b", "c"}})
+	if verdict.Failure != "" || !slices.Equal(verdict.Broken, []int{1}) {
+		t.Fatalf("verdict %+v", verdict)
+	}
+}
