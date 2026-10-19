@@ -850,6 +850,12 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
 		single = len(args.Paths) == 1 && len(sel.ranges) == 1 && sel.ranges[0].end == sel.ranges[0].start
 		t, err := resolveTarget(input, ctx, false)
 		var nf *NotFound
+		if errors.As(err, &nf) && since == "" && sel.symbols == nil {
+			// A path that names nothing may be DATABASE:TABLE, its row selector already split off.
+			if found, table := databaseTable(ctx, input); found != nil {
+				t, err, sel.symbols = found, nil, []string{table}
+			}
+		}
 		if errors.As(err, &nf) {
 			// A path that names nothing may be PATH@REV, which only then reads as one.
 			rev, revErr := e.revisionOf(ctx, entry)
@@ -925,6 +931,9 @@ func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string
 			}
 			if args.Info {
 				return e.facts(ctx, t, file)
+			}
+			if isDatabase(file) {
+				return e.databaseBlock(ctx, t, sel)
 			}
 			// Images and PDFs fall through to the usual handling, since plain only changes how text lines print.
 			if args.Plain {

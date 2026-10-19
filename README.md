@@ -21,7 +21,7 @@ bun typecheck           # go vet and tsgo --noEmit
 
 | Tool | Input | Purpose |
 | --- | --- | --- |
-| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `path@REV` reads a file as of a git commit, or a folder's commit with its diff; `info` gives one line of facts per file instead of content. |
+| `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info` | Several files, ranges, directories and images in one call; outlines large files and skips lockfiles and generated files unless a range is given; `plain` reads logs cheaply; `path#TAG` shows what changed since that tag; `path@REV` reads a file as of a git commit, or a folder's commit with its diff; a SQLite database reads as its tables and their rows; `info` gives one line of facts per file instead of content. |
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search whose output rows are valid edit anchors; can also just list matching files or count matches; `replace` previews a search-and-replace and returns a token that applies it. |
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files recursively with line counts, sizes and ages; filters by size and age, sorts by path, size or age. |
 | `edit` | `input` (patch text, or `REAPPLY TOKEN` from a refusal or a grep replace) | Edits, creates, copies, moves and deletes any number of files in one call. |
@@ -212,6 +212,30 @@ Every row is `N|TEXT`, never an anchor, and nothing of it counts as seen, since 
 revision that does not resolve says so in one line (`a.go@nope: nope is no commit in zenit`). It takes no `info`, and
 `plain` prints the same rows. `skim` takes `PATH@REV` the same way. nibash points at it once per agent when a command
 writes `git diff`, `show` or `format-patch` to a file.
+
+#### SQLite databases
+
+A file that starts like a SQLite 3 database (its header, whatever its name) reads as one, strictly read-only. Without a
+selector it is an outline: each table and view in the order they were made, with its row count, whether it is a
+table without rowid, and its columns with their declared types as SQLite reports them. `db:TABLE` gives that table's
+rows, and read's line selectors after it pick rows by position: `db:runs:-15` the last 15, `db:runs:1-20`,
+`db:runs:40+10`, and `db:runs,pins` several tables. Rows come in rowid order, a table without rowid in primary key
+order and a view in its own order, as the heading says, under a row of the column names:
+
+```
+[state.db] table runs, rows 2-4 of 30, in rowid order
+id | status | log | data
+2 | ok | first line\nsecond \| line | NULL
+3 | fail | run 3 | <blob 3 bytes>
+```
+
+Columns are separated by ` | `; a value shows `\`, newlines, tabs and `|` escaped, is cut after 120 characters with
+`... (+N chars)`, and a blob shows its size. One read fetches at most 500 rows, and the note under them names the rows
+left out and how to read on. Rows are never anchors and count as nothing seen; an edit of a database is still refused
+as a binary file. nib opens it the way it opens OpenCode's database (`internal/sqlitero`): read-only, with writes
+refused by the connection too, attached to the shared memory a writer holds, or opened immutable when no one holds a
+WAL database, since even a read-only connection would otherwise create its `-wal` and `-shm` files. `info` still gives
+the file's facts.
 
 #### File facts
 
@@ -1493,6 +1517,7 @@ bun bench/run.ts --recheck    # check stored runs again whose check changed, the
 | `internal/patch/`, `internal/diff/`, `internal/tag/`, `internal/js/` | Patch parser; jsdiff's array diff; the oh-my-pi file tag; JavaScript string semantics the output rules were defined with |
 | `internal/setup/`, `internal/hook/`, `internal/hookstate/` | `nib setup`; the Claude Code hook for the built-in `Read` and nib's own tools, which finds a subagent's parent and spawn moment, and for the session starts and compactions that drop an agent's context; the hook's private state folder, the agent and drop records it hands the server, the spawn moments it found and the moments each agent's context was dropped |
 | `internal/opencode/` | Read-only lookups in OpenCode 2's database: which session a session was forked or spawned from, and when, and when it was last compacted |
+| `internal/sqlitero/` | Opens a SQLite database nib does not own strictly read-only, creating no files beside it; used for OpenCode's database and by `read` |
 | `test/` | Black-box suites run against the binary over MCP (`support/engine.ts` drives it with the engine's old interface), and the benchmark's tests |
 | `bench/` | Built-in versus nib benchmark: `run.ts` (CLI), `tasks.ts`, `fixture.ts`, `models.ts`, `runners.ts` (Claude Code and OpenCode), `jobs.ts`, `store.ts`, `report.ts`, `check.ts` |
 | `docs/design-nibash.md` | The design of the Go port, nibash and named directories, with the review it went through |

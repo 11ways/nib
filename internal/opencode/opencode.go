@@ -6,16 +6,13 @@ package opencode
 import (
 	"database/sql"
 	"encoding/json"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/11ways/nib/internal/platform"
+	"github.com/11ways/nib/internal/sqlitero"
 )
 
 // Origin is where a session comes from: its parent session, whether it is a fork of it (which copies its history) or a subagent's child
@@ -68,7 +65,7 @@ func Of(databases []string, session string) (origin Origin, ok bool) {
 // creation among them, as OpenCode stamps whole milliseconds and nib stamps seen lines before the message showing them completes, and the
 // parent's later calls run in messages created after those. A child session's moment is one millisecond past its creation.
 func lookup(path, session string) (origin Origin, found bool, err error) {
-	db, err := open(path)
+	db, err := sqlitero.Open(path)
 	if err != nil {
 		return Origin{}, false, err
 	}
@@ -131,7 +128,7 @@ func Compacted(databases []string, session string) (at time.Time, ok bool) {
 // compaction reads session's latest compaction from one database; found is false when it does not hold the session. OpenCode appends a
 // compaction message when the compaction ends, stamped then, in whole milliseconds; nib makes no call for the session while it runs.
 func compaction(path, session string) (at time.Time, found bool, err error) {
-	db, err := open(path)
+	db, err := sqlitero.Open(path)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -172,7 +169,7 @@ func Credential(databases []string, provider string) (login Login, ok bool) {
 
 // credential reads provider's login from one database; anything unexpected in its value is no login.
 func credential(path, provider string) (Login, bool) {
-	db, err := open(path)
+	db, err := sqlitero.Open(path)
 	if err != nil {
 		return Login{}, false
 	}
@@ -191,15 +188,4 @@ func credential(path, provider string) (Login, bool) {
 		return Login{}, false
 	}
 	return Login{Kind: stored.Type, Key: stored.Key}, true
-}
-
-// open opens a database read-only, so nib never writes to OpenCode's data. A file URI holds the path with slashes and a leading one, so a
-// Windows path C:\x reads file:///C:/x.
-func open(path string) (*sql.DB, error) {
-	slashed := filepath.ToSlash(path)
-	if !strings.HasPrefix(slashed, "/") {
-		slashed = "/" + slashed
-	}
-	location := url.URL{Scheme: "file", Path: slashed, RawQuery: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(2000)"}
-	return sql.Open("sqlite", location.String())
 }
