@@ -610,9 +610,13 @@ the end of the connection stops a program (SIGTERM, then SIGKILL after 3 s). Sta
 - **Jobs.** `background: true` runs the whole command as a job and returns its id and log at once. `cmd &` starts a job
   too, and `$!` is its spec (`%3`) for `kill`, `wait` and `jobs`, which nibash implements for real processes; jobs
   outlive the call that starts them, and a later call reaches them by their spec. Finished jobs are reported at the top
-  of the next call, and only the end of the connection ends the rest. `nibash_status` lists the client's commands in
-  flight and its jobs across all its agents, `[agent] running 0:42: command (description)` and
-  `job %1 [agent] exit 0 after 1:05: command; output: LOG`, their last output lines behind `  | ` with `tail`.
+  of the next call, and only the end of the connection ends the rest. A call still running in its request is no job:
+  when `wait` finds no such job, or no running one, while another call of the agent runs, a note after the output names
+  that call and says its result comes back to it (`[no job %2 to wait for: the call "make test" still runs as a call, not
+  a job, and its result comes back to that call]`); `wait`'s own message and exit status stay bash's. `nibash_status`
+  lists the client's commands in flight and its jobs across all its agents, `[agent] running 0:42: command
+  (description)` and `job %1 [agent] exit 0 after 1:05: command; output: LOG`, their last output lines behind `  | ` with
+  `tail`.
 - **Differences from bash** are in the tool description: `$!` holds a job spec, a pipeline's last stage runs in the
   shell itself (`... | read v` sets `v`), `type cat` names the system program, which is what runs where nib's own does
   not, a program does not start in a directory deleted under the call (bash's child would inherit it; nibash says why

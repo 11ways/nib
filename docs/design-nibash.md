@@ -358,10 +358,16 @@ When the command finishes or its time runs out, the sink is rendered once:
 - **Past the call's timeout** the foreground part is not stopped: it goes on as a job. The call returns the output so
   far, with `[nibash: still running after 2m0s; it goes on as job %4, output: <log>; wait %4 or kill %4]`; the sink
   writes what it held to the job's log and sends everything later there, so the log has the whole output from the start.
-  The call's process groups join the job.
+  The call's process groups join the job. Only that output so far renders under the request's context: what runs on
+  keeps the run's own, since the request's ends with the answer (nib's own commands after a `wait` that went on as a job
+  once failed with `context canceled`).
 - **`jobs`** lists the session's jobs with state, exit code and log path. **`kill %N`, `kill PID` and `kill -SIG`** work
   on jobs and on any real process. **`wait %N`** waits for a job; past the call's timeout the waiting call goes on as a
-  job too.
+  job too. A call still in its request is no job, as one a client moved to its own background list is: a `wait` that
+  finds no such job, or no running one, while another call of the same agent runs adds a note after the output, `[no
+  job %2 to wait for: the call "..." still runs as a call, not a job, and its result comes back to that call]`, with
+  the command shortened to 60 characters. It is nib's own line, so it shows when the command sends `wait`'s message to
+  `/dev/null`; that message and the exit status stay bash's.
 - **Reporting:** finished jobs are reported at the top of the next nibash result (`[job 3 finished, exit 0]`), since MCP
   cannot notify on its own.
 - **Connection end:** jobs are killed when the connection ends, never sooner.

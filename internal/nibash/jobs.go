@@ -355,10 +355,13 @@ func (c *call) wait(ctx context.Context, args []string) error {
 			j := c.session.jobs.find(spec)
 			if j == nil {
 				fmt.Fprintf(hc.Stderr, "wait: %s: no such job\n", spec)
+				c.noteWaitless("no job " + spec)
 				return interp.ExitStatus(127)
 			}
 			targets = append(targets, j)
 		}
+	} else if !slices.ContainsFunc(targets, (*job).running) {
+		c.noteWaitless("no running job")
 	}
 	status := 0
 	for _, j := range targets {
@@ -374,6 +377,36 @@ func (c *call) wait(ctx context.Context, args []string) error {
 		return nil
 	}
 	return interp.ExitStatus(status)
+}
+
+// waitlessCommand is how many characters of another call's command line the note of a wait with nothing to wait for shows.
+const waitlessCommand = 60
+
+// noteWaitless tells, once a call, that wait found nothing to wait for while other calls of the agent still run in their requests: such a
+// call is no job, so wait cannot reach it, and its result comes back to that call.
+func (c *call) noteWaitless(what string) {
+	commands := c.session.otherCalls(c)
+	if len(commands) == 0 {
+		return
+	}
+	quoted := make([]string, len(commands))
+	for i, command := range commands {
+		shown := []rune(strings.Join(strings.Fields(command), " "))
+		if len(shown) > waitlessCommand {
+			shown = append(shown[:waitlessCommand], []rune("...")...)
+		}
+		quoted[i] = `"` + string(shown) + `"`
+	}
+	note := fmt.Sprintf("[%s to wait for: the call %s still runs as a call, not a job, and its result comes back to that call]", what, quoted[0])
+	if len(quoted) > 1 {
+		named := strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+		note = fmt.Sprintf("[%s to wait for: the calls %s still run as calls, not jobs, and their results come back to those calls]", what, named)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.waitless == "" {
+		c.waitless = note
+	}
 }
 
 var _ io.Writer = (*cappedWriter)(nil)

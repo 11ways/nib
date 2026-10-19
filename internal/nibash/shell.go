@@ -210,6 +210,24 @@ func (sess *session) runningCommands() []string {
 	return commands
 }
 
+// otherCalls are the command lines of the session's calls other than c still in their request, the earliest started first.
+func (sess *session) otherCalls(c *call) []string {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	var others []running
+	for other, r := range sess.active {
+		if other != c {
+			others = append(others, r)
+		}
+	}
+	slices.SortFunc(others, func(a, b running) int { return a.started.Compare(b.started) })
+	commands := make([]string, len(others))
+	for i, r := range others {
+		commands[i] = r.command
+	}
+	return commands
+}
+
 // Close kills a session's jobs and forgets it.
 func (s *Shell) Close(key any) {
 	s.mu.Lock()
@@ -263,7 +281,7 @@ type call struct {
 	links *links
 	logs  *logDirectory
 	jobs  map[int]*syntax.Stmt
-	// mu guards job, groups, written and system, which a call's stages and a job it turned into share.
+	// mu guards job, groups, written, system and waitless, which a call's stages and a job it turned into share.
 	mu sync.Mutex
 	// job is set for calls that run a job's statement, and for a call that went on as a job; their processes join it.
 	job *job
@@ -279,6 +297,8 @@ type call struct {
 	rows *rowBand
 	// piped are the row commands whose output went through a real program to the model, which an agent is told of once.
 	piped []pipe
+	// waitless is the note of a wait that found nothing to wait for while other calls of the agent were running.
+	waitless string
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -507,8 +527,10 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		c.killAll()
 		j.finish(err, out)
 	}()
-	c.tools.Ctx = ctx
-	text := c.sink.render(s.engine, c.tools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
+	// The output so far renders under the request's context; what runs on must not see it cancelled when the request ends.
+	rendering := *c.tools
+	rendering.Ctx = ctx
+	text := c.sink.render(s.engine, &rendering, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), timedOut: true})
 	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; wait %%%d or kill %%%d]", timeout, j.id, j.log, j.id, j.id)}
 	return c.result(reports, text, tail, before, bodies), nil
 }
@@ -524,6 +546,9 @@ func (c *call) result(reports []string, text string, tail []string, before map[s
 	}
 	c.mu.Lock()
 	parts = append(parts, c.system...)
+	if c.waitless != "" {
+		parts = append(parts, c.waitless)
+	}
 	c.mu.Unlock()
 	if note := c.pipedNote(); note != "" {
 		parts = append(parts, note)
