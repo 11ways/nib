@@ -192,7 +192,12 @@ func TestFindDeleteSendsWhatItWouldDeleteToTheTrash(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	f := newFixture(t, map[string]string{"a/b/c.log": "c\n", "a/x.log": "x\n", "a/keep.txt": "k\n"})
 	out := notes.ReplaceAllString(f.run("find a -name '*.log' -print -delete; find a -name b -delete 2>&1; echo status=$?"), "")
-	expect(t, out, "a/b/c.log\na/x.log\nstatus=0\n")
+	// find prints in the order the directory lists its entries, which differs by filesystem.
+	printed := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(printed) == 3 {
+		slices.Sort(printed[:2])
+	}
+	expect(t, strings.Join(printed, "\n")+"\n", "a/b/c.log\na/x.log\nstatus=0\n")
 	if tree(t, filepath.Join(f.directory, "a")) != "keep.txt" {
 		t.Fatalf("left %s", tree(t, filepath.Join(f.directory, "a")))
 	}

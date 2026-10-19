@@ -84,8 +84,9 @@ func TestEveryCallStartsFreshAndJobsStayWithTheirAgent(t *testing.T) {
 	directory := agentDirectory(t)
 	fork := hookstate.Agent{ID: "f1", Spawned: true, Forked: true}
 	run := connectAgents(t, directory, map[string]hookstate.Agent{"toolu_sub_job": {ID: "a1"}, "toolu_sub_jobs": {ID: "a1"}, "toolu_f1": fork})
-	expect(t, run("toolu_main_x", "cd sub && export WHO=main && greet() { echo hi; }"), "(no output)")
-	expect(t, run("toolu_main_y", `echo "$PWD ${WHO-unset} $(greet 2>/dev/null || echo none)"`), directory+" unset none")
+	// The function's name is one no program on PATH has: there one would run in its place.
+	expect(t, run("toolu_main_x", "cd sub && export WHO=main && nib_test_greet() { echo hi; }"), "(no output)")
+	expect(t, run("toolu_main_y", `echo "$PWD ${WHO-unset} $(nib_test_greet 2>/dev/null || echo none)"`), directory+" unset none")
 	run("toolu_sub_job", "sleep 30.41 &")
 	expect(t, run("toolu_sub_jobs", "jobs | wc -l"), "1")
 	expect(t, run("toolu_main_jobs", "jobs | wc -l"), "0")
