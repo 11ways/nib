@@ -45,6 +45,7 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 				err = interp.ExitStatus(2)
 			}
 		}()
+		c.reachIn(interp.HandlerCtx(ctx).Dir, args[1:])
 		name := args[0]
 		mode, marked, ok := parseMarker(args[0])
 		if ok {

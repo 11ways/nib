@@ -59,6 +59,45 @@ func TestAFileARunningJobNamesIsNotCalledChangedByAnotherCommand(t *testing.T) {
 	expect(t, f.run("wait"), "(no output)")
 }
 
+// TestAChangeNibCannotCreditToTheCommandShowsNoRows changes held files while a command sleeps: one outside anything the command reached,
+// written by another program, and one in its own directory, written by nib's edit; neither is called the command's, nor shown as its rows.
+func TestAChangeNibCannotCreditToTheCommandShowsNoRows(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers})
+	elsewhere := filepath.Join(t.TempDir(), "other.txt")
+	if err := os.WriteFile(elsewhere, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.run("cat a.txt " + elsewhere)
+	while := func(write func()) string {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			time.Sleep(100 * time.Millisecond)
+			write()
+		}()
+		out := f.run("sleep 0.4")
+		<-done
+		return out
+	}
+	out := while(func() { _ = os.WriteFile(elsewhere, []byte("one\nTWO\n"), 0o644) })
+	if strings.Contains(out, "changed by this command") || strings.Contains(out, "-|two") || !strings.Contains(out, "[changed while this command ran, by it or another writer: ") || !strings.Contains(out, "other.txt#") || !strings.Contains(out, "+1 -1)]") {
+		t.Fatalf("a file beyond the command's reach, got %s", out)
+	}
+	tag := tagOf(t, f.run("cat a.txt"))
+	out = while(func() {
+		if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 1:\n+ONE", tag)); err != nil {
+			t.Error(err)
+		}
+	})
+	if strings.Contains(out, "changed by this command") || strings.Contains(out, "+1:ONE") || !strings.Contains(out, "[changed while this command ran, by it or another writer: a.txt#") {
+		t.Fatalf("a file nib's edit wrote meanwhile, got %s", out)
+	}
+	// A job the command itself started is the command's.
+	if out := f.run("(sleep 0.1; sed -i s/ONE/one/ a.txt) & wait"); !strings.Contains(out, "[changed by this command: a.txt#") || !strings.Contains(out, "+1:one") {
+		t.Fatalf("a job of the command's own, got %s", out)
+	}
+}
+
 // tags hides the tags in output, which tests compare whole.
 var tags = regexp.MustCompile(`#[0-9A-F]{4}`)
 

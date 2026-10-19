@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/js"
@@ -1765,7 +1766,7 @@ type response struct {
 }
 
 // commit publishes every staged change in order; a failure after the first write names what already landed.
-func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*staged, shownByPreview map[string]map[int]bool) ([]string, error) {
+func commit(ctx *Context, store *snapshots.Store, can *trash.Can, wrote func(string), items []*staged, shownByPreview map[string]map[int]bool) ([]string, error) {
 	var changes []*staged
 	for _, item := range items {
 		if item.kind != stagedNoop {
@@ -1798,6 +1799,14 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 	}
 	var written []string
 	for _, item := range changes {
+		// Marked before and after, so a command's end that checks between them still finds the write.
+		marked := []string{item.handle.target.canonical}
+		if d := item.handle.destination; d != nil {
+			marked = append(marked, d.target.canonical)
+		}
+		for _, path := range marked {
+			wrote(path)
+		}
 		err := func() error {
 			h := item.handle
 			switch item.kind {
@@ -1839,6 +1848,9 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 			}
 			return publish(h.parent, h.target.canonical, item.applied.bytes, ctx, publishOptions{replace: item.current.info, validate: func() error { return unchanged(h, item.current) }, release: h.release})
 		}()
+		for _, path := range marked {
+			wrote(path)
+		}
 		if err != nil {
 			if len(written) == 0 {
 				return nil, err
@@ -2020,13 +2032,15 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 // reapplyPattern is the first line of a REAPPLY input; corrected sections may follow it.
 var reapplyPattern = regexp.MustCompile(`^REAPPLY` + jsSpace + `+(\S+)$`)
 
-// Engine holds the snapshot store, the stored patches of REAPPLY tokens and the trash what nib deletes goes to.
+// Engine holds the snapshot store, the stored patches of REAPPLY tokens, the trash what nib deletes goes to, and when its edits and writes
+// last wrote each file.
 type Engine struct {
 	Store  *snapshots.Store
 	Trash  *trash.Can
 	mu     sync.Mutex
 	tokens map[string]storedPatch
 	order  []string
+	writes map[string]time.Time
 }
 
 type storedPatch struct {
@@ -2215,7 +2229,7 @@ func (e *Engine) apply(ctx *Context, sections []*patch.Section, p *replacePrevie
 		if p != nil {
 			shown = p.shown
 		}
-		texts, err := commit(ctx, e.Store, e.Trash, items, shown)
+		texts, err := commit(ctx, e.Store, e.Trash, e.wrote, items, shown)
 		if err != nil {
 			return Result{}, err
 		}
@@ -2301,7 +2315,7 @@ func (e *Engine) Write(ctx *Context, path, content string, tagValue string) (Res
 		if err != nil {
 			return Result{}, err
 		}
-		texts, err := commit(ctx, e.Store, e.Trash, []*staged{item}, nil)
+		texts, err := commit(ctx, e.Store, e.Trash, e.wrote, []*staged{item}, nil)
 		if err != nil {
 			return Result{}, err
 		}

@@ -55,6 +55,9 @@ type Shell struct {
 	// shaped is what nib shape requests showed of each log, by canonical path, which a later skim by any agent goes on from.
 	shapeMu sync.Mutex
 	shaped  map[string]logMark
+	// writers are the calls of every session running now, a job's included, and those that ended while one of them ran; mu guards it and
+	// each call's ranTo.
+	writers map[*call]bool
 }
 
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
@@ -322,6 +325,12 @@ type call struct {
 	waitless string
 	// waited are the jobs the call's waits waited for, which a call that only waits names when its timeout ends it.
 	waited []*job
+	// ranFrom and ranTo bound the run of the call's command, a job's included; ranTo is zero while it runs, and Shell.mu guards it.
+	ranFrom, ranTo time.Time
+	// origin is the call whose command started this one's, a job's statement; nil for a call of its own.
+	origin *call
+	// reach are the directories the call's commands ran in and the paths their arguments named, canonical, which mu guards.
+	reach []string
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -451,7 +460,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		return engine.Result{}, err
 	}
 	if request.Background {
-		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description)
+		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description, nil)
 		if err != nil {
 			return engine.Result{}, err
 		}
@@ -481,6 +490,16 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
 	callTools := *tools
 	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped, savedPatch: savedPatch}
+	s.register(c)
+	// A call that goes on as a job ends with it.
+	defer func() {
+		c.mu.Lock()
+		detached := c.job != nil
+		c.mu.Unlock()
+		if !detached {
+			c.end()
+		}
+	}()
 	sess.track(c, request)
 	defer func() { sess.untrack(c) }()
 	devnull, err := os.Open(os.DevNull)
@@ -619,6 +638,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		cancel()
 		c.killAll()
 		j.finish(err, out)
+		c.end()
 		s.pushEnd(c.session, j)
 	}()
 	// The output so far renders under the request's context; what runs on must not see it cancelled when the request ends.
@@ -683,7 +703,8 @@ const (
 
 // changed lists the files the command created or changed: those the session held versions of, and those it wrote through a redirect.
 // A held file something else was already changing is left out unless the command redirected to it, since its change need not be the
-// command's. A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
+// command's. A change nib cannot credit to the command (see own) is listed apart, with its counts and no rows, as one that happened while
+// it ran. A file holding exactly a here-document's text is recorded with every line known, since the model typed it.
 func (c *call) changed(before map[string]held, bodies []string) string {
 	type candidate struct {
 		created bool
@@ -715,13 +736,14 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		sorted = append(sorted, path)
 	}
 	slices.Sort(sorted)
-	var listed, blocks []string
+	var listed, while, blocks []string
 	budget := changedRows
 	for _, path := range sorted {
 		if strings.HasPrefix(path, "/dev/") || strings.HasPrefix(path, "/proc/") {
 			continue
 		}
 		found := paths[path]
+		mine := c.own(path)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if found.was != "" {
@@ -729,16 +751,35 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 				if c.wasTrashed(path) {
 					gone = " (in the trash)"
 				}
-				listed = append(listed, c.tools.Display(path)+gone)
+				if mine {
+					listed = append(listed, c.tools.Display(path)+gone)
+				} else {
+					while = append(while, c.tools.Display(path)+gone)
+				}
 			}
 			continue
 		}
-		typed := slices.Contains(bodies, string(data))
+		typed := mine && slices.Contains(bodies, string(data))
 		view, ok := c.engine.Snapshot(c.tools, path, typed)
 		if !ok {
 			continue
 		}
 		entry := fmt.Sprintf("%s#%s", c.tools.Display(path), view.Tag)
+		if !mine {
+			if found.was != "" && found.was != view.Tag {
+				if change := c.engine.Changed(c.tools, path, found.was, view, -1, 0); change.Counted {
+					entry += fmt.Sprintf(" (was #%s, +%d -%d)", found.was, change.Added, change.Removed)
+				} else {
+					entry += fmt.Sprintf(" (was #%s)", found.was)
+				}
+			} else if found.was == "" {
+				entry += " (written)"
+			} else {
+				continue
+			}
+			while = append(while, entry)
+			continue
+		}
 		switch {
 		case found.created:
 			entry += " (new)"
@@ -760,8 +801,13 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		}
 		listed = append(listed, entry)
 	}
-	if len(listed) == 0 {
-		return ""
+	var notes []string
+	if len(listed) > 0 {
+		notes = append(notes, "[changed by this command: "+strings.Join(listed, ", ")+"]")
+		notes = append(notes, blocks...)
 	}
-	return strings.Join(append([]string{"[changed by this command: " + strings.Join(listed, ", ") + "]"}, blocks...), "\n")
+	if len(while) > 0 {
+		notes = append(notes, "[changed while this command ran, by it or another writer: "+strings.Join(while, ", ")+"]")
+	}
+	return strings.Join(notes, "\n")
 }

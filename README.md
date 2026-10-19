@@ -698,6 +698,11 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   the session holds,
   another running call or job of the session names it, or it was found so before and changed in the last 10 s) is left
   out unless the command redirected to it, as a log a build writes is: its change need not be the command's.
+  A change that started while the command ran is credited to it only when the file lies in a directory one of its
+  commands ran in, or under a path one of their arguments named, and no `edit` or `write` and no other nibash call that
+  reached it ran meanwhile, in any session of the server. Any other change is listed apart, with counts and no rows:
+  `[changed while this command ran, by it or another writer: ../main/README.md#1B2C (was #9C10, +4 -1)]`. A writer
+  outside the server, such as an editor, is told apart only where it writes beyond what the command reached.
 - **Jobs.** `background: true` runs the whole command as a job and returns its id and log at once. `cmd &` starts a job
   too, and `$!` is its spec (`%3`) for `kill`, `wait` and `jobs`, which nibash implements for real processes; jobs
   outlive the call that starts them, and a later call reaches them by their spec. Finished jobs are reported at the top

@@ -243,7 +243,7 @@ func (j *job) finish(err error, out *cappedWriter) {
 
 // launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal; push, when set, tells the
 // agent its end, with purpose as what the call was for.
-func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string) (*job, error) {
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string, origin *call) (*job, error) {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return nil, err
@@ -265,12 +265,14 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 		return nil, err
 	}
 	jobTools := *tools
-	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, runner: runner, names: names, links: &links{}, logs: sess.shell.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}}
+	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, runner: runner, names: names, links: &links{}, logs: sess.shell.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}, origin: origin}
+	sess.shell.register(c)
 	ctx := context.WithValue(base, callKey{}, c)
 	jobTools.Ctx = ctx
 	go func() {
 		defer devnull.Close()
 		j.finish(runner.Run(ctx, node), out)
+		c.end()
 		sess.shell.pushEnd(sess, j)
 	}()
 	return j, nil
@@ -290,7 +292,7 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	}
 	var text strings.Builder
 	syntax.NewPrinter().Print(&text, stmt)
-	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "")
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "", c)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
 		return interp.ExitStatus(1)

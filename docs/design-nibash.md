@@ -364,6 +364,13 @@ When the command finishes or its time runs out, the sink is rendered once:
     the session first held that version), when another running call or job of the session names it, or when an earlier
     call found it changing and it was modified less than 10 s ago. What nib cannot tell is a command that rewrites such
     a file without a redirect: its change is left out too.
+  - A change nib cannot credit to the command is listed as `[changed while this command ran, by it or another writer:
+    ...]`, counts only. Each call keeps what it reached (`reachIn`: the directory every command ran in, and the paths
+    their arguments name, the bare root excepted) and the server keeps every call of every session that ran while
+    another did (`Shell.writers`), and the engine when its `edit` and `write` last wrote each file (`WroteSince`).
+    A change is the command's (`own`) when the command, or a job it started, reached the file, nothing of nib's wrote it
+    since the call began, and no other call that overlapped it reached it. A writer outside the server is caught only
+    beyond the command's reach, as when an agent in a worktree runs a command while the main checkout is merged.
 
 ### 5.7 Background work [B2]
 
