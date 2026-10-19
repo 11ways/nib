@@ -50,13 +50,33 @@ func nonNil(lines []int) []int {
 	return lines
 }
 
-// unseenError mirrors oh-my-pi's unseen-line guard: reveal what the model would have touched and let a straight retry pass. An agent gets the
-// explanations once; later refusals keep only what differs.
+// unseenError mirrors oh-my-pi's unseen-line guard: reveal what the model would have touched and let a straight retry pass. Lines that moved
+// since the agent saw or wrote them say so; the others get the general explanations once, and later refusals keep only what differs.
 func unseenError(store *snapshots.Store, session string, t *target, current snapshots.View, unseen []int, known map[int]bool) *Refusal {
 	first := store.Teach(session, "unseen")
-	header := fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full.", ranges(unseen), t.display, t.display, current.Tag)
-	if first {
-		header = fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full (partial read, truncated line, or rows elided from an edit response).", ranges(unseen), t.display, t.display, current.Tag)
+	var moved, never []int
+	for _, line := range unseen {
+		if known[line] {
+			moved = append(moved, line)
+		} else {
+			never = append(never, line)
+		}
+	}
+	var header string
+	if len(never) > 0 {
+		why := ""
+		if store.Teach(session, "unseen-why") {
+			why = " (partial read, truncated line, or rows elided from an edit response)"
+		}
+		header = fmt.Sprintf("This edit anchors to lines %s of %s that [%s#%s] never displayed in full%s", ranges(never), t.display, t.display, current.Tag, why)
+	}
+	switch {
+	case len(moved) > 0 && header == "":
+		header = fmt.Sprintf("This edit anchors to lines %s of %s, which moved since you saw or wrote them.", ranges(moved), t.display)
+	case len(moved) > 0:
+		header += fmt.Sprintf(", and to lines %s, which moved since you saw or wrote them.", ranges(moved))
+	default:
+		header += "."
 	}
 	if store.Forgotten(session, t.canonical) {
 		header = fmt.Sprintf("This edit anchors to lines %s of %s that this agent was not shown since nib dropped its earlier views of the file: nib keeps the views of a limited number of files across all agents, and dropped this one's to make room, so lines read before then no longer count.", ranges(unseen), t.display)

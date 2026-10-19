@@ -306,9 +306,9 @@ When the command finishes or its time runs out, the sink is rendered once:
 - **Plain lines:**
   - ANSI escapes are removed, and `\r` progress overwrites are resolved to the line's final text.
   - Invalid UTF-8 is shown as U+FFFD. A NUL byte marks the output as binary, so only its size is shown [m5].
-  - Plain output over 20 lines collapses exact repeats with the `compress` that `read plain` uses, but never
-    digit-masked repeats: in program output, lines that differ only in a number may differ in what matters (`seq 1 1000`
-    must not become one line).
+  - Plain output over 20 lines collapses exact repeats with the `compress` that `read plain` uses, where the marker is
+    shorter than the lines it stands for, but never digit-masked repeats: in program output, lines that differ only in a
+    number may differ in what matters (`seq 1 1000` must not become one line).
 - **Budget:** output past 400 rows or 30 KiB is cut; which rows stay is the decider's choice (`docs/design-decider.md`):
   the fixed cut keeps the first 100 and last 200 rows, keywords and the OpenRouter decision model keep the first 30 and
   last 100 and choose the middle.

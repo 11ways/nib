@@ -7,6 +7,7 @@ import (
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/js"
 )
 
 // nameMinChars is how long a line must be before a name for it pays: a short line costs about what its name does.
@@ -27,7 +28,7 @@ func dedupe(lines []string) ([]decider.Entry, decider.Legend) {
 		plain[i] = engine.PlainLine{At: i + 1, Text: line}
 		count[line]++
 	}
-	steps := engine.RepeatsBy(plain, keys)
+	steps := engine.RepeatsBy(plain, keys, dedupePricing(lines))
 	legend := decider.Legend{}
 	names := map[string]string{}
 	numbered := map[string]int{}
@@ -111,6 +112,36 @@ func dedupe(lines []string) ([]decider.Entry, decider.Legend) {
 		}
 	}
 	return entries, legend
+}
+
+// dedupePricing prices entries as a model reads them, a line as "LABEL: TEXT", and a run as its entry and its legend line, names taken as
+// two digits; a recurring block's legend replaces its original's lines, so only its entry counts.
+func dedupePricing(lines []string) engine.Pricing {
+	label := func(first, last int) int {
+		if last > first {
+			return len(strconv.Itoa(first)) + 1 + len(strconv.Itoa(last))
+		}
+		return len(strconv.Itoa(first))
+	}
+	entry := func(first, last, text int) int { return label(first, last) + len(": ") + text + 1 }
+	const name = len("@L00")
+	return engine.Pricing{
+		Line: func(index int) int { return entry(index+1, index+1, js.Len(lines[index])) },
+		Collapsed: func(r engine.Repeat) int {
+			if r.Kind == engine.RepeatEcho {
+				return entry(r.Index+1, r.Index+r.Length, name)
+			}
+			text := 0
+			for _, line := range lines[r.Index : r.Index+r.Period] {
+				text += js.Len(line) + 1
+			}
+			if !r.Exact {
+				text += len(varies)
+			}
+			count := entry(r.Index+1, r.Index+r.Period*r.Copies, name+len(" x")+len(strconv.Itoa(r.Copies)))
+			return count + name + len(" = ") + text
+		},
+	}
 }
 
 // copyLong says whether the length lines from start average nameMinChars, long enough that copies differing in their digits may share a name.

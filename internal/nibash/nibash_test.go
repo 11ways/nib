@@ -161,13 +161,21 @@ func TestGrepFollowsGnuFormsBetweenNibCommands(t *testing.T) {
 
 func TestRecurringBlockMarkersAreExplainedOnce(t *testing.T) {
 	f := newFixture(t, nil)
-	command := `for i in 1 2 3 4 5 6; do echo "step $i"; done; for r in 1 2 3; do printf 'ERROR closed\n  at take\n  at run\nretry %s\n' $r; done; for i in 7 8 9 10 11 12; do echo "step $i"; done`
+	command := `for i in 1 2 3 4 5 6; do echo "step $i"; done; for r in 1 2 3; do printf 'ERROR connection closed by peer\n  at take (queue.go:42)\n  at run (worker.go:17)\nretry %s\n' $r; done; for i in 7 8 9 10 11 12; do echo "step $i"; done`
 	first := f.run(command)
-	if !strings.Contains(first, "[#1, 3 lines] ERROR closed") || !strings.Contains(first, "[#1 again, 3 lines] ERROR closed") || !strings.HasSuffix(first, "\n[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]") {
+	if !strings.Contains(first, "[#1, 3 lines] ERROR connection closed by peer") || !strings.Contains(first, "[#1 again, 3 lines] ERROR connection closed by peer") || !strings.HasSuffix(first, "\n[a row starting [#N, K lines] begins a K-line block that recurs below; each [#N again, K lines] row stands for that block printed again there]") {
 		t.Fatalf("got:\n%s", first)
 	}
 	if again := f.run(command); strings.Contains(again, "a row starting [#N") {
 		t.Fatalf("explained twice:\n%s", again)
+	}
+}
+
+func TestProgramOutputCollapsesARunOnlyWhereItsMarkerIsShorter(t *testing.T) {
+	f := newFixture(t, nil)
+	got := f.run(`seq 1 21; for i in 1 2 3; do echo ok; done; for i in 1 2 3; do echo "waiting for the build to finish"; done`)
+	if !strings.HasSuffix(got, "\n21\nok\nok\nok\nwaiting for the build to finish\n[the line above repeats 2 more times]") {
+		t.Fatalf("got:\n%s", got)
 	}
 }
 

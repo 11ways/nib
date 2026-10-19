@@ -578,7 +578,7 @@ describe("edit", () => {
     const source = Array.from({ length: 30 }, (_, index) => `const value${index} = compute(${index})`).join("\n") + "\n"
     const f = await fixture(source)
     const first = await f.edit((await f.read()).tag, [{ start: 1, content: "// header", operation: "before" }])
-    await expect(f.edit(first.tag, [{ start: 21, content: "unrelated", operation: "replace" }])).rejects.toThrow("never displayed in full")
+    await expect(f.edit(first.tag, [{ start: 21, content: "unrelated", operation: "replace" }])).rejects.toThrow("This edit anchors to lines 21 of file.txt, which moved since you saw or wrote them.")
     const g = await fixture(source)
     const shifted = await g.edit((await g.read()).tag, [{ start: 1, content: "// header", operation: "before" }])
     await g.edit(shifted.tag, [{ start: 21, content: "const value19 = compute(19) // checked", operation: "replace" }])
@@ -586,6 +586,16 @@ describe("edit", () => {
     const h = await fixture(source)
     const moved = await h.edit((await h.read()).tag, [{ start: 1, content: "// header", operation: "before" }])
     await expect(h.edit(moved.tag, [{ start: 21, content: "const value1 = compute(1)", operation: "replace" }])).rejects.toThrow("21:const value19 = compute(19)")
+  })
+
+  test("a refusal tells lines that moved since the agent saw them from lines it never saw", async () => {
+    const f = await fixture(Array.from({ length: 30 }, (_, index) => `const value${index} = compute(${index})`).join("\n") + "\n")
+    const first = await f.edit((await f.read(":1-10")).tag, [{ start: 1, content: "// header", operation: "before" }])
+    const message = await refusal(f.patch(`[file.txt#${first.tag}]\nPUT 8.=8:\n+a\nPUT 20.=20:\n+b`))
+    expect(message).toContain(`This edit anchors to lines 20 of file.txt that [file.txt#${first.tag}] never displayed in full (partial read, truncated line, or rows elided from an edit response), and to lines 8, which moved since you saw or wrote them.`)
+    // Resent unchanged, the edit applies.
+    await f.patch(`[file.txt#${first.tag}]\nPUT 8.=8:\n+a\nPUT 20.=20:\n+b`)
+    expect((await readFile(f.filePath, "utf8")).split("\n")[7]).toBe("a")
   })
 
   test("a colliding tag for different content is treated as stale, not applied blindly", async () => {
@@ -1983,15 +1993,16 @@ describe("color codes", () => {
 })
 
 describe("plain reads", () => {
-  const content = ["start", "\x1b[32mok\x1b[0m step", "same", "same", "same", "same", "pair", "pair", "x".repeat(50), "end"].join("\n") + "\n"
+  const same = "waiting for the build to finish"
+  const content = ["start", "\x1b[32mok\x1b[0m step", same, same, same, same, "pair", "pair", "x".repeat(50), "end"].join("\n") + "\n"
 
   test("plain rows carry no numbers or tag: colors stripped, long lines shortened, repeats collapsed, gaps named", async () => {
     const f = await fixture(content)
     const plain = (paths: string[], maxLineLength?: number) => f.engine.read(f.ctx, { paths, plain: true, maxLineLength }).then((result) => result.text)
-    expect(await plain(["file.txt"], 20)).toBe(["[file.txt] 10 lines, plain", "start", "ok step", "same", "[the line above repeats 3 more times]", "pair", "pair", "x".repeat(20) + "...", "end"].join("\n"))
+    expect(await plain(["file.txt"], 40)).toBe(["[file.txt] 10 lines, plain", "start", "ok step", same, "[the line above repeats 3 more times]", "pair", "pair", "x".repeat(40) + "...", "end"].join("\n"))
     expect(await plain(["file.txt:1-2,9-10"], 20)).toBe(["[file.txt] lines 1-2, 9-10 of 10, plain", "start", "ok step", "[lines 3-8 skipped]", "x".repeat(20) + "...", "end"].join("\n"))
     expect(await plain(["file.txt:-2"])).toBe(["[file.txt] lines 9-10 of 10, plain", "x".repeat(50), "end"].join("\n"))
-    expect(await plain(["file.txt:3-"])).toBe(["[file.txt] lines 3-10 of 10, plain", "same", "[the line above repeats 3 more times]", "pair", "pair", "x".repeat(50), "end"].join("\n"))
+    expect(await plain(["file.txt:3-"])).toBe(["[file.txt] lines 3-10 of 10, plain", same, "[the line above repeats 3 more times]", "pair", "pair", "x".repeat(50), "end"].join("\n"))
     await writeFile(path.join(f.directory, "pixel.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
     expect((await f.engine.read(f.ctx, { paths: ["pixel.png"], plain: true })).images).toHaveLength(1)
     await writeFile(path.join(f.directory, "blob.bin"), Buffer.from([1, 0, 2]))
@@ -2027,8 +2038,10 @@ describe("plain reads", () => {
       "\tat java.lang.Thread.run(Thread.java:840)",
       "INFO reconnecting",
       "[#1 again, 4 lines] ERROR queue closed",
+      // Three copies of a short line cost less than the line and its marker, so they print as they are.
       "same",
-      "[the line above repeats 2 more times]",
+      "same",
+      "same",
       "done",
       "[repeats were matched with their numbers ignored; read with collapse: false to see every line]",
       // The markers are explained to an agent once.
@@ -2290,7 +2303,7 @@ describe("changes since a tag (read path#TAG)", () => {
     ].join("\n"))
     expect((await f.read(`#${now}`)).text).toBe(`[file.txt#${now}] unchanged since #${now}`)
     // Line 14 moved without being shown, so it needs a ~ check; the refusal shows lines 12-16, which leaves line 17 unseen but known.
-    await expect(f.patch(`[file.txt#${now}]\nPUT 14.=14:\n+x`)).rejects.toThrow("never displayed in full")
+    await expect(f.patch(`[file.txt#${now}]\nPUT 14.=14:\n+x`)).rejects.toThrow("This edit anchors to lines 14 of file.txt, which moved since you saw or wrote them.")
     await f.patch(`[file.txt#${now}]\nPUT 8.=8:\n+EIGHT\nPUT 17.=17:\n~l18\n+EIGHTEEN`)
     expect((await readFile(f.filePath, "utf8")).split("\n")[7]).toBe("EIGHT")
     expect((await readFile(f.filePath, "utf8")).split("\n")[16]).toBe("EIGHTEEN")

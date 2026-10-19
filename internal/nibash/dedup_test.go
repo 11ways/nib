@@ -98,3 +98,21 @@ func TestDedupeKeepsShortNumberedLinesAsTheyAre(t *testing.T) {
 		t.Fatalf("entries %+v, legend %q", entries[:3], legend)
 	}
 }
+
+func TestDedupeNamesARunOnlyWhereItsEntryCostsLessThanItsLines(t *testing.T) {
+	texts := func(lines ...string) []string {
+		entries, _ := dedupe(lines)
+		var out []string
+		for _, e := range entries {
+			out = append(out, e.Label()+": "+e.Text)
+		}
+		return out
+	}
+	if got := texts("start", ".", ".", ".", "end"); !slices.Equal(got, []string{"1: start", "2: .", "3: .", "4: .", "5: end"}) {
+		t.Fatalf("three short copies: %q", got)
+	}
+	dots := append(append([]string{"start"}, slices.Repeat([]string{"."}, 9)...), "end")
+	if got := texts(dots...); !slices.Equal(got, []string{"1: start", "2-10: @L1 x9", "11: end"}) {
+		t.Fatalf("nine short copies: %q", got)
+	}
+}

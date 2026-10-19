@@ -286,14 +286,31 @@ type Repeat struct {
 	Of, Length     int
 }
 
-// Repeats finds the repetition among plain rows that Compress collapses: back-to-back runs and blocks that recur from earlier; with masked,
-// lines compare with their digits masked. It is the one home of what counts as repeated output.
-func Repeats(lines []PlainLine, masked bool) []Repeat {
-	return RepeatsBy(lines, repeatKeys(lines, masked))
+// Pricing is what a caller prints, in characters: Line for one line on its own, and Collapsed for a repeat as the caller collapses it, the
+// copies it still shows included. Repeats collapses a repeat only where that is shorter than its lines one by one.
+type Pricing struct {
+	Line      func(index int) int
+	Collapsed func(r Repeat) int
+}
+
+// pays says whether r collapsed costs less than the count lines from its start printed one by one.
+func (p Pricing) pays(r Repeat, count int) bool {
+	whole := 0
+	for i := r.Index; i < r.Index+count; i++ {
+		whole += p.Line(i)
+	}
+	return p.Collapsed(r) < whole
+}
+
+// Repeats finds the repetition among plain rows that Compress collapses: back-to-back runs and blocks that recur from earlier, each only
+// where price says its marker costs less than the lines it stands for; with masked, lines compare with their digits masked. It is the one
+// home of what counts as repeated output.
+func Repeats(lines []PlainLine, masked bool, price Pricing) []Repeat {
+	return RepeatsBy(lines, repeatKeys(lines, masked), price)
 }
 
 // RepeatsBy is Repeats with lines compared by keys, one per line; a copy counts as exact only where the texts themselves match.
-func RepeatsBy(lines []PlainLine, keys []string) []Repeat {
+func RepeatsBy(lines []PlainLine, keys []string, price Pricing) []Repeat {
 	same := func(a, b, length int) bool {
 		for offset := 0; offset < length; offset++ {
 			if keys[a+offset] != keys[b+offset] {
@@ -339,8 +356,9 @@ func RepeatsBy(lines []PlainLine, keys []string) []Repeat {
 			if exact {
 				rowCount = period + 1
 			}
-			if copies >= 3 && rowCount < copies*period && (best == nil || copies*period > best.Copies*best.Period) {
-				best = &Repeat{Kind: RepeatRun, Index: index, Period: period, Copies: copies, Exact: exact}
+			candidate := Repeat{Kind: RepeatRun, Index: index, Period: period, Copies: copies, Exact: exact}
+			if copies >= 3 && rowCount < copies*period && (best == nil || copies*period > best.Copies*best.Period) && price.pays(candidate, copies*period) {
+				best = &candidate
 			}
 		}
 		cadenceKnown[index] = true
@@ -377,8 +395,8 @@ func RepeatsBy(lines []PlainLine, keys []string) []Repeat {
 				echoOf, echoLength = earlier, length
 			}
 		}
-		if echoOf >= 0 {
-			steps = append(steps, Repeat{Kind: RepeatEcho, Index: index, Of: echoOf, Length: echoLength})
+		if echo := (Repeat{Kind: RepeatEcho, Index: index, Of: echoOf, Length: echoLength}); echoOf >= 0 && price.pays(echo, echoLength) {
+			steps = append(steps, echo)
 			index += echoLength
 			continue
 		}
@@ -470,7 +488,7 @@ func identicalLines(lines []PlainLine, a, b, length int) bool {
 // Compress collapses repetition among plain rows; with masked, lines compare with their digits masked, similar reports whether anything
 // collapsed had other numbers than what is shown, and echoed whether a recurring block got [#N] markers.
 func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed bool) {
-	steps := Repeats(lines, masked)
+	steps := Repeats(lines, masked, compressPricing(lines))
 	// Ids follow the order the originals appear in; an original shows the most lines any of its echoes covered.
 	type original struct{ id, length int }
 	var ofs []int
@@ -492,7 +510,7 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 	line := func(index int) {
 		l := lines[index]
 		if o := originals[index]; o != nil {
-			l.Text = fmt.Sprintf("[#%d, %d lines] %s", o.id, o.length, l.Text)
+			l.Text = echoTag(o.id, o.length) + l.Text
 		}
 		rows = append(rows, l)
 	}
@@ -504,28 +522,7 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 			for offset := 0; offset < s.Period; offset++ {
 				line(s.Index + offset)
 			}
-			what := "the line above"
-			if s.Period != 1 {
-				what = fmt.Sprintf("the %d lines above", s.Period)
-			}
-			var note string
-			if s.Exact {
-				plural, times := "", "time"
-				if s.Period == 1 {
-					plural = "s"
-				}
-				if s.Copies > 2 {
-					times = "times"
-				}
-				note = fmt.Sprintf("[%s repeat%s %d more %s]", what, plural, s.Copies-1, times)
-			} else {
-				one := "ones"
-				if s.Period == 1 {
-					one = "one"
-				}
-				note = fmt.Sprintf("[%d more like %s; the last %s:]", s.Copies-1, what, one)
-			}
-			rows = append(rows, PlainLine{At: lines[s.Index+s.Period].At, Text: note})
+			rows = append(rows, PlainLine{At: lines[s.Index+s.Period].At, Text: runNote(s)})
 			if !s.Exact {
 				similar = true
 				for offset := 0; offset < s.Period; offset++ {
@@ -542,11 +539,57 @@ func Compress(lines []PlainLine, masked bool) (rows []PlainLine, similar, echoed
 			if !identicalLines(lines, s.Of, s.Index, s.Length) {
 				similar = true
 			}
-			rows = append(rows, PlainLine{At: l.At, Text: fmt.Sprintf("[#%d again, %s lines] %s", o.id, count, l.Text)})
+			rows = append(rows, PlainLine{At: l.At, Text: echoAgain(o.id, count) + l.Text})
 		}
 	}
 	return rows, similar, len(originals) > 0
 }
+
+// compressPricing prices the rows Compress prints, each with its newline; an echo is counted with its original's tag, and ids as one digit.
+func compressPricing(lines []PlainLine) Pricing {
+	line := func(index int) int { return js.Len(lines[index].Text) + 1 }
+	return Pricing{Line: line, Collapsed: func(r Repeat) int {
+		if r.Kind == RepeatEcho {
+			return js.Len(echoTag(1, r.Length)) + js.Len(echoAgain(1, itoa(r.Length))) + line(r.Index)
+		}
+		n := js.Len(runNote(r)) + 1
+		for offset := 0; offset < r.Period; offset++ {
+			n += line(r.Index + offset)
+			if !r.Exact {
+				n += line(r.Index + (r.Copies-1)*r.Period + offset)
+			}
+		}
+		return n
+	}}
+}
+
+// runNote is the row that stands for a run's copies after its first, or before its last when they differ in their digits.
+func runNote(r Repeat) string {
+	what := "the line above"
+	if r.Period != 1 {
+		what = fmt.Sprintf("the %d lines above", r.Period)
+	}
+	if !r.Exact {
+		one := "ones"
+		if r.Period == 1 {
+			one = "one"
+		}
+		return fmt.Sprintf("[%d more like %s; the last %s:]", r.Copies-1, what, one)
+	}
+	plural, times := "", "time"
+	if r.Period == 1 {
+		plural = "s"
+	}
+	if r.Copies > 2 {
+		times = "times"
+	}
+	return fmt.Sprintf("[%s repeat%s %d more %s]", what, plural, r.Copies-1, times)
+}
+
+// echoTag starts the first line of a block that recurs below; echoAgain starts the row that stands for it printed again.
+func echoTag(id, length int) string { return fmt.Sprintf("[#%d, %d lines] ", id, length) }
+
+func echoAgain(id int, count string) string { return fmt.Sprintf("[#%d again, %s lines] ", id, count) }
 
 // selectedLines says whether a line falls inside any of a file's line selections; unlike a read, an open range runs to the end of the file.
 func selectedLines(ctx *Context, file string, selections []selection) (func(int) bool, error) {

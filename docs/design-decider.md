@@ -427,7 +427,9 @@ followed by its digits (`@L8 2026 10 13 09 28 08 751 1 86215 200 39`): numbers w
 timestamp differing, most of a log. That, and an 8-request cap, cost noisy-service its cause: its 76 windows needed 10
 requests, the window with the config reload was among those never judged, and the summary's excerpt never reached it;
 with readable rows and 128 requests the decision model and the summary keep both lines. Lines under 24 characters keep
-their text, since a name saves nothing there.
+their text, since a name saves nothing there. `engine.Repeats` takes each caller's prices (`dedupe` counts an entry's
+label and its legend line, `Compress` its marker rows), so a run or block collapses only where that costs fewer
+characters than its lines one by one: three copies of `.` stay three entries.
 
 Picks enter an excerpt, and the decider's cut, in `novelFirst` order: best first, except that a pick of which fewer than
 a quarter of the kinds of row (`likeness`: digits and dotted names masked) are new waits until every pick with something

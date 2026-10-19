@@ -27,7 +27,7 @@ func TestLinesSeenStayAnchorsAfterACommandRewritesTheFile(t *testing.T) {
 		t.Fatalf("a line the command changed must be refused, got %v", err)
 	}
 	tag = tagOf(t, f.run("sed -i '1i top' a.txt"))
-	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+moved", tag)); err == nil || !strings.Contains(err.Error(), "never displayed") {
+	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+moved", tag)); err == nil || !strings.Contains(err.Error(), "lines 4 of a.txt, which moved since you saw or wrote them") {
 		t.Fatalf("a line the command moved must need a ~ check, got %v", err)
 	}
 	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n~line 3\n+LINE 3", tag)); err != nil {

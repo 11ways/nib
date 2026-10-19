@@ -132,7 +132,8 @@ A line or a block of up to 8 lines repeating back to back prints once, then a co
 the last copy: `[4 more like the line above; the last one:]` or `[the line above repeats 4 more times]`. A block of at
 least 3 lines that comes back later, such as a stack trace, prints once as `[#1, 23 lines] first line` and each later
 copy as one row, `[#1 again, 23 lines] its own first line`; the first time an agent sees these markers, in a plain read
-or in nibash, a closing line explains them. Collapsing only happens where it prints fewer rows, never across a gap
+or in nibash, a closing line explains them. Collapsing only happens where it prints fewer rows and its marker is shorter,
+in characters, than the lines it stands for, so three copies of a short line print as they are; never across a gap
 between selected ranges, and when it hid other numbers the block ends with a note; `collapse: false` shows every line.
 
 #### skim: answers from long files
@@ -912,12 +913,13 @@ line shown, and `path#TAG` reads record it like an edit response.
   KiB in all), so the retry applies too; a longer one, or one with color codes, gets a cut preview and a token that
   applies once it was read whole. After an edit, only lines that kept both number and content stay displayed, plus the
   rows shown in the response. Moved lines are known, not seen, at their new numbers, so a hunk anchored on one needs a
-  `~TEXT` check. A new version made any other way, by a program the agent ran, another agent or a formatter, keeps the
-  same rule against the version before it: lines the change left at their number stay seen, moved ones stay known. A
-  replacement on a moved line is still accepted when the new content carries that line's current text (at least 8
-  characters, unique in the file), a port of oh-my-pi's shifted-anchor rescue. A file with no snapshot (for example
-  after a restart) is not restricted. Every line of a file that `write` or `*** Add File:` wrote whole counts as seen,
-  since the agent wrote it; the response's row map only helps it find lines.
+  `~TEXT` check; without one, the refusal names them as lines that moved since the agent saw or wrote them, and an
+  unchanged resend applies. A new version made any other way, by a program the agent ran, another agent or a formatter,
+  keeps the same rule against the version before it: lines the change left at their number stay seen, moved ones stay
+  known. A replacement on a moved line is still accepted when the new content carries that line's current text (at
+  least 8 characters, unique in the file), a port of oh-my-pi's shifted-anchor rescue. A file with no snapshot (for
+  example after a restart) is not restricted. Every line of a file that `write` or `*** Add File:` wrote whole counts as
+  seen, since the agent wrote it; the response's row map only helps it find lines.
 - **Across restarts.** Where nib can tell when an agent's context drops (nib's hook for Claude Code, OpenCode's
   database), what each agent saw is saved in `~/.local/state/nib/seen/` (`$XDG_STATE_HOME`): one private file per
   Claude Code session, subagent or OpenCode session, holding each file's newest version as a hash of its text, never the

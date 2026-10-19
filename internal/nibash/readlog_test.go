@@ -97,6 +97,15 @@ func TestAShortLogIsJustItsLines(t *testing.T) {
 	}
 }
 
+func TestASkimCollapsesARunOnlyWhereItsMarkerIsShorter(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.log": numbered(1, 21) + "ok\nok\nok\n" + strings.Repeat("waiting for the build to finish\n", 3)})
+	f.shell.Deciding(pickText("ok"))
+	got := f.readLog("did it finish", "a.log")
+	if !strings.HasSuffix(got, "\nline 21\nok\nok\nok\nwaiting for the build to finish\n[the line above repeats 2 more times]") {
+		t.Fatalf("got:\n%s", got)
+	}
+}
+
 func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	f := newFixture(t, map[string]string{"run.log": numbered(1, 10)})
 	path := filepath.Join(f.directory, "run.log")
