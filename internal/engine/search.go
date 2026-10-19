@@ -98,6 +98,30 @@ func gitEnvironment(repository string) []string {
 	return env
 }
 
+// gitIn is git run in repository as searches run it: a repository's config can name a command for core.fsmonitor, which git would run
+// there, and nib must never run code it finds, nor let the caller's GIT_ variables point git elsewhere.
+func gitIn(ctx context.Context, repository string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false", "-C", repository}, args...)...)
+	cmd.Env = gitEnvironment(repository)
+	return cmd
+}
+
+// Ignored reports whether the ignore rules of the repository holding directory, a canonical path, cover it; false outside git, for a
+// repository's own folder, or without git.
+func Ignored(directory string) bool {
+	repository := repositoryOf(directory)
+	relative, ok := inside(repository, directory)
+	if repository == "" || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// check-ignore takes paths, not pathspecs, and refuses the literal magic searches ask for.
+	cmd := gitIn(ctx, repository, "check-ignore", "-q", "--", filepath.ToSlash(relative)+"/")
+	cmd.Env = append(cmd.Env, "GIT_LITERAL_PATHSPECS=0")
+	return cmd.Run() == nil
+}
+
 // nestedRepositories are the repositories nested in repository (under within, when given) that its ignore rules cover, from git's own list of
 // ignored folders; the folders right inside an ignored folder are looked at too, unless it holds more than containerEntries entries.
 // A worktree of repository is left out, since it repeats the same files.
@@ -105,10 +129,7 @@ func nestedRepositories(ctx context.Context, repository, within string) ([]strin
 	if within == "" {
 		within = "."
 	}
-	// A repository's config can name a command for core.fsmonitor, which git would run here; a search must never run code it finds.
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "-C", repository, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", within)
-	cmd.Env = gitEnvironment(repository)
-	output, err := cmd.Output()
+	output, err := gitIn(ctx, repository, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", within).Output()
 	if err != nil {
 		// Without git, ripgrep's own walk is all there is.
 		if ctx.Err() != nil {

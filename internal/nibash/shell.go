@@ -343,12 +343,16 @@ func (c *call) wrote(path string, existed bool) {
 }
 
 // observePaths counts the absolute paths a command line spells toward the directories nib names for the agent: a path given to a real
-// program is never printed by nib, yet costs the agent the same characters each time it is typed. Paths the sandbox refuses are left out.
+// program is never printed by nib, yet costs the agent the same characters each time it is typed. Paths the sandbox refuses are left out,
+// and so are cd's, which the cd itself counts once it knows where it goes.
 func observePaths(file *syntax.File, view namer, refused func(string) bool) {
 	if view == nil {
 		return
 	}
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 && call.Args[0].Lit() == "cd" {
+			return false
+		}
 		if word, ok := node.(*syntax.Word); ok {
 			for _, path := range wordPaths(word) {
 				if refused == nil || !refused(path) {

@@ -112,7 +112,7 @@ func TestADefinitionIsTheDefinersAndLaterSubagentsOnly(t *testing.T) {
 	}
 }
 
-func TestAVeryLongPathACommandSpellsIsNamedAtOnce(t *testing.T) {
+func TestALongPathIsNamedOnItsSecondUseOrAtACd(t *testing.T) {
 	f := newFixture(t, nil)
 	skill := filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")
 	if err := os.MkdirAll(skill, 0o755); err != nil {
@@ -124,13 +124,31 @@ func TestAVeryLongPathACommandSpellsIsNamedAtOnce(t *testing.T) {
 	defined := names.NewDefined()
 	defined.Automatic("", f.directory)
 	f.names = (&names.Table{Base: f.directory}).For(defined, "s")
-	// A real program's argument, which nib never prints, counts all the same.
+	// A real program's argument, which nib never prints, counts all the same, once a later call uses it again.
+	f.run("/usr/bin/wc -l " + filepath.Join(skill, "api.d.ts"))
+	if notes := defined.Announced("s"); len(notes) != 0 {
+		t.Fatalf("named on its first use: %v", notes)
+	}
 	f.run("/usr/bin/wc -l " + filepath.Join(skill, "api.d.ts"))
 	if notes := defined.Announced("s"); len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bptypes = ") {
 		t.Fatalf("notes %v", notes)
 	}
 	if got := f.run("cat ~bptypes/api.d.ts"); !strings.Contains(got, "1:export {}") {
 		t.Fatalf("got %s", got)
+	}
+	// A directory the agent changes into is named at once, the cd given relative to where the shell is.
+	other := filepath.Join(filepath.Dir(skill), "other-types")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fresh := names.NewDefined()
+	fresh.Automatic("", f.directory)
+	f.names = (&names.Table{Base: f.directory}).For(fresh, "s")
+	top := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(skill))))))
+	relative, _ := filepath.Rel(top, other)
+	f.run("cd " + top + " && cd " + relative + " && pwd >/dev/null")
+	if notes := fresh.Announced("s"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/other-types, too long to print again") {
+		t.Fatalf("notes %v", notes)
 	}
 }
 
@@ -145,12 +163,18 @@ func TestOnlyCleanPathsACommandSpellsCountTowardNames(t *testing.T) {
 	defined.Automatic("", f.directory)
 	f.names = (&names.Table{Base: f.directory}).For(defined, "s")
 	// A path after an expansion is a fragment of another path, and one that does not exist names nothing.
-	f.run("d=x; /usr/bin/true \"$d" + filepath.Join(skill, "api.d.ts") + "\" " + filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "missing", "x.txt"))
-	if notes := defined.Announced("s"); len(notes) != 0 {
-		t.Fatalf("notes %v", notes)
+	// Two calls, so a path that counted would be named in the second.
+	for range 2 {
+		f.run("d=x; /usr/bin/true \"$d" + filepath.Join(skill, "api.d.ts") + "\" " + filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "missing", "x.txt"))
+		if notes := defined.Announced("s"); len(notes) != 0 {
+			t.Fatalf("notes %v", notes)
+		}
 	}
 	// A path inside code given to another program counts up to where the path ends, and never names the file.
-	f.run("/usr/bin/true -c \"f='" + filepath.Join(skill, "api.d.ts") + "'\nimport json\nprint(sum(delta)/len(y))\"")
+	code := "/usr/bin/true -c \"f='" + filepath.Join(skill, "api.d.ts") + "'\nimport json\nprint(sum(delta)/len(y))\""
+	f.run(code)
+	defined.Announced("s")
+	f.run(code)
 	notes := defined.Announced("s")
 	if len(notes) != 1 || !strings.HasPrefix(notes[0], "[nib named ~bptypes = ") {
 		t.Fatalf("notes %v", notes)

@@ -260,6 +260,7 @@ func New(options Options) *Server {
 	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, last: map[string]string{}, defined: names.NewDefined()}
 	if options.NamesFile != "" && options.Names != nil {
 		s.defined.Automatic(options.NamesFile, options.Names.Base)
+		s.defined.Ignored = engine.Ignored
 	}
 	instructions := Instructions(options)
 	capabilities := &mcp.ServerCapabilities{}

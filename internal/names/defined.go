@@ -23,6 +23,9 @@ type Defined struct {
 	// Now stamps definitions; it must be comparable with other processes' clocks, as a spawn moment comes from the harness. Set it before
 	// first use.
 	Now func() time.Time
+	// Ignored reports whether git's ignore rules cover a directory, which is then never named the first time it is shown; nil covers none.
+	// Set it before first use.
+	Ignored func(directory string) bool
 	// automatic is set by Automatic: nib names the directories shown paths keep running through, and keeps names in file for base. run tells
 	// this server apart from others in the file, and touched are the kept names it counted a use of.
 	automatic  bool
@@ -31,16 +34,21 @@ type Defined struct {
 	touched    map[string]bool
 	// uses counts, per agent, the paths printed under each name, the server's own included.
 	uses map[string]map[string]int
+	// ignoredAt keeps what Ignored said of each directory asked.
+	ignoredAt map[string]bool
 }
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
-// directory that automatic naming weighs, auto the names it made, and made those not yet told, which take effect once told. calls counts the
-// calls that showed the agent paths, full the call of the last note told in full, and observed that the current call showed one. untold are
-// the names the agent got before its context was last dropped, and retell those of them a path in the current call ran through.
+// directory that automatic naming weighs, since the call (plus one) each was first shown in, worked the directories the agent changed into
+// or wrote a file in, auto the names it made, and made those not yet told, which take effect once told. calls counts the calls that showed
+// the agent paths, full the call of the last note told in full, and observed that the current call showed one. untold are the names the
+// agent got before its context was last dropped, and retell those of them a path in the current call ran through.
 type defined struct {
 	list     []definition
 	own      int
 	counts   map[string]int
+	since    map[string]int
+	worked   map[string]bool
 	auto     int
 	made     []made
 	calls    int
@@ -216,6 +224,18 @@ func (v *View) Observe(path string) {
 	}
 	if canonical, err := filepath.EvalSymlinks(directory); err == nil {
 		v.defined.observe(v.agent, v.table(), canonical)
+	}
+}
+
+// Worked notes that the agent works in directory, an absolute path it changed into or wrote a file in: a long directory holding it is then
+// named the first time it is shown, as the agent will be back.
+func (v *View) Worked(directory string) {
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return
+	}
+	if info, err := os.Stat(canonical); err == nil && info.IsDir() {
+		v.defined.work(v.agent, canonical)
 	}
 }
 

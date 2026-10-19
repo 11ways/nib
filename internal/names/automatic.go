@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,7 +25,8 @@ const (
 	autoUses = 3
 	// autoChars is the shortest prefix, as nib would print it, worth a name.
 	autoChars = 30
-	// autoAtOnce is a prefix too long to print even twice: such a directory is named the first time it is shown.
+	// autoAtOnce is a prefix too long to print twice: such a directory is named in the second call that shows it, or in the first when the
+	// agent works in it or an earlier session named it, unless git ignores it. A build copy shown once never costs a note.
 	autoAtOnce = 100
 	// autoLimit bounds the names nib makes for one agent.
 	autoLimit = 8
@@ -201,7 +203,7 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		return
 	}
 	if names.counts == nil {
-		names.counts = map[string]int{}
+		names.counts, names.since = map[string]int{}, map[string]int{}
 	}
 	// Names made in this call but not yet told count as taken and as named, so a path below one adds nothing until it takes effect.
 	if len(names.made) > 0 {
@@ -223,7 +225,14 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		names.counts[directory]++
 		count := names.counts[directory]
 		saved := count * (len(prefix) - len(stem(filepath.Base(directory))) - 3)
-		worth := len(prefix) >= autoAtOnce || (count >= autoUses && saved >= len(note("x", prefix, count)))
+		worth := count >= autoUses && saved >= len(note("x", prefix, count))
+		if len(prefix) >= autoAtOnce {
+			if names.since[directory] == 0 {
+				names.since[directory] = names.calls + 1
+			}
+			again := names.since[directory] != names.calls+1
+			worth = worth || again || d.firstSightLocked(names, directory)
+		}
 		if worth && saved > saving {
 			best, saving = directory, saved
 		}
@@ -242,6 +251,46 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 	names.made = append(names.made, made{entry, shown(best), names.counts[best]})
 	names.auto++
 	d.learnLocked(entry)
+}
+
+// work notes that agent works in directory, a canonical directory.
+func (d *Defined) work(agent, directory string) {
+	if d == nil || !d.automatic {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[agent]
+	if names == nil {
+		names = &defined{}
+		d.agents[agent] = names
+	}
+	if names.worked == nil {
+		names.worked = map[string]bool{}
+	}
+	names.worked[directory] = true
+}
+
+// firstSightLocked reports whether directory is worth a name the first time it is shown: the agent works in it or below it, or an earlier
+// server's agents got a name for it, and git does not ignore it.
+func (d *Defined) firstSightLocked(names *defined, directory string) bool {
+	worked := slices.ContainsFunc(slices.Collect(maps.Keys(names.worked)), func(w string) bool { return within(directory, w) })
+	earlier := d.file != "" && slices.ContainsFunc(readLearned(d.file, d.base), func(e learned) bool { return e.Directory == directory && e.Run != d.run })
+	if !worked && !earlier {
+		return false
+	}
+	if d.Ignored == nil {
+		return true
+	}
+	ignored, asked := d.ignoredAt[directory]
+	if !asked {
+		ignored = d.Ignored(directory)
+		if d.ignoredAt == nil {
+			d.ignoredAt = map[string]bool{}
+		}
+		d.ignoredAt[directory] = ignored
+	}
+	return !ignored
 }
 
 // note announces in full a name nib made for the directory printed as prefix, which count shown paths ran through.

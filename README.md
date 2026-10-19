@@ -873,9 +873,13 @@ expansion such as `$HOME/x` does not count, and a typed path counts from its dee
 toward each directory it runs through, below the deepest named directory holding it (and below the server's directory,
 for a path inside it). Among the directories whose prefix, as nib would print it, is 30 characters or more, nib names
 the one that saves the most once a name is worth it: when the characters the name would have saved over the paths so far
-(at least 3 of them) pay for the note that announces it, as after 6 paths for a 41-character prefix, or at once for a
-prefix of 100 characters or more, too long to print even twice (a skill's files under Claude Code's
-`/tmp/claude-1000/bundled-skills/2.1.302/<hash>/...`, say). nib makes the name from the first letters of the two folders
+(at least 3 of them) pay for the note that announces it, as after 6 paths for a 41-character prefix, or for a prefix of
+100 characters or more, too long to print even twice (a skill's files under Claude Code's
+`/tmp/claude-1000/bundled-skills/2.1.302/<hash>/...`, say), in the second call that shows or spells it, so a build copy
+seen once costs no note. Such a prefix is named the first time instead when the agent works in the directory (a nibash
+`cd` into it or below it, or an edit or write of a file there, a move's or copy's destination included) or an earlier
+server of the same directory gave agents a name for it, unless git's ignore rules cover it (build output); without git
+nothing counts as ignored. nib makes the name from the first letters of the two folders
 above it that say something, outer first, and its own folder, or that folder's last word when its name is over 10
 characters: `~bewidgets` for `.../java/be/elevenways/widgets`, `~bptypes` for
 `bundled-skills/2.1.302/<hash>/plugin-authoring/types`, `~cpnib` for `claude/projects/-home-skerit-projects-nib`, as a

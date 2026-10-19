@@ -85,14 +85,20 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 		return renamed, nil
 	case "cd":
 		c := callOf(ctx)
-		if c == nil || !c.tools.Sandbox || len(args) < 2 || args[1] == "-" {
+		if c == nil || len(args) < 2 || args[1] == "-" {
 			return args, nil
 		}
 		hc := interp.HandlerCtx(ctx)
-		target := args[len(args)-1]
-		if refused, err := c.tools.Refused(absolute(hc.Dir, target)); err == nil && refused != "" {
-			fmt.Fprintf(hc.Stderr, "cd: %s\n", refused)
-			return []string{"false"}, nil
+		target := absolute(hc.Dir, args[len(args)-1])
+		if c.tools.Sandbox {
+			if refused, err := c.tools.Refused(target); err == nil && refused != "" {
+				fmt.Fprintf(hc.Stderr, "cd: %s\n", refused)
+				return []string{"false"}, nil
+			}
+		}
+		if view, ok := c.tools.Names.(namer); ok {
+			view.Worked(target)
+			view.Observe(target)
 		}
 	}
 	return args, nil

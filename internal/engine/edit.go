@@ -1787,7 +1787,11 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, items []*stage
 			}
 		}
 	}
-	// Every response is rendered before anything is written, so one that cannot be rendered fails the call while nothing has changed yet.
+	// Every response is rendered before anything is written, so one that cannot be rendered fails the call while nothing has changed yet;
+	// the folders written into are known first, so their paths print as an agent working there has them.
+	for _, item := range changes {
+		ctx.worked(item.handle)
+	}
 	responses := make([]response, len(items))
 	for i, item := range items {
 		responses[i] = respond(ctx, store, item, shownByPreview)

@@ -78,6 +78,20 @@ type Names interface {
 	Display(canonical string) (string, bool)
 }
 
+// worker is Names that learns where the agent works: the folders of the files it writes.
+type worker interface {
+	Worked(directory string)
+}
+
+// worked tells the names the folders h and its move's or copy's destination write into.
+func (ctx *Context) worked(h *handle) {
+	if w, ok := ctx.Names.(worker); ok {
+		for ; h != nil; h = h.destination {
+			w.Worked(filepath.Dir(h.target.canonical))
+		}
+	}
+}
+
 // Image is an attached image.
 type Image struct {
 	Data     []byte

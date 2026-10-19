@@ -121,7 +121,7 @@ func sessions(t *testing.T, count int, file, root string, define func(*Defined) 
 	}
 }
 
-func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
+func TestAPrefixTooLongToRepeatIsNamedInTheSecondCallThatShowsIt(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	skill := filepath.Join(root, "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")
 	if err := os.MkdirAll(skill, 0o755); err != nil {
@@ -130,14 +130,63 @@ func TestAPrefixTooLongToRepeatIsNamedTheFirstTimeItIsShown(t *testing.T) {
 	defined := NewDefined()
 	defined.Automatic("", "/elsewhere")
 	view := (&Table{Base: "/elsewhere"}).For(defined, "main")
+	// A build copy shown once costs no note.
 	if shown, ok := view.Display(filepath.Join(skill, "claude-code.d.ts")); ok {
 		t.Fatalf("got %q", shown)
 	}
-	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, too long to print again; ~bptypes/ works") {
+	if notes := defined.Announced("main"); len(notes) != 0 {
+		t.Fatalf("named at first sight: %v", notes)
+	}
+	if shown, ok := view.Display(filepath.Join(skill, "index.d.ts")); ok {
+		t.Fatalf("got %q", shown)
+	}
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "/plugin-authoring/types, which 2 of the paths shown to you ran through; ~bptypes/ works") {
 		t.Fatalf("notes %v", notes)
 	}
 	if shown, _ := view.Display(filepath.Join(skill, "claude-code.d.ts")); shown != "~bptypes/claude-code.d.ts" {
 		t.Fatalf("got %q", shown)
+	}
+}
+
+func TestALongDirectoryTheAgentWorksInIsNamedTheFirstTimeItIsShownUnlessGitIgnoresIt(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	long := func(leaf string) string {
+		directory := filepath.Join(root, "zenit", "build", "zenit-dev", "workspace-pins-"+leaf, "zenit", "src", "common", "java", "be", "elevenways", "zenit", "common", "orm", "watch")
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return directory
+	}
+	worked, ignored, learnedDir := long("worked"), long("ignored"), long("learned")
+	file := filepath.Join(t.TempDir(), "learned.json")
+	data, _ := json.Marshal(learnedNames{root, []learned{{Entry{"lwatch", learnedDir}, 1, "earlier", time.Now().Unix()}}})
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defined := NewDefined()
+	defined.Automatic(file, root)
+	defined.Ignored = func(directory string) bool { return strings.Contains(directory, "pins-ignored/") }
+	view := (&Table{Base: root}).For(defined, "main")
+	view.Worked(filepath.Join(worked, "sub"))
+	view.Worked(worked)
+	view.Worked(ignored)
+	view.Display(filepath.Join(worked, "A.java"))
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.Contains(notes[0], "workspace-pins-worked/zenit/src/common/java/be/elevenways/zenit/common/orm/watch, too long to print again") {
+		t.Fatalf("a directory worked in: %v", notes)
+	}
+	view.Display(filepath.Join(ignored, "A.java"))
+	if notes := defined.Announced("main"); len(notes) != 0 {
+		t.Fatalf("an ignored directory was named at first sight: %v", notes)
+	}
+	view.Display(filepath.Join(learnedDir, "A.java"))
+	if notes := defined.Announced("main"); len(notes) != 1 || !strings.HasPrefix(notes[0], "[~lwatch = ") {
+		t.Fatalf("a directory an earlier session named: %v", notes)
+	}
+	// Another agent did not work there.
+	other := (&Table{Base: root}).For(defined, "other")
+	other.Display(filepath.Join(worked, "B.java"))
+	if notes := defined.Announced("other"); len(notes) != 0 {
+		t.Fatalf("another agent: %v", notes)
 	}
 }
 

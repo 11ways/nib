@@ -24,6 +24,8 @@ type namer interface {
 	Define(name, directory string) error
 	// Observe counts an absolute path the command used toward the directories nib names for the agent.
 	Observe(path string)
+	// Worked notes a directory the agent changed into, so a long directory holding it is named at once.
+	Worked(directory string)
 }
 
 // homePrefix starts the "HOME name" lookups tilde expansion makes for ~name.
