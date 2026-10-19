@@ -1057,8 +1057,8 @@ line shown, and `path#TAG` reads record it like an edit response.
   stay refused for replacement, check or not.
 - **Held markers.** Where nib can tell when an agent's context is dropped (below), a run of 3 or more rows that agent
   was shown whole before, in this version or one it still holds, and that have not changed since, prints shorter. A run
-  of up to 30 lines in `read` and in `grep`'s context rows prints as row-map rows under the lines' current numbers, each
-  line's indentation and start: `41~    return row`. A longer run, and any run in nibash's own commands, prints as one
+  of up to 30 lines in `read`, in `grep`'s context rows and in nibash's own file rows prints as row-map rows under the
+  lines' current numbers, each line's indentation and start: `41~    return row`. A longer run prints as one
   row: `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit
   moved them. A grep match row always prints, since it is what the search is for. The lines a marker or a row-map row
   stands for stay seen at their current numbers, so an edit anchors on them with no read. The first marker an agent gets

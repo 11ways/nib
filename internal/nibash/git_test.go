@@ -149,7 +149,7 @@ func TestGitDiffRowsTheAgentHoldsPrintAsOneMarkerButAddedOnesAlways(t *testing.T
 	f.write("a.txt", "one\ntwo\nthree\nFOUR\n")
 	f.run("cat a.txt")
 	out := f.run("git diff")
-	if !strings.Contains(out, "\n[lines 1-3 unchanged since you saw them]\n-|four\n+4:FOUR") {
+	if !strings.Contains(out, "\n1~one\n2~two\n3~three\n-|four\n+4:FOUR") {
 		t.Errorf("diff with held rows:\n%s", out)
 	}
 }

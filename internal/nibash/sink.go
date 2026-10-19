@@ -259,7 +259,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		}
 	}
 	texts = append(texts, footer...)
-	if slices.ContainsFunc(rows, func(r row) bool { return r.covers != nil }) {
+	if slices.ContainsFunc(rows, func(r row) bool { return r.covers != nil && !r.mapped }) {
 		texts = append(texts, e.HeldNote(ctx)...)
 	}
 	if echoed {
@@ -478,6 +478,8 @@ type row struct {
 	// covers are the lines a held marker stands for; a match row (grep's match, a line a diff adds) is what the command is for, so it always
 	// prints.
 	covers []int
+	// mapped is a held line printed as its N~ row rather than inside a marker, which needs no lesson.
+	mapped bool
 	// listed is the path a plain row's line names, which the terminal may print under its folder.
 	listed *listedLine
 }
@@ -555,7 +557,8 @@ func plainRowAt(text string, label, first, last int, listed *listedLine) row {
 	return row{text: text, header: -1, plain: true, capped: capped, listed: listed, first: first, last: last}
 }
 
-// heldRows puts each run of anchored rows the agent already holds as one held marker that stands for their log lines.
+// heldRows puts each run of anchored rows the agent already holds as N~ rows under their current numbers, or, past engine's limit for
+// those, as one held marker that stands for their log lines.
 func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
 	done := map[*engine.Source]bool{}
 	for _, r := range rows {
@@ -570,7 +573,16 @@ func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
 			}
 			return r.line
 		}, func(run []row, h engine.HeldRun) []row {
-			return []row{{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}}
+			if !h.Mapped() {
+				return []row{{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}}
+			}
+			mapped := make([]row, len(run))
+			for i, r := range run {
+				line := h.First + i
+				text, _ := lineOf(e, ctx, source, line)
+				mapped[i] = row{text: engine.MapRow(line, text), header: r.header, source: source, covers: []int{line}, mapped: true, first: r.first, last: r.last}
+			}
+			return mapped
 		})
 	}
 	return rows

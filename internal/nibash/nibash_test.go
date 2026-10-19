@@ -471,7 +471,7 @@ func parse(command string) (*syntax.File, error) {
 	return syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 }
 
-func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
+func TestRowsTheSessionHoldsPrintAsMapRowsOrOneMarkerAndStayAnchors(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers + "six\nseven\n"})
 	f.markers = true
 	first := f.run("cat a.txt")
@@ -480,12 +480,13 @@ func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
 		t.Fatalf("the first view prints the rows: %s", first)
 	}
 	again := f.run("sed -n 1,7p a.txt")
-	expect(t, again, fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]\n%s", tag, heldLessonText(t, again)))
-	if later := f.run("head -n 7 a.txt"); later != fmt.Sprintf("[a.txt#%s]\n[lines 1-7 unchanged since you saw them]", tag) {
-		t.Fatalf("the lesson comes once: %s", later)
+	short := "1~one\n2~two needle\n3~three\n4~four needle\n5~five\n6~six\n7~seven"
+	expect(t, again, fmt.Sprintf("[a.txt#%s]\n%s", tag, short))
+	if later := f.run("head -n 7 a.txt"); later != fmt.Sprintf("[a.txt#%s]\n%s", tag, short) {
+		t.Fatalf("a short held run prints as N~ rows under current numbers: %s", later)
 	}
 	// A grep match row is what the command is for, so it prints however well the session knows it.
-	if out := f.run("grep -n -A3 two a.txt"); !strings.Contains(out, "*2:two needle\n[lines 3-5 unchanged since you saw them]") {
+	if out := f.run("grep -n -A3 two a.txt"); !strings.Contains(out, "*2:two needle\n3~three\n4~four needle\n5~five") {
 		t.Fatalf("grep: %s", out)
 	}
 	// The lines a marker stands for stay seen, so an edit anchors on them with no read.
@@ -495,6 +496,13 @@ func TestRowsTheSessionHoldsPrintAsOneMarkerThatKeepsThemAnchors(t *testing.T) {
 	f.markers = false
 	if out := f.run("sed -n 1,3p a.txt"); !strings.Contains(out, "1:one\n2:two needle\n3:three") {
 		t.Fatalf("without markers the rows print: %s", out)
+	}
+	// A run longer than engine's limit prints as one marker, with the lesson the first time.
+	long := newFixture(t, map[string]string{"b.txt": strings.Repeat("line\n", 40)})
+	long.markers = true
+	long.run("cat b.txt")
+	if out := long.run("cat b.txt"); !strings.Contains(out, "\n[lines 1-40 unchanged since you saw them]\n") || !strings.HasSuffix(out, heldLessonText(t, out)) {
+		t.Fatalf("a long held run: %s", out)
 	}
 }
 
