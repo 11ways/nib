@@ -674,21 +674,26 @@ func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string
 }
 
 // swallowed warns about a replaced range one line too long: its first or last old line, long enough to judge, lives on in no new row of the
-// patch while the range's other lines do, so the range likely took in a line it never meant to change. Each warning carries the hunk that
-// puts the line back.
+// patch while the range's other lines do, so the range likely took in a line it never meant to change. A range that gains rows as well, which
+// an insert next to the meant line does, warns only when the kept lines moved to the edge the lost line left: an edge line rewritten in place
+// keeps them where they were. Each warning carries the hunk that puts the line back.
 func swallowed(source *text, edits []snapshots.LineEdit, result applied) []string {
 	var rows []string
 	for _, edit := range edits {
 		rows = append(rows, edit.Content...)
 	}
+	resembles := func(row, line string) bool {
+		return js.Trim(row) == js.Trim(line) || alike(row, line) >= alikeThreshold
+	}
 	resembled := func(line string) bool {
-		return slices.ContainsFunc(rows, func(row string) bool { return js.Trim(row) == js.Trim(line) || alike(row, line) >= alikeThreshold })
+		return slices.ContainsFunc(rows, func(row string) bool { return resembles(row, line) })
 	}
 	var warnings []string
 	for index, edit := range edits {
-		if edit.Operation != snapshots.Replace || len(edit.Content) == 0 || edit.Quoted || edit.Opaque || edit.End-edit.Start+1 <= len(edit.Content) {
+		if edit.Operation != snapshots.Replace || len(edit.Content) == 0 || edit.Quoted || edit.Opaque {
 			continue
 		}
+		grows := len(edit.Content) >= edit.End-edit.Start+1
 		var old []string
 		for line := edit.Start; line <= edit.End; line++ {
 			old = append(old, lineContent(source.lines[line-1]))
@@ -718,9 +723,9 @@ func swallowed(source *text, edits []snapshots.LineEdit, result applied) []strin
 		}
 		last := len(old) - 1
 		switch {
-		case lost(last) && live(old[:last]):
+		case lost(last) && live(old[:last]) && (!grows || resembles(edit.Content[len(edit.Content)-1], old[last-1])):
 			warnings = append(warnings, fmt.Sprintf("The edit of lines %d-%d dropped line %d, %s: no new row resembles it, while they keep the range's other lines. If the range was meant to end at line %d, this hunk, with the new tag, puts it back:\nPUT >%d:\n+%s", edit.Start, edit.End, edit.End, short(old[last]), edit.End-1, at+length, old[last]))
-		case lost(0) && live(old[1:]):
+		case lost(0) && live(old[1:]) && (!grows || resembles(edit.Content[0], old[1])):
 			warnings = append(warnings, fmt.Sprintf("The edit of lines %d-%d dropped line %d, %s: no new row resembles it, while they keep the range's other lines. If the range was meant to start at line %d, this hunk, with the new tag, puts it back:\nPUT <%d:\n+%s", edit.Start, edit.End, edit.Start, short(old[0]), edit.Start+1, at+1, old[0]))
 		}
 	}

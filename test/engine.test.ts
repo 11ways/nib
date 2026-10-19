@@ -2584,11 +2584,25 @@ describe("ranges one line off", () => {
     expect(early.text).toEndWith(`Warnings:\nThe edit of lines 2-4 dropped line 2, "const row = toRow(record)": no new row resembles it, while they keep the range's other lines. If the range was meant to start at line 3, this hunk, with the new tag, puts it back:\nPUT <2:\n+  const row = toRow(record)`)
   })
 
+  test("a range that starts one line early warns even when it adds as many rows as it replaces, as in a patch with another hunk above it", async () => {
+    const struct = ["// one", "// two", "type defined struct {", "\tworked   map[string]bool", "\tauto     int", "\tmade     []made", "\tcalls    int", "}"].join("\n") + "\n"
+    const f = await fixture(struct)
+    const r = await f.read()
+    // Meant 6, but 5.=6 also takes auto, while the comment hunk above shifts every later line down by one.
+    const result = await f.patch(`[file.txt#${r.tag}]\nPUT 1.=2:\n+// one\n+// two\n+// three\nPUT 5.=6:\n+\tmade      []made\n+\tpreviewed map[string]bool`)
+    const fix = "PUT <6:\n+\tauto     int"
+    expect(result.text).toEndWith(`Warnings:\nThe edit of lines 5-6 dropped line 5, "auto     int": no new row resembles it, while they keep the range's other lines. If the range was meant to start at line 6, this hunk, with the new tag, puts it back:\n${fix}`)
+    await f.patch(`[file.txt#${result.tag}]\n${fix}`)
+    expect(await readFile(f.filePath, "utf8")).toBe(struct.replace("// two\n", "// two\n// three\n").replace("\tmade     []made\n", "\tmade      []made\n\tpreviewed map[string]bool\n"))
+  })
+
   test("a rewrite of a whole range, a deletion, or a line moved to another hunk gets no dropped-line warning", async () => {
     const quiet = [
       "PUT 2.=4:\n+  db.save(toRow(record))",
       "CUT 2.=4",
       "PUT 2.=4:\n+  const row = toRow(record, now())\n+  validate(row, schemas)\nPUT >5:\n+  store.insert(row)",
+      // A first line rewritten into one unlike it, the line kept below it in place.
+      "PUT 3.=4:\n+  checkAll(row, schema)\n+  store.insert(row)",
     ]
     for (const body of quiet) {
       const f = await fixture(code)
