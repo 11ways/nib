@@ -53,6 +53,7 @@ var (
 		{regexp.MustCompile(`^\d+:`), "LINE:TEXT rows are read output; body rows are + followed by the new text"},
 		{regexp.MustCompile(`^\d+~`), "N~TEXT rows are row-map output; anchor with PUT or CUT, and check a line with a ~TEXT row under that line"},
 		{regexp.MustCompile(`^~`), "~ check rows go right after a PUT or CUT line, before its + rows"},
+		{regexp.MustCompile(`^(PUT|CUT) [<>]?[1-9][0-9]*(\.=[1-9][0-9]*)?\*?:? ?~`), "a ~TEXT check goes on its own row right under the PUT or CUT line, which ends at its colon (a CUT at its number)"},
 		{regexp.MustCompile(`^SUB [1-9][0-9]*:\s*$`), "SUB N: is followed on the same line by the exact old text"},
 		{regexp.MustCompile(`^PUT ([1-9][0-9]*)(-|\.\.)([1-9][0-9]*):$`), "ranges are written N.=M"},
 		{regexp.MustCompile(`^PUT ([1-9][0-9]*(\.=[1-9][0-9]*)?|[<>][1-9][0-9]*|>?[1-9][0-9]*\*|>\$):\s*\S`), "a PUT line ends at its colon, with nothing after it, not even the old text; the new lines go on + rows below it"},

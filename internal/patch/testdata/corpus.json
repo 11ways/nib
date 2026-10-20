@@ -446,6 +446,14 @@
   "error": "Patch line 2: N~TEXT rows are row-map output; anchor with PUT or CUT, and check a line with a ~TEXT row under that line; got \"12~old\""
  },
  {
+  "input": "[a.ts#ABCD]\nPUT 117~// stop ends\n+// stop halts",
+  "error": "Patch line 2: a ~TEXT check goes on its own row right under the PUT or CUT line, which ends at its colon (a CUT at its number); got \"PUT 117~// stop ends\""
+ },
+ {
+  "input": "[a.ts#ABCD]\nPUT 3.=4: ~old\n+x\n[b.ts#ABCD]\nCUT 2 ~gone",
+  "error": "Patch line 2: a ~TEXT check goes on its own row right under the PUT or CUT line, which ends at its colon (a CUT at its number); got \"PUT 3.=4: ~old\"\nPatch line 5: a ~TEXT check goes on its own row right under the PUT or CUT line, which ends at its colon (a CUT at its number); got \"CUT 2 ~gone\""
+ },
+ {
   "input": "[a.ts]\nPUT 1.=1:\n+x",
   "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not PUT; copy [PATH#TAG] from your latest read to edit elsewhere; got \"PUT 1.=1:\""
  },
