@@ -326,8 +326,10 @@ its limit (`before` and `after` 20, `maxLineLength` 2000 for grep and 2 MiB for 
 instead of refused, `paths` may be one string, `read` also takes another read tool's `filePath`, `file_path` or `path`
 with `offset` (the first line) and `limit`, and `grep` takes a single `path`. JSON mistakes that small models make are
 read as meant: a `paths` or `glob` string holding a JSON list (`"[\"a.ts\"]"`) is that list, also with the end of the
-model's tool-call markup after it (`["a.ts"]>`, which is dropped), and an `edit` input sent as one line with escaped
-line breaks (`\n`) is decoded, since one line can never be a patch. A note at the top of the response, also of a call
+model's tool-call markup after it (`["a.ts"]>`, which is dropped), a `glob` string of globs separated by commas outside
+braces and brackets (`"*.ts, *.md"`, which as one glob would only match names holding a comma) is the list it spells,
+and an `edit` input sent as one line with escaped line breaks (`\n`) is decoded, since one line can never be a patch.
+A note at the top of the response, also of a call
 that fails, then shows nib's own form of the same call. `grep` also takes another grep tool's names for its `mode`
 (`content` for `matches`, `files_with_matches` for `files`). A path that does not exist is named in a note while `read`,
 `grep` and `find` serve the other paths (a read puts the note in that file's place, grep and find at the top); only when

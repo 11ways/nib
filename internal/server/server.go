@@ -892,6 +892,38 @@ func (a arguments) list(name string, notes *[]string) ([]string, error) {
 	return listOf(name, value, notes), nil
 }
 
+// globs is the glob argument as a list; a string of globs separated by commas outside braces and brackets, which a glob takes as part of a
+// name, is read as the list it spells, with a note.
+func (a arguments) globs(notes *[]string) ([]string, error) {
+	globs, err := a.list("glob", notes)
+	if err != nil || len(globs) != 1 {
+		return globs, err
+	}
+	var parts []string
+	depth, start := 0, 0
+	for i, r := range globs[0] {
+		switch r {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth = max(0, depth-1)
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(globs[0][start:i]))
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(globs[0][start:]))
+	parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+	if len(parts) < 2 {
+		return globs, nil
+	}
+	quoted, _ := json.Marshal(globs[0])
+	*notes = append(*notes, fmt.Sprintf("[glob %s was read as the list %s; a comma in a name matches as [,]]", unescapeHTML(string(quoted)), quoteList(parts)))
+	return parts, nil
+}
+
 func parsedList(text string) []string {
 	var items []any
 	if json.Unmarshal([]byte(text), &items) != nil || len(items) == 0 {
@@ -1099,7 +1131,7 @@ func (s *Server) grep(ctx *engine.Context, args arguments, notes *[]string, _ *c
 			return engine.Result{}, err
 		}
 	}
-	glob, err := args.list("glob", notes)
+	glob, err := args.globs(notes)
 	if err != nil {
 		return engine.Result{}, err
 	}
@@ -1141,7 +1173,7 @@ func (s *Server) find(ctx *engine.Context, args arguments, notes *[]string, _ *c
 	if err != nil {
 		return engine.Result{}, err
 	}
-	glob, err := args.list("glob", notes)
+	glob, err := args.globs(notes)
 	if err != nil {
 		return engine.Result{}, err
 	}

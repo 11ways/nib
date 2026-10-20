@@ -244,6 +244,11 @@ describe("MCP server", () => {
     // Text that only looks like a list stays one path, and a one-line patch without escapes is left to the parser.
     expect((await call("read", { paths: "[draft].txt" })).text).toBe("[draft].txt does not exist")
     expect((await call("edit", { input: "PUT 1:" })).text).not.toContain("escaped line breaks")
+    // Globs written as one string with commas between them are read as the list they spell; braces keep their own commas.
+    await writeFile(path.join(directory, "b.md"), "two\n")
+    const globbed = await call("grep", { pattern: "(?i)two", glob: "*.txt, {b,c}.md" })
+    expect(globbed.text).toStartWith('[glob "*.txt, {b,c}.md" was read as the list ["*.txt","{b,c}.md"]; a comma in a name matches as [,]]\n\n2 matches in 2 files')
+    expect((await call("find", { glob: "{a,b}.*" })).text).not.toContain("was read as the list")
   })
 
   test("grep takes another grep tool's names for its modes, with a note", async () => {
