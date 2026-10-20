@@ -3,6 +3,7 @@ package syntax
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -49,14 +50,15 @@ func (i Import) kind() int {
 	return 0
 }
 
-// imports is how a language writes its import declarations, one to a line; implicit are the type names every file of it sees without one.
+// imports is how a language writes its import declarations, one to a line; implicit is the JDK package whose classes every file of it sees
+// without one, "" for none.
 type imports struct {
 	line      *regexp.Regexp
 	module    *regexp.Regexp
 	semicolon bool
 	static    bool
 	alias     bool
-	implicit  map[string]bool
+	implicit  string
 }
 
 const (
@@ -65,7 +67,7 @@ const (
 )
 
 // jvmImports is the import style of a JVM language: `import a.b.C;` with its semicolon required, optional or absent, and the forms it adds.
-func jvmImports(semicolon, static, alias, module bool, implicit map[string]bool) *imports {
+func jvmImports(semicolon, static, alias, module bool, implicit string) *imports {
 	end := `\s*;?\s*$`
 	if semicolon {
 		end = `\s*;\s*$`
@@ -162,51 +164,65 @@ func Imports(path string, lines []string) (found []Import, ok bool) {
 	return found, true
 }
 
-// ImportGroups are imports as one row per package, each with the names imported from it: `java.util: ArrayList, List`, a static import's
-// class after `static`, a wildcard as `*`, a Kotlin alias as `Name as Alias`, and a module import as `module NAME`. Rows sort by package,
-// so related ones sit together.
-func ImportGroups(imports []Import) []string {
-	type key struct {
-		kind  int
-		group string
+// ImportTree is imports as a package tree, one row per package with the names imported from it, a space between them as no name holds one:
+// `java.util: ArrayList List`, then its sub-packages two spaces deeper by their own segments (`  concurrent: ConcurrentHashMap`). A package
+// that imports nothing itself and holds one sub-package shares its row (`com.couchbase.client:`). A wildcard shows as `*` and a Kotlin alias
+// as `Alias=Name`; static imports follow as a tree of their own, its top rows after `static `, and module imports as `module NAME`.
+func ImportTree(imports []Import) []string {
+	type node struct {
+		names    []string
+		children map[string]*node
 	}
-	names := map[key][]string{}
-	var keys []key
+	plain, static := &node{children: map[string]*node{}}, &node{children: map[string]*node{}}
+	var modules []string
 	for _, i := range imports {
-		k := key{i.kind(), i.group()}
-		if _, ok := names[k]; !ok {
-			keys = append(keys, k)
-			names[k] = nil
+		if i.Module {
+			modules = append(modules, "module "+i.Path)
+			continue
+		}
+		at := plain
+		if i.Static {
+			at = static
+		}
+		for _, segment := range strings.Split(i.group(), ".") {
+			next := at.children[segment]
+			if next == nil {
+				next = &node{children: map[string]*node{}}
+				at.children[segment] = next
+			}
+			at = next
 		}
 		switch {
-		case i.Module:
 		case i.Wildcard:
-			names[k] = append(names[k], "*")
+			at.names = append(at.names, "*")
 		case i.Alias != "":
-			names[k] = append(names[k], i.Path[strings.LastIndex(i.Path, ".")+1:]+" as "+i.Alias)
+			at.names = append(at.names, i.Alias+"="+i.Path[strings.LastIndex(i.Path, ".")+1:])
 		default:
-			names[k] = append(names[k], i.Name())
+			at.names = append(at.names, i.Name())
 		}
 	}
-	slices.SortFunc(keys, func(a, b key) int {
-		if a.kind != b.kind {
-			return a.kind - b.kind
-		}
-		return strings.Compare(a.group, b.group)
-	})
-	rows := make([]string, len(keys))
-	for index, k := range keys {
-		list := slices.Compact(slices.Sorted(slices.Values(names[k])))
-		switch k.kind {
-		case 2:
-			rows[index] = "module " + k.group
-		case 1:
-			rows[index] = "static " + k.group + ": " + strings.Join(list, ", ")
-		default:
-			rows[index] = k.group + ": " + strings.Join(list, ", ")
+	var rows []string
+	var render func(n *node, depth int, prefix string)
+	render = func(n *node, depth int, prefix string) {
+		for _, segment := range slices.Sorted(maps.Keys(n.children)) {
+			label, child := segment, n.children[segment]
+			for len(child.names) == 0 && len(child.children) == 1 {
+				for next, only := range child.children {
+					label, child = label+"."+next, only
+				}
+			}
+			row := strings.Repeat("  ", depth) + prefix + label + ":"
+			if len(child.names) > 0 {
+				row += " " + strings.Join(slices.Compact(slices.Sorted(slices.Values(child.names))), " ")
+			}
+			rows = append(rows, row)
+			render(child, depth+1, "")
 		}
 	}
-	return rows
+	render(plain, 0, "")
+	render(static, 0, "static ")
+	slices.Sort(modules)
+	return append(rows, slices.Compact(modules)...)
 }
 
 // Placement is where an import goes in a file: Lines after line After, 0 for the top of the file, which are Text, the import's own line,

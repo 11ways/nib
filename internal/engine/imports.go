@@ -21,10 +21,11 @@ const (
 	checkBytes = 512 * 1024
 )
 
-// foldImports shows each run of at least importFold imports the rows hold whole, blank lines between them included, as one row per package
-// with the names imported from it, when the rows go on past the run: an agent reading code needs to know what the file has, not each line.
-// The folded lines are not seen, so an edit needs a read of them first; IMPORT adds an import without one.
-func foldImports(name, canonical string, lines []string, rows []blockRow) []blockRow {
+// foldImports shows each run of at least importFold imports the rows hold, blank lines between them included, as one row per package with
+// the names imported from it, when the rows go on past the run: an agent reading code needs to know what the file has, not each line. A
+// run whose every line the agent holds is left to the held marker, which is shorter still. The folded lines are not seen, so an edit needs
+// a read of them first; IMPORT adds an import without one. It runs before held lines turn into markers, so rows stand for their own lines.
+func foldImports(canonical string, lines []string, rows []blockRow, holds map[int]int) []blockRow {
 	imports, ok := syntax.Imports(canonical, lines)
 	if !ok || len(imports) < importFold {
 		return rows
@@ -51,21 +52,23 @@ func foldImports(name, canonical string, lines []string, rows []blockRow) []bloc
 			continue
 		}
 		first, last := run[0].Line, run[len(run)-1].Line
-		at := slices.IndexFunc(rows, func(r blockRow) bool { return r.line == first })
+		at := slices.IndexFunc(rows, func(r blockRow) bool { return r.at == first })
 		end := at + last - first + 1
 		if at < 0 || end >= len(rows) {
 			continue
 		}
-		whole := true
+		whole, held := true, true
 		for k := at; k < end; k++ {
-			whole = whole && rows[k].line == first+k-at
+			whole = whole && rows[k].at == first+k-at
+			_, ok := holds[first+k-at]
+			held = held && ok
 		}
-		if !whole {
+		if !whole || held {
 			continue
 		}
-		folded := []blockRow{{text: fmt.Sprintf("[lines %d-%d: %d imports, by package; read %s:%d-%d for their lines]", first, last, len(run), name, first, last), at: first}}
-		for _, group := range syntax.ImportGroups(run) {
-			folded = append(folded, blockRow{text: "[" + group + "]", at: first})
+		folded := []blockRow{{text: fmt.Sprintf("[lines %d-%d: %d imports as a package tree; read that range for their lines]", first, last, len(run)), at: first}}
+		for _, row := range syntax.ImportTree(run) {
+			folded = append(folded, blockRow{text: row, at: first})
 		}
 		rows = slices.Concat(rows[:at], folded, rows[end:])
 	}
@@ -155,9 +158,9 @@ func placeImports(canonical string, lines []string, edits, imports []snapshots.L
 }
 
 // codeWarnings parses a file an edit changed, in a language nib has a grammar for: an edit that leaves it no longer parsing, when it parsed
-// before, says where the first error is, and an edit to a Java file that uses a class nothing in the file imports or declares says which
-// class nib finds by that name in the workspace, with the IMPORT that adds it.
-func codeWarnings(ctx *Context, t *target, before *text, result applied) []string {
+// before and unbalanced brackets do not already say so (bracketed), says where the first error is, and an edit to a Java file that uses a
+// class nothing in the file imports or declares says which class nib finds by that name, with the IMPORT that adds it.
+func codeWarnings(ctx *Context, t *target, before *text, result applied, bracketed bool) []string {
 	body := strings.TrimPrefix(string(result.bytes), bom)
 	if !syntax.Supported(t.canonical) || len(body) > checkBytes {
 		return nil
@@ -167,6 +170,9 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied) []strin
 		return nil
 	}
 	if after.ErrorLine > 0 {
+		if bracketed {
+			return nil
+		}
 		earlier, err := syntax.Inspect(t.canonical, []byte(before.body))
 		if err != nil || earlier.ErrorLine > 0 {
 			return nil
@@ -210,9 +216,15 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied) []strin
 		return nil
 	}
 	own := packageOf(lines)
-	found := searchClasses(ctx, t.canonical, missing, wildcards)
-	// A wildcard of a package with no source file in the workspace, such as a library's, may bring in a class of any name.
+	var searched []string
 	for _, w := range wildcards {
+		if !syntax.JDKPackage(w) {
+			searched = append(searched, w)
+		}
+	}
+	found := searchClasses(ctx, t.canonical, missing, searched)
+	// A wildcard of a package neither the JDK nor the workspace holds, such as a library's, may bring in a class of any name.
+	for _, w := range searched {
 		if !found.packages[w] {
 			return nil
 		}
@@ -221,14 +233,16 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied) []strin
 	var named []string
 	for _, name := range missing {
 		var choices []string
-		resolved := false
 		for _, c := range found.classes[name] {
-			pkg := c.path[:max(0, strings.LastIndex(c.path, "."))]
-			resolved = resolved || pkg == own || slices.Contains(wildcards, pkg)
 			if !slices.Contains(choices, c.path) {
 				choices = append(choices, c.path)
 			}
 		}
+		choices = append(choices, syntax.JDKClasses(name)...)
+		resolved := slices.ContainsFunc(choices, func(path string) bool {
+			pkg := path[:max(0, strings.LastIndex(path, "."))]
+			return pkg == own || slices.Contains(wildcards, pkg)
+		})
 		slices.Sort(choices)
 		switch {
 		case resolved || len(choices) == 0:
@@ -236,17 +250,16 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied) []strin
 			sure = append(sure, choices[0])
 			named = append(named, name)
 		default:
-			unsure = append(unsure, fmt.Sprintf("%s is not imported either, and nib finds %s; IMPORT the one meant.", name, strings.Join(choices, " and ")))
+			unsure = append(unsure, fmt.Sprintf("%s is not imported, and nib finds %s; IMPORT the one meant.", name, strings.Join(choices, " and ")))
 		}
 	}
 	var warnings []string
 	if len(sure) > 0 {
-		verb := "is"
+		form := "%s, used in the new rows, is not imported, and nib knows one class of that name; if it is the one meant, this adds it:\n[%s]\nIMPORT %s"
 		if len(named) > 1 {
-			verb = "are"
+			form = "%s, used in the new rows, are not imported, and nib knows one class of each name; if they are the ones meant, this adds them:\n[%s]\nIMPORT %s"
 		}
-		warnings = append(warnings, fmt.Sprintf("%s, used in the new rows, %s not imported, and nib finds each in one place in the workspace; if that is the one meant, this adds it:\n[%s]\nIMPORT %s",
-			strings.Join(named, ", "), verb, t.display, strings.Join(sure, ", ")))
+		warnings = append(warnings, fmt.Sprintf(form, strings.Join(named, ", "), t.display, strings.Join(sure, ", ")))
 	}
 	return append(warnings, unsure...)
 }

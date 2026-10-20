@@ -18,24 +18,6 @@ type typeNodes struct {
 	references              string
 }
 
-// javaLang are the public types of java.lang in JDK 25, which every Java file sees without an import.
-var javaLang = set("AbstractMethodError", "Appendable", "ArithmeticException", "ArrayIndexOutOfBoundsException", "ArrayStoreException",
-	"AssertionError", "AutoCloseable", "Boolean", "BootstrapMethodError", "Byte", "CharSequence", "Character", "Class", "ClassCastException",
-	"ClassCircularityError", "ClassFormatError", "ClassLoader", "ClassNotFoundException", "ClassValue", "CloneNotSupportedException",
-	"Cloneable", "Comparable", "Deprecated", "Double", "Enum", "EnumConstantNotPresentException", "Error", "Exception",
-	"ExceptionInInitializerError", "Float", "FunctionalInterface", "IO", "IllegalAccessError", "IllegalAccessException",
-	"IllegalArgumentException", "IllegalCallerException", "IllegalMonitorStateException", "IllegalStateException",
-	"IllegalThreadStateException", "IncompatibleClassChangeError", "IndexOutOfBoundsException", "InheritableThreadLocal",
-	"InstantiationError", "InstantiationException", "Integer", "InternalError", "InterruptedException", "Iterable",
-	"LayerInstantiationException", "LinkageError", "Long", "MatchException", "Math", "Module", "ModuleLayer", "NegativeArraySizeException",
-	"NoClassDefFoundError", "NoSuchFieldError", "NoSuchFieldException", "NoSuchMethodError", "NoSuchMethodException", "NullPointerException",
-	"Number", "NumberFormatException", "Object", "OutOfMemoryError", "Override", "Package", "Process", "ProcessBuilder", "ProcessHandle",
-	"Readable", "Record", "ReflectiveOperationException", "Runnable", "Runtime", "RuntimeException", "RuntimePermission", "SafeVarargs",
-	"ScopedValue", "SecurityException", "SecurityManager", "Short", "StableValue", "StackOverflowError", "StackTraceElement", "StackWalker",
-	"StrictMath", "String", "StringBuffer", "StringBuilder", "StringIndexOutOfBoundsException", "SuppressWarnings", "System", "Thread",
-	"ThreadDeath", "ThreadGroup", "ThreadLocal", "Throwable", "TypeNotPresentException", "UnknownError", "UnsatisfiedLinkError",
-	"UnsupportedClassVersionError", "UnsupportedOperationException", "VerifyError", "VirtualMachineError", "Void", "WrongThreadException")
-
 // Inspection is what one parse of a file tells: the first line that did not parse, 0 when every line did, and, in a language whose type
 // names nib tells apart (Types), the class names each line uses by their first segment, the type names the file declares, the names
 // every file sees without an import (Implicit), and whether it declares a type at its top level, as a compact source file does not.
@@ -65,7 +47,7 @@ func Inspect(path string, src []byte) (Inspection, error) {
 	}
 	found.Types, found.Uses, found.Declared = true, map[int][]string{}, map[string]bool{}
 	if t.language.imports != nil {
-		found.Implicit = t.language.imports.implicit
+		found.Implicit = jdkPackageClasses(t.language.imports.implicit)
 	}
 	for _, d := range t.declarations() {
 		if d.kind == container {

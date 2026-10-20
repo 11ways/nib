@@ -78,12 +78,26 @@ reads the file as asked, though a minified file still gets shorter lines.
   passed, its lines are cut at 300 characters instead of 2000, and the header says so; passing `maxLineLength` restores
   the usual cut.
 - **Imports.** In a Java or Kotlin file, a read whose rows go past a run of 10 or more imports (blank lines between them
-  included) shows that run as one row per package with the names it imports, instead of one row per import:
-  `[lines 3-111: 105 imports, by package; read PATH:3-111 for their lines]`, then rows like
-  `[java.util: ArrayList, HashMap, List]`, `[static org.junit.Assert: assertEquals]` and
-  `[be.example.orm.query.criteria: *]`. On a real file of 105 imports the rows go from 6,324 bytes to 2,922, about
-  1,800 tokens to 830. The folded lines are not seen, so an edit of them is refused until they are read; a range that
-  ends within the imports, like `PATH:3-111`, shows them as rows, and `IMPORT` adds one without reading any.
+  included) shows that run as a package tree instead of one row per import: a note
+  `[lines 3-110: 105 imports as a package tree; read that range for their lines]`, then one row per package with the
+  classes it imports, a space between them, and its sub-packages two spaces deeper by their own segments; a package
+  that imports nothing itself and holds one sub-package shares its row:
+
+  ```
+  be.elevenways:
+    protoblast.common: Blast
+      time: Backoff Now Pace Retry
+  java:
+    util: ArrayList HashMap List
+      function: Consumer Function
+  static org.junit.Assert: assertEquals
+  ```
+
+  A wildcard shows as `*`, a Kotlin alias as `Alias=Name`, a module import as `module NAME`. The rows are no anchors
+  (no package or class name starts with a digit). On a real file of 105 imports they take 2,157 bytes instead of 6,324,
+  about a third. A run whose every line the agent holds is left to the held rows, which are shorter still. The folded
+  lines are not seen, so an edit of them is refused until they are read; a range that ends within the imports, like
+  `PATH:3-110`, shows them as rows, and `IMPORT` adds one without reading any.
 - **Outlines.** Code files over 200 lines or 8 KiB, whose outline is at most a third of their length, and any file over
   500 lines or 20 KiB return `[PATH#TAG] N lines, about Xk tokens; outline only...` followed by real `LINE:TEXT` rows:
   every top-level code line, plus the first-level members of top-level classes, interfaces, structs, enums, traits,
@@ -554,14 +568,16 @@ REM
   it parsed before, warns with the line of the first error (`The file no longer parses as Java: ...`); files over 512 KiB
   are not parsed for this, and a parse of a file of a few hundred lines takes a few milliseconds.
 - An edit to a Java file whose new rows use a class by a name that nothing in the file imports or declares, that
-  `java.lang` does not hold and that the file did not mention before, warns with the class nib finds by that name: the
-  Java or Kotlin files named after it in the workspace roots, read for their package. One class gives the hunk that adds
-  it (`[PATH]` and `IMPORT be.example.common.Clock`); several are listed; none, a class in the file's own package or a
-  package it imports with `*`, says nothing. A wildcard import of a package with no source file in the workspace (a
-  library's), a static wildcard import, a module import, or a file with no top-level class (a compact source file)
-  turns the check off, since nib cannot tell what those bring in. Names count as classes by Java's naming: a capital
-  first and a small letter in them, in a type, an annotation, a `new`, a cast, a `catch`, a method reference or before a
-  call or field (`Duration.ofSeconds`).
+  `java.lang` does not hold and that the file did not mention before, warns with the classes nib knows by that name: the
+  public classes of the JDK's `java.base`, `java.sql`, `java.net.http` and `java.logging` (a table from JDK 25 that
+  `internal/syntax/ListJdk.java` writes), and the Java or Kotlin files named after it in the workspace roots, read for
+  their package. One class gives the hunk that adds it (`[PATH]` and `IMPORT java.time.Duration`); several are listed,
+  as a workspace `Clock` beside `java.time.Clock`; none, a class in the file's own package or a package it imports with
+  `*`, says nothing. A wildcard import of a package neither the JDK table nor the workspace holds (a library's), a
+  static wildcard import, a module import, or a file with no top-level class (a compact source file) turns the check
+  off, since nib cannot tell what those bring in. Names count as classes by Java's naming: a capital first and a small
+  letter in them, in a type, an annotation, a `new`, a cast, a `catch`, a method reference or before a call or field
+  (`Duration.ofSeconds`). When unbalanced brackets already say the edit broke the file, the parse warning is left out.
 - An edit or write that leaves a `.json` file unsound, when it was sound before or is new, warns with the first fault
   and its line: a syntax error, or a key that repeats within one object
   (`The file is not valid JSON now: line 4: key "save" repeats in its object (first on line 2).`), which parsers resolve

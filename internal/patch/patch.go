@@ -278,7 +278,7 @@ func parseLine(line string, at int, current **Section, sections *[]*Section, row
 		fail(at, "nothing may follow REM, MV or CP in a section")
 	}
 	untagged := func(form string) {
-		fail(at, fmt.Sprintf("a [PATH] section without a tag may only append with PUT >$:, not %s; copy [PATH#TAG] from your latest read to edit elsewhere", form))
+		fail(at, fmt.Sprintf("a [PATH] section without a tag may only append with PUT >$: or add imports with IMPORT, not %s; copy [PATH#TAG] from your latest read to edit elsewhere", form))
 	}
 	if js.Trim(line) == "REM" {
 		if section.Tag == nil {

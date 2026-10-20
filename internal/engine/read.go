@@ -1524,10 +1524,12 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		return blockRow{text: r.text, at: line, marks: r.marks}
 	}
+	// Imports fold first, while each row still stands for its own line; then the lines the agent holds turn into markers.
 	held := func(rows []blockRow) []blockRow {
 		if t.rev != "" {
 			return rows
 		}
+		rows = foldImports(t.canonical, anchored.Lines, rows, e.HeldLines(ctx, t.canonical, anchored))
 		return e.heldRows(ctx, t.canonical, anchored, rows)
 	}
 	record := func(rows []blockRow) {
@@ -1637,7 +1639,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 				for i := range rows {
 					rows[i] = rowFor(i + 1)
 				}
-				rows = foldImports(name, t.canonical, anchored.Lines, held(rows))
+				rows = held(rows)
 				return &block{
 					head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, name, count+1),
 					rows: rows,
@@ -1665,7 +1667,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		last = r.end
 	}
-	rows = foldImports(name, t.canonical, anchored.Lines, held(rows))
+	rows = held(rows)
 	return &block{head: head, rows: rows, finish: func(shown int) []string {
 		record(rows[:shown])
 		notes := cuts(rows[:shown])

@@ -63,7 +63,7 @@ var languages = func() map[string]*language {
 		"field_declaration":                   {variable, declarators("declarator")},
 		"constant_declaration":                {variable, declarators("declarator")},
 		"enum_constant":                       {variable, field("name")},
-	}, imports: jvmImports(true, true, false, true, javaLang), types: &typeNodes{
+	}, imports: jvmImports(true, true, false, true, "java.lang"), types: &typeNodes{
 		name: "type_identifier", scoped: "scoped_type_identifier", parameter: "type_parameter",
 		annotations: set("marker_annotation", "annotation"),
 		receivers:   map[string]string{"method_invocation": "object", "field_access": "object"},
@@ -77,7 +77,7 @@ var languages = func() map[string]*language {
 		"property_declaration": {variable, path("variable_declaration", "simple_identifier")},
 		"type_alias":           {variable, child("type_identifier")},
 		"enum_entry":           {variable, child("simple_identifier")},
-	}, imports: jvmImports(false, false, true, false, nil)}
+	}, imports: jvmImports(false, false, true, false, "")}
 	script := func(name string, grammar func() *ts.Language) *language {
 		return &language{name: name, grammar: grammar, above: set("comment", "decorator"), wrappers: set("export_statement"), rules: map[string]rule{
 			"function_declaration":           {function, field("name")},

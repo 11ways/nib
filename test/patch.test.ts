@@ -55,15 +55,15 @@ describe("edit tool", () => {
     expect(await f.file("a.ts")).toBe("const s = `${a}` + \"b\" // 'c'\n- item\n+ plus\n")
   })
 
-  test("IMPORT puts Java imports where the file keeps its own, with no tag, and a read past many shows them by package", async () => {
+  test("IMPORT puts Java imports where the file keeps its own, with no tag, and a read past many shows them as a package tree", async () => {
     const imports = Array.from({ length: 10 }, (_, index) => `import be.example.orm.Type${index};`).join("\n")
     const f = await fixture({ "A.java": `package be.example;\n\n${imports}\nimport java.util.List;\n\nclass A {\n    List<Type1> all;\n}\n` })
     expect((await f.view("A.java:1-16")).split("\n").slice(1, 6)).toEqual([
       "1:package be.example;",
       "2:",
-      "[lines 3-13: 11 imports, by package; read A.java:3-13 for their lines]",
-      "[be.example.orm: Type0, Type1, Type2, Type3, Type4, Type5, Type6, Type7, Type8, Type9]",
-      "[java.util: List]",
+      "[lines 3-13: 11 imports as a package tree; read that range for their lines]",
+      "be.example.orm: Type0 Type1 Type2 Type3 Type4 Type5 Type6 Type7 Type8 Type9",
+      "java.util: List",
     ])
     const out = (await f.patch("[A.java]\nIMPORT java.util.Map, be.example.orm.Type1")).text
     expect(out).toContain("14:import java.util.Map;")

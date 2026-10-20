@@ -391,11 +391,11 @@
  },
  {
   "input": "[a.ts]\nCP b.ts",
-  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not CP; copy [PATH#TAG] from your latest read to edit elsewhere; got \"CP b.ts\""
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$: or add imports with IMPORT, not CP; copy [PATH#TAG] from your latest read to edit elsewhere; got \"CP b.ts\""
  },
  {
   "input": "[a.ts]\nMV b.ts",
-  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not MV; copy [PATH#TAG] from your latest read to edit elsewhere; got \"MV b.ts\""
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$: or add imports with IMPORT, not MV; copy [PATH#TAG] from your latest read to edit elsewhere; got \"MV b.ts\""
  },
  {
   "input": "*** Begin Patch\n*** Add File: a.ts\n+x\nPUT 1.=1:\n+y\n*** End Patch",
@@ -455,11 +455,11 @@
  },
  {
   "input": "[a.ts]\nPUT 1.=1:\n+x",
-  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not PUT; copy [PATH#TAG] from your latest read to edit elsewhere; got \"PUT 1.=1:\""
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$: or add imports with IMPORT, not PUT; copy [PATH#TAG] from your latest read to edit elsewhere; got \"PUT 1.=1:\""
  },
  {
   "input": "[a.ts]\nREM",
-  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$:, not REM; copy [PATH#TAG] from your latest read to edit elsewhere; got \"REM\""
+  "error": "Patch line 2: a [PATH] section without a tag may only append with PUT >$: or add imports with IMPORT, not REM; copy [PATH#TAG] from your latest read to edit elsewhere; got \"REM\""
  },
  {
   "input": "[a.ts#ABC]\nPUT >$:\n+x",

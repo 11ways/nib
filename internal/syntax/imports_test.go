@@ -52,19 +52,25 @@ func TestImportsReadsEachFormOnItsLine(t *testing.T) {
 	}
 }
 
-func TestImportGroupsShowEachPackageOnce(t *testing.T) {
+func TestImportTreeShowsEachPackageOnceUnderItsParent(t *testing.T) {
 	found, _ := Imports("Store.java", strings.Split(javaImports, "\n"))
 	want := []string{
-		"be.example.common.time: Backoff",
-		"be.example.orm.datasource: Datasource, Row",
-		"be.example.orm.query.criteria: *",
+		"be.example:",
+		"  common.time: Backoff",
+		"  orm:",
+		"    datasource: Datasource Row",
+		"    query.criteria: *",
 		"com.couchbase.client.java: Bucket",
-		"java.util: List, Map",
+		"java.util: List Map",
 		"static org.junit.Assert: assertEquals",
 		"module java.base",
 	}
-	if got := ImportGroups(found); !reflect.DeepEqual(got, want) {
+	if got := ImportTree(found); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
+	}
+	kotlin, _ := Imports("A.kt", []string{"import a.b.C as D", "import a.b.E", "import a.b.c.F"})
+	if got := ImportTree(kotlin); !reflect.DeepEqual(got, []string{"a.b: D=C E", "  c: F"}) {
+		t.Fatalf("kotlin %q", got)
 	}
 }
 
