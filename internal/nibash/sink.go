@@ -560,10 +560,14 @@ func plainRow(text string, first, last int, listed *listedLine) row {
 	return plainRowAt(text, first, first, last, listed)
 }
 
-// plainRowAt is plainRow with a cut row numbered label, its line in a file whose lines the log starts after.
+// plainRowAt is plainRow with a cut row numbered label, its line in a file whose lines the log starts after. A line holding encoded data shows
+// without it, as briefLine cuts it, and the log keeps it whole.
 func plainRowAt(text string, label, first, last int, listed *listedLine) row {
 	capped := false
-	if js.Len(text) > rowLimit {
+	switch {
+	case len(encodedRuns(text)) > 0:
+		text, capped = briefLine(label, text, rowLimit)
+	case js.Len(text) > rowLimit:
 		text, _ = engine.Row(label, text, rowLimit)
 		capped = true
 	}

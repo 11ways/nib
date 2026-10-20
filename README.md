@@ -716,7 +716,9 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   follows a file's rows is set apart by a line of nib's own, `[plain program output follows, not anchors]`. Plain output
   over 20 lines collapses exact repeats, and a plain row over 2,000 characters is cut in `read`'s bracketed form with
   its log line (`[line 2, chars 1-2000 of 20157]|...`), so it never looks like an anchor; the footer that explains this
-  is whole the first time, then `[cut rows: read LOG:N whole]`. Output over 400 rows or 30 KiB
+  is whole the first time, then `[cut rows: read LOG:N whole]`. A plain row holding encoded data (a run of 100 or more
+  base64 or hex characters that mixes letters and digits over 16 distinct ones, such as a token or a signature) shows
+  in that form without it (`[line 1, chars 1-6, 145-157 of 157]|token= ...  expires=3600`). Output over 400 rows or 30 KiB
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags

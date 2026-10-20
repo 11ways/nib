@@ -292,7 +292,7 @@ func summarized(rows []row, s decider.Summary, log saved, lines []string) []row 
 }
 
 // encodedRun is a stretch of a line that may be encoded data, base64 or hex, which no agent reads; encodedRuns keeps the ones that are.
-var encodedRun = regexp.MustCompile(`[A-Za-z0-9+/=_-]{100,}`)
+var encodedRun = regexp.MustCompile(`[A-Za-z0-9+/_-]{100,}={0,2}`)
 
 // encodedRuns are the byte ranges of line's encoded data: runs of encodedRun that mix letters and digits over at least 16 distinct characters,
 // as hex and base64 do and a long word, a separator or a run of one character never does.
@@ -311,15 +311,23 @@ func encodedRuns(line string) [][]int {
 	return runs
 }
 
-// briefRow is a passage's row of one log line, line, at most width characters: one longer, or holding encoded runs, shows the stretches of it
-// outside those runs, cut to width, as a bracketed row naming them, which the log holds whole.
+// briefRow is a passage's row of one log line, line, at most width characters: one longer, or holding encoded data, shows as briefLine does.
 func briefRow(r row, line string, label, width int) row {
 	if !r.capped {
 		line = r.text
 	}
+	if text, cut := briefLine(label, line, width); cut {
+		r.text, r.capped = text, true
+	}
+	return r
+}
+
+// briefLine is line numbered label as at most width characters of it outside its encoded runs, a bracketed row naming the stretches it shows,
+// which is never an anchor; cut is false, and the line whole, when it is that short and holds no encoded data.
+func briefLine(label int, line string, width int) (text string, cut bool) {
 	runs := encodedRuns(line)
 	if js.Len(line) <= width && len(runs) == 0 {
-		return r
+		return line, false
 	}
 	var kept []engine.Stretch
 	at := 0
@@ -329,9 +337,8 @@ func briefRow(r row, line string, label, width int) row {
 		}
 		at = run[1]
 	}
-	text, _ := engine.KeptRow(label, line, kept, width)
-	r.text, r.capped = text, true
-	return r
+	text, _ = engine.KeptRow(label, line, kept, width)
+	return text, true
 }
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given

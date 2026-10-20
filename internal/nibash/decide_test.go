@@ -258,6 +258,18 @@ func TestLongPlainRowsAreCutWithTheirLogLine(t *testing.T) {
 	}
 }
 
+func TestEncodedDataInPlainOutputIsLeftOutOfItsRow(t *testing.T) {
+	f := newFixture(t, nil)
+	token := strings.Repeat("eyJhbGciOiJIUzI1NiJ9xQ7", 6)
+	out := f.run("echo 'token=" + token + " expires=3600'; echo " + strings.Repeat("=", 120))
+	rows := strings.Split(out, "\n")
+	// The token goes, its row naming what it shows; a separator of one character is no encoded data and stays whole.
+	if len(rows) != 3 || rows[0] != "[line 1, chars 1-6, 145-157 of 157]|token= ...  expires=3600" || rows[1] != strings.Repeat("=", 120) ||
+		!strings.HasPrefix(rows[2], "[cut rows: N is the row's line in the whole output; read ") {
+		t.Fatalf("got:\n%s", out)
+	}
+}
+
 func TestACappedLogIsAnnounced(t *testing.T) {
 	saved := logLimit
 	logLimit = 1000
