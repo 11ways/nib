@@ -3,9 +3,11 @@ module github.com/11ways/nib
 go 1.27.1
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/odvcencio/gotreesitter v0.56.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.60.1
 	mvdan.cc/sh/v3 v3.14.1
 )

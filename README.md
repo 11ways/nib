@@ -102,8 +102,13 @@ whole, read it with a larger `maxLineLength`. A larger value works for any selec
 and one `path:N` entry alone may go up to 2 MiB; a row bigger than the whole budget is replaced by a hint to read that
 line alone. A line with terminal color codes prints as `[N ansi]|text` with the codes stripped, which is not an
 anchor either; the tag still covers the real bytes, and `SUB` edits such a line too. Directories list their entries;
-PNG, JPEG, GIF and WebP files are returned as MCP image content; PDFs are refused, so use the client's own reader for
-them.
+PNG, JPEG, GIF and WebP files are returned as MCP image content, as the model will see them. One within what the
+newest models take (2576 pixels on the long edge, 4784 image tokens of 28 by 28 pixels, 3.75 MB) goes as it is; a
+bigger one is scaled down to fit, its aspect kept, and sent as lossless WebP, or as JPEG (quality 90) when it was a
+JPEG or its WebP would still be over 3.75 MB, so nothing between nib and the model rescales it unseen. The note names
+both sizes: `shot.png: image/png 1400x2911 attached as image/webp 1239x2576, the most the model sees; crop a part for
+more detail`. An image file over 64 MiB, or over 64 megapixels, is skipped with a note, and one nib cannot decode goes
+as it is. PDFs are refused, so use the client's own reader for them.
 
 Headers show paths relative to the server's working directory when inside it, absolute otherwise. Text files are limited
 to 2 MiB (plain reads excepted), images to 5 MiB.

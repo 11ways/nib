@@ -36,6 +36,8 @@ func TestReadBecomesNibReadAndOtherToolsPass(t *testing.T) {
 		{call(directory, "Read", map[string]any{"file_path": outside}), `mcp__nib__read {"paths":["` + filepath.ToSlash(outside) + `"]}`},
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "a.pdf")}), ""},
 		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "a.ipynb")}), ""},
+		// nib's read scales an image to what the model sees, so the built-in Read of one is refused too.
+		{call(directory, "Read", map[string]any{"file_path": filepath.Join(directory, "shot.PNG")}), `mcp__nib__read {"paths":["shot.PNG"]}`},
 		// Older setups registered the hook for these too; with nibash and deny rules they are not the hook's to refuse.
 		{call(directory, "Bash", map[string]any{"command": "cat README.md"}), ""},
 		{call(directory, "Grep", map[string]any{"pattern": "x"}), ""},

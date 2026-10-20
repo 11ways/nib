@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -562,16 +561,10 @@ func rawLines(body string) []string {
 }
 
 func mime(data []byte) string {
-	switch {
-	case len(data) >= 8 && bytes.Equal(data[:8], []byte{137, 80, 78, 71, 13, 10, 26, 10}):
-		return "image/png"
-	case len(data) >= 3 && data[0] == 255 && data[1] == 216 && data[2] == 255:
-		return "image/jpeg"
-	case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
-		return "image/gif"
-	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
-		return "image/webp"
-	case len(data) >= 5 && string(data[:5]) == "%PDF-":
+	if kind := imageKindOf(data); kind != nil {
+		return kind.mime
+	}
+	if len(data) >= 5 && string(data[:5]) == "%PDF-" {
 		return "application/pdf"
 	}
 	return ""

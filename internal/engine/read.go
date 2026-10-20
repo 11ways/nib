@@ -971,10 +971,21 @@ func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string
 			tooBig := func(size int64) *block {
 				return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the 2 MiB text limit. Read it with plain: true (a range like %s:-200 works too), or grep it.", t.display, float64(size)/1048576, t.display))
 			}
-			if info.Size() > MediaLimit {
+			// An image may be bigger than any text read holds, since it goes scaled down to what the model sees.
+			head := make([]byte, 12)
+			n, _ := file.ReadAt(head, 0)
+			kind := imageKindOf(head[:n])
+			limit := MediaLimit
+			if kind != nil {
+				limit = ImageLimit
+			}
+			if info.Size() > int64(limit) {
+				if kind != nil {
+					return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the %d MiB image limit", t.display, float64(info.Size())/1048576, ImageLimit/1048576)), nil
+				}
 				return tooBig(info.Size()), nil
 			}
-			current, err := snapshot(file, MediaLimit)
+			current, err := snapshot(file, limit)
 			if err != nil {
 				return nil, err
 			}
@@ -991,9 +1002,12 @@ func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string
 			if attachment == "application/pdf" {
 				return noteBlock(t.display + ": PDF is not supported here; use the built-in Read tool"), nil
 			}
-			if attachment != "" {
-				*images = append(*images, Image{Data: current.bytes, MimeType: attachment})
-				return noteBlock(fmt.Sprintf("%s: %s image attached", t.display, attachment)), nil
+			if kind := imageKindOf(current.bytes); kind != nil {
+				attached, note := attachImage(t.display, current.bytes, kind)
+				if attached != nil {
+					*images = append(*images, *attached)
+				}
+				return noteBlock(note), nil
 			}
 			if len(current.bytes) > TextLimit {
 				return tooBig(int64(len(current.bytes))), nil
