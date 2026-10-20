@@ -213,6 +213,8 @@ type decision struct {
 	read bool
 	// recall folds blocks the agent saw in an earlier call; nil folds none.
 	recall *recall
+	// teach says whether the agent is to learn a lesson now, marking it learned; render sets it for its agent, and nil teaches every time.
+	teach func(lesson string) bool
 }
 
 // asked names the purpose in notes: the call's description, or what skim expects.
@@ -226,6 +228,9 @@ func (d decision) asked() string {
 // render turns what the sink holds into the tool result, records the anchored rows it shows as seen, and writes the whole output to a log when
 // the budget cuts it or a row is too long to show whole.
 func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory, d decision) string {
+	if d.teach == nil {
+		d.teach = func(lesson string) bool { return e.Store.Teach(ctx.Session, lesson) }
+	}
 	s.mu.Lock()
 	facts, tails := s.facts, s.tails
 	s.mu.Unlock()
@@ -301,13 +306,16 @@ func fit(ctx context.Context, rows []row, raw string, d decision, save func() sa
 	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
-	return rows, []string{cutFooter(log)}
+	return rows, []string{cutFooter(log, d.teach)}
 }
 
-// cutFooter explains plain rows cut at rowLimit, numbered with their line in the log.
-func cutFooter(log saved) string {
+// cutFooter explains plain rows cut at rowLimit, numbered with their line in the log: in full the first time teach says so, then briefly.
+func cutFooter(log saved, teach func(lesson string) bool) string {
 	if log.path == "" {
 		return "[cut rows: N is the row's line in the whole output, which could not be saved]"
+	}
+	if teach != nil && !teach("log-cut-rows") {
+		return fmt.Sprintf("[cut rows: read %s:N whole]", log.path)
 	}
 	return fmt.Sprintf("[cut rows: N is the row's line in the %s; read %s:N with maxLineLength to see one whole]", log.whole(), log.path)
 }

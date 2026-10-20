@@ -18,7 +18,8 @@ type Piece struct {
 
 // Show prints a provider's answer within read's budget: prose as it is, and each run of locations in one file as one read block of the file
 // as it is now, so every N:TEXT row is a real line and counts as seen.
-func (e *Engine) Show(ctx *Context, provider string, pieces []Piece) (Result, error) {
+func (e *Engine) Show(ctx *Context, provider string, pieces []Piece) (result Result, err error) {
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
 	var blocks []*block
 	var images []Image
 	// Every file the answer points at counts toward a name before any prints, so a name they earn holds for all of them.

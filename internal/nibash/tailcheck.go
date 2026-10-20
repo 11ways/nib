@@ -192,7 +192,7 @@ func (t *tailed) texts(rows []row) []string {
 		capped = capped || r.capped
 	}
 	if capped {
-		out = append(out, cutFooter(t.log))
+		out = append(out, cutFooter(t.log, nil))
 	}
 	return out
 }

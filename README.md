@@ -97,10 +97,11 @@ reads the file as asked, though a minified file still gets shorter lines.
   continue or grep.
 
 Lines longer than `maxLineLength` (default 2000) print as `[line N, chars 1-2000 of M]|prefix`, which is not an edit
-anchor, and the block ends with a note saying so. `SUB` changes such a line in place without reading it; to see it
-whole, read it with a larger `maxLineLength`. A larger value works for any selection within the shared 40 KiB budget,
-and one `path:N` entry alone may go up to 2 MiB; a row bigger than the whole budget is replaced by a hint to read that
-line alone. A line with terminal color codes prints as `[N ansi]|text` with the codes stripped, which is not an
+anchor; the first time an agent is shown one, the response ends with a note saying so (and again after its context
+was dropped), once per response however many blocks hold one. `SUB` changes such a line in place without reading it;
+to see it whole, read it with a larger `maxLineLength`. A larger value works for any selection within the shared 40 KiB
+budget, and one `path:N` entry alone may go up to 2 MiB; a row bigger than the whole budget is replaced by a hint to
+read that line alone. A line with terminal color codes prints as `[N ansi]|text` with the codes stripped, which is not an
 anchor either; the tag still covers the real bytes, and `SUB` edits such a line too. Directories list their entries;
 PNG, JPEG, GIF and WebP files are returned as MCP image content, as the model will see them. One within what the
 newest models take (2576 pixels on the long edge, 4784 image tokens of 28 by 28 pixels, 3.75 MB) goes as it is; a
@@ -708,7 +709,8 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   only as its size. Plain output shaped like rows (`N:` or `N~`, as `grep -n` through a real program prints) that
   follows a file's rows is set apart by a line of nib's own, `[plain program output follows, not anchors]`. Plain output
   over 20 lines collapses exact repeats, and a plain row over 2,000 characters is cut in `read`'s bracketed form with
-  its log line (`[line 2, chars 1-2000 of 20157]|...`), so it never looks like an anchor. Output over 400 rows or 30 KiB
+  its log line (`[line 2, chars 1-2000 of 20157]|...`), so it never looks like an anchor; the footer that explains this
+  is whole the first time, then `[cut rows: read LOG:N whole]`. Output over 400 rows or 30 KiB
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags

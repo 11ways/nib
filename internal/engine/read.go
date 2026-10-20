@@ -831,7 +831,8 @@ func readEntry(ctx *Context, entry string) (input, since string, sel selection, 
 }
 
 // Read reads files, lists directories and attaches images.
-func (e *Engine) Read(ctx *Context, args ReadArgs) (Result, error) {
+func (e *Engine) Read(ctx *Context, args ReadArgs) (result Result, err error) {
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
 	if args.Info && (args.Plain || args.Collapse != nil || args.MaxLineLength != nil) {
 		return Result{}, errors.New("info: true gives facts instead of content, so it takes no plain, collapse or maxLineLength")
 	}
@@ -1552,7 +1553,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		if t.rev != "" {
 			// No row of a revision is an anchor, so there is nothing to change in place.
 			if slices.ContainsFunc(m, func(m marks) bool { return m.cut }) {
-				return []string{fmt.Sprintf("[cut rows: read %s:N with maxLineLength to see one whole]", name)}
+				return []string{fmt.Sprintf(cutRevisionNote, name)}
 			}
 			return nil
 		}

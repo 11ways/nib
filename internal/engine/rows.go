@@ -195,16 +195,69 @@ func lineRow(line int, content string, limit int) row {
 	return row{text: cutRow(line, strings.Join(labels, ", "), js.Slice(shown, 0, limit)), marks: marks{cut, colored}}
 }
 
-// rowNotes are footer notes explaining the bracketed rows among rows, once per block.
+// The notes that explain bracketed rows, by the lesson each teaches; the rows themselves say what they are, so an agent gets each once
+// (teachRowNotes), and again after its context was dropped.
+const (
+	cutRowsNote      = "[cut rows: change them in place with SUB N: OLD, or read %s:N with maxLineLength to see one whole]"
+	cutRevisionNote  = "[cut rows: read %s:N with maxLineLength to see one whole]"
+	ansiRowsNote     = "[ansi rows: their color codes are stripped, so they are not anchors; change them in place with SUB N: OLD]"
+	cutRowsLesson    = "cut-rows"
+	ansiRowsLesson   = "ansi-rows"
+	rowNoteDisplayRe = `.+`
+)
+
+// rowNoteLessons match a whole line that is one of the row notes, to the lesson it teaches.
+var rowNoteLessons = []struct {
+	line   *regexp.Regexp
+	lesson string
+}{
+	{regexp.MustCompile(`^` + strings.ReplaceAll(regexp.QuoteMeta(cutRowsNote), `%s`, rowNoteDisplayRe) + `$`), cutRowsLesson},
+	{regexp.MustCompile(`^` + strings.ReplaceAll(regexp.QuoteMeta(cutRevisionNote), `%s`, rowNoteDisplayRe) + `$`), cutRowsLesson},
+	{regexp.MustCompile(`^` + regexp.QuoteMeta(ansiRowsNote) + `$`), ansiRowsLesson},
+}
+
+// rowNotes are footer notes explaining the bracketed rows among rows, once per block; teachRowNotes keeps the ones the agent is to learn.
 func rowNotes(display string, rows []marks) []string {
 	var notes []string
 	if slices.ContainsFunc(rows, func(m marks) bool { return m.cut }) {
-		notes = append(notes, fmt.Sprintf("[cut rows: change them in place with SUB N: OLD, or read %s:N with maxLineLength to see one whole]", display))
+		notes = append(notes, fmt.Sprintf(cutRowsNote, display))
 	}
 	if slices.ContainsFunc(rows, func(m marks) bool { return m.colored }) {
-		notes = append(notes, "[ansi rows: their color codes are stripped, so they are not anchors; change them in place with SUB N: OLD]")
+		notes = append(notes, ansiRowsNote)
 	}
 	return notes
+}
+
+// teachRowNotes keeps, of a finished response's row notes, the first of each lesson, when ctx's agent has not been taught it yet. It runs on
+// the text an agent gets, never on a block, since a block renders again as a response is fitted to its budget.
+func (e *Engine) teachRowNotes(ctx *Context, text string) string {
+	if !strings.Contains(text, "[cut rows: ") && !strings.Contains(text, "[ansi rows: ") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	kept := lines[:0]
+	decided := map[string]bool{}
+	for _, line := range lines {
+		lesson := ""
+		for _, note := range rowNoteLessons {
+			if note.line.MatchString(line) {
+				lesson = note.lesson
+				break
+			}
+		}
+		if lesson != "" {
+			keep, seen := decided[lesson]
+			if !seen {
+				keep = e.Store.Teach(ctx.Session, lesson)
+			}
+			decided[lesson] = false
+			if !keep {
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 type framed struct {

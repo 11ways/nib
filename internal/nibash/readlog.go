@@ -46,7 +46,8 @@ func (m logMark) since() string {
 // since, unless it shrank or its start changed.
 func (s *Shell) ReadLog(ctx context.Context, key any, paths []string, expect string, tools *engine.Context) (engine.Result, error) {
 	sess := s.session(key)
-	d := decision{decider: s.decider, summarizer: s.activeSummarizer(), purpose: purpose(expect), read: true}
+	d := decision{decider: s.decider, summarizer: s.activeSummarizer(), purpose: purpose(expect), read: true,
+		teach: func(lesson string) bool { return s.engine.Store.Teach(tools.Session, lesson) }}
 	var blocks, failures []string
 	for _, entry := range paths {
 		text, err := s.readLog(ctx, sess, entry, d, tools)

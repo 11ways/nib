@@ -251,6 +251,11 @@ func TestLongPlainRowsAreCutWithTheirLogLine(t *testing.T) {
 	if err != nil || strings.Split(string(data), "\n")[1] != strings.Repeat("x", 5000) {
 		t.Fatalf("log %s: %v", path, err)
 	}
+	// Taught once, the footer then only names where the whole rows are.
+	again := strings.Split(f.run("printf '%5000s\n' '' | tr ' ' y"), "\n")
+	if !regexp.MustCompile(`^\[cut rows: read \S+:N whole\]$`).MatchString(again[len(again)-1]) {
+		t.Fatalf("second footer %q", again[len(again)-1])
+	}
 }
 
 func TestACappedLogIsAnnounced(t *testing.T) {

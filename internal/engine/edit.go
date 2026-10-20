@@ -2060,7 +2060,8 @@ func New() *Engine {
 
 // Patch applies a patch. REAPPLY TOKEN as its first line applies the patch stored under that token, once; sections below it replace the
 // stored sections for their paths, and those for other paths join it.
-func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
+func (e *Engine) Patch(ctx *Context, input string) (result Result, err error) {
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
 	lines := strings.Split(input, "\n")
 	first := slices.IndexFunc(lines, func(line string) bool { return js.Trim(line) != "" })
 	var reapply []string
@@ -2098,7 +2099,7 @@ func (e *Engine) Patch(ctx *Context, input string) (Result, error) {
 	if len(fixes) > 0 {
 		sections, preview = corrected(ctx, stored, fixes)
 	}
-	result, err := e.apply(ctx, sections, preview)
+	result, err = e.apply(ctx, sections, preview)
 	var paused *Paused
 	if errors.As(err, &paused) {
 		// The call is sent again once the client answers, and must find its token still there.
@@ -2296,7 +2297,8 @@ func (e *Engine) remember(session string, sections []*patch.Section, p *replaceP
 }
 
 // Write writes a whole file; overwriting an existing one needs the tag of its latest read or edit.
-func (e *Engine) Write(ctx *Context, path, content string, tagValue string) (Result, error) {
+func (e *Engine) Write(ctx *Context, path, content string, tagValue string) (result Result, err error) {
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
 	if _, err := decodeText([]byte(content)); err != nil {
 		return Result{}, err
 	}

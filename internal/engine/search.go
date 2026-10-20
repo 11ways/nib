@@ -761,7 +761,8 @@ func valueOr(value *int, fallback int) int {
 }
 
 // Grep searches file contents with ripgrep.
-func (e *Engine) Grep(ctx *Context, args GrepArgs) (Result, error) {
+func (e *Engine) Grep(ctx *Context, args GrepArgs) (result Result, err error) {
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
 	var caps []string
 	multiline := strings.Contains(args.Pattern, "\n") || strings.Contains(args.Pattern, `\n`)
 	mode := args.Mode

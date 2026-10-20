@@ -1573,7 +1573,9 @@ describe("SUB", () => {
     expect(await readFile(f.filePath, "utf8")).toBe(long.replace("marker", "MARKER") + "\nshort\n")
     // The line is dense, so the file counts as minified: the response shows 50 characters on each side of the change, not the start of the line.
     expect(result.text).toContain(`\n[line 1, chars 2952-3057 of 3108]|${"x".repeat(49)} MARKER ${"y".repeat(49)}\n`)
-    expect(result.text).toContain("\n[cut rows: change them in place with SUB N: OLD")
+    // The read taught what a cut row is, so the edit's response does not say it again.
+    expect(r.text).toContain("\n[cut rows: change them in place with SUB N: OLD")
+    expect(result.text).not.toContain("[cut rows:")
     expect(await refusal(f.patch(`[file.txt#${result.tag}]\nPUT 1.=1:\n~xxx\n+short`))).toContain("never displayed in full")
   })
 
@@ -1984,7 +1986,7 @@ describe("color codes", () => {
     expect(r.anchors).toEqual([1])
     const subbed = await f.patch(`[file.txt#${r.tag}]\nSUB 2: disk full\n+disk ok`)
     expect(await readFile(f.filePath, "utf8")).toBe("plain line\n\x1b[31mERROR\x1b[0m disk ok\n")
-    expect(subbed.text).toContain("\n[2 ansi]|ERROR disk ok\n")
+    expect(subbed.text).toEndWith("\n[2 ansi]|ERROR disk ok")
     const replaced = await refusal(f.patch(`[file.txt#${subbed.tag}]\nPUT 2.=2:\n+x`))
     expect(replaced).toContain("Preview of the first 1 unseen line(s)")
     expect(replaced).toMatch(fixable)
