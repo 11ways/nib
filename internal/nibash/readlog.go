@@ -90,33 +90,106 @@ func (sess *session) setMark(canonical string, m logMark) {
 }
 
 // ReadLog reads files for what the agent expects of them, as plain lines shaped the way long program output is: past the limits a decider
-// chooses the lines that bear on expect, or a summary leads the lines it points at. A file read whole again for the same expect shows only
-// what was added since; for another, all of it again but the lines the agent was shown, unless it shrank or its start changed.
+// chooses the lines that bear on expect, or a summary leads the lines it points at. The limits hold for the whole call, so files past them
+// together are shaped as one output. A file read whole again for the same expect shows only what was added since; for another, all of it
+// again but the lines the agent was shown, unless it shrank or its start changed.
 func (s *Shell) ReadLog(ctx context.Context, key any, paths []string, expect string, tools *engine.Context) (engine.Result, error) {
 	sess := s.session(key)
 	d := decision{decider: s.decider, summarizer: s.activeSummarizer(), purpose: purpose(expect), read: true,
 		teach: func(lesson string) bool { return s.engine.Store.Teach(tools.Session, lesson) }}
-	var blocks, failures []string
+	var blocks []*logBlock
+	var failures []string
 	for _, entry := range paths {
-		text, err := s.readLog(ctx, sess, entry, question(expect), d, tools)
+		b, err := s.readLog(sess, entry, question(expect), tools)
 		if err != nil {
 			if ctx.Err() != nil {
 				return engine.Result{}, err
 			}
 			failures = append(failures, err.Error())
-			text = "[" + err.Error() + "]"
+			b = &logBlock{head: []string{"[" + err.Error() + "]"}}
 		}
-		blocks = append(blocks, text)
+		blocks = append(blocks, b)
 	}
 	if len(failures) == len(paths) {
 		return engine.Result{}, errors.New(strings.Join(failures, "; "))
 	}
-	return engine.Result{Text: strings.Join(blocks, "\n\n")}, nil
+	return engine.Result{Text: s.shapeBlocks(ctx, blocks, d, tools)}, nil
 }
 
-// readLog is one file's block: a head line of facts, then each window of its lines as shape leaves it, every run of lines the agent was
-// shown before folded into a row naming them; asked is the read's expect as question gives it.
-func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string, d decision, tools *engine.Context) (string, error) {
+// logBlock is one file of a skim before the call's budget shapes it: rows of nib's own before and after its windows, and the mark the read
+// leaves once what it showed is known (nil when the read left it already).
+type logBlock struct {
+	display    string
+	head, tail []string
+	windows    []*logWindow
+	echoed     bool
+	sess       *session
+	canonical  string
+	next       *logMark
+	// complete is the file's last line with its line break; a last line that may still grow does not count as shown.
+	complete int
+}
+
+// logWindow is a run of a file's lines, the first after file line before; notes name what was left out of them before the cut, and items
+// are the rows still to show, numbered from 1.
+type logWindow struct {
+	lines  []string
+	before int
+	notes  []string
+	items  []item
+}
+
+// rows are the window's items as rows standing for log lines from shift on, one cut at rowLimit labeled with its line from label on.
+func (w *logWindow) rows(label, shift int) []row {
+	rows := make([]row, len(w.items))
+	for i, it := range w.items {
+		rows[i] = plainRowAt(it.text, label+it.first, shift+it.first, shift+it.last, nil)
+	}
+	return rows
+}
+
+// fit is the window's rows shaped as the log of their own, which numbers them from log.base on, as the file does; footer explains cut rows.
+func (w *logWindow) fit(ctx context.Context, d decision, log saved) (rows []row, footer []string) {
+	if rows = w.rows(log.base, 0); len(rows) == 0 {
+		return nil, nil
+	}
+	return fit(ctx, rows, strings.Join(w.lines, "\n"), d, func() saved { return log })
+}
+
+// shapeLines is lines as a window after log.base, shaped as its fit does; echoed says a recurring block got markers.
+func shapeLines(ctx context.Context, lines []string, d decision, log saved) (rows []row, footer []string, echoed bool) {
+	w := &logWindow{lines: lines, before: log.base}
+	w.items, echoed = windowItems(lines, func(int, int) bool { return false })
+	rows, footer = w.fit(ctx, d, log)
+	return rows, footer, echoed
+}
+
+// shown adds to the block's mark the file lines that rows show of w, whose lines are the log's from offset on.
+func (b *logBlock) shown(w *logWindow, rows []row, offset int) {
+	b.next.shown = shownIn(rows, offset, len(w.lines), w.before, b.complete, b.next.shown)
+}
+
+// shownIn is set with the file lines up to limit that rows show of n lines after file line before, which are the log's from offset on.
+func shownIn(rows []row, offset, n, before, limit int, set lineSet) lineSet {
+	for _, r := range rows {
+		first, last := r.first-offset, r.last-offset
+		if r.plain && first > 0 && last <= n && before+first <= limit {
+			set = set.with(before+first, min(before+last, limit))
+		}
+	}
+	return set
+}
+
+// finish leaves the block's mark.
+func (b *logBlock) finish() {
+	if b.next != nil {
+		b.sess.setMark(b.canonical, *b.next)
+	}
+}
+
+// readLog is one file's block: a head line of facts, then each window of its lines, every run of lines the agent was shown before left out
+// and named in a note; asked is the read's expect as question gives it.
+func (s *Shell) readLog(sess *session, entry, asked string, tools *engine.Context) (*logBlock, error) {
 	whole, resumed, rewritten := false, false, false
 	// mark is where this read goes on from, earlier the agent's mark when one holds for the file as it is now.
 	var mark, earlier logMark
@@ -141,7 +214,7 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 		return m.offset
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !whole {
 		if m, ok := sess.mark(file.Canonical, cleared); ok && !m.rewrittenIn(file) {
@@ -156,7 +229,6 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 	lines := plainLines(raw)
 	base := mark.lines
 	total := base + len(lines)
-	d.command = "cat " + file.Display
 	// next is the mark this read leaves: a selector's leaves where the next read goes on alone.
 	next := earlier
 	if !known {
@@ -170,13 +242,14 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 	// A last line still being written was shown whole as it stood; shown again unchanged, it is nothing new.
 	if resumed && (len(raw) == 0 || len(raw) == mark.partial && next.lines == mark.lines) {
 		sess.setMark(file.Canonical, next)
-		return fmt.Sprintf("[%s] %d lines, plain: nothing new since your last %s with this expect", file.Display, total, engine.Skim), nil
+		return &logBlock{head: []string{fmt.Sprintf("[%s] %d lines, plain: nothing new since your last %s with this expect", file.Display, total, engine.Skim)}}, nil
 	}
-	var out []string
+	b := &logBlock{display: file.Display, sess: sess, canonical: file.Canonical}
 	switch {
 	case len(lines) == 0 && !resumed:
 		sess.setMark(file.Canonical, next)
-		return fmt.Sprintf("[%s] empty, plain", file.Display), nil
+		b.head = []string{fmt.Sprintf("[%s] empty, plain", file.Display)}
+		return b, nil
 	case file.Ranges != nil:
 		var parts []string
 		for _, r := range file.Ranges {
@@ -186,13 +259,13 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 				parts = append(parts, fmt.Sprintf("%d-%d", r[0], r[1]))
 			}
 		}
-		out = append(out, fmt.Sprintf("[%s] lines %s of %d, plain", file.Display, strings.Join(parts, ", "), total))
+		b.head = []string{fmt.Sprintf("[%s] lines %s of %d, plain", file.Display, strings.Join(parts, ", "), total)}
 	case resumed:
-		out = append(out, fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last %s", file.Display, base+1, total, total, engine.Skim))
+		b.head = []string{fmt.Sprintf("[%s] lines %d-%d of %d, plain: new since your last %s", file.Display, base+1, total, total, engine.Skim)}
 	case rewritten:
-		out = append(out, fmt.Sprintf("[%s] %d lines, plain: rewritten since your last %s, so all of it", file.Display, total, engine.Skim))
+		b.head = []string{fmt.Sprintf("[%s] %d lines, plain: rewritten since your last %s, so all of it", file.Display, total, engine.Skim)}
 	default:
-		out = append(out, fmt.Sprintf("[%s] %d lines, plain", file.Display, total))
+		b.head = []string{fmt.Sprintf("[%s] %d lines, plain", file.Display, total)}
 	}
 	// What nib shape showed went to a tool's result, which no agent can be told apart for; a selector asks for its lines again.
 	var shaped logMark
@@ -202,18 +275,17 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 	if !whole {
 		earlier.shown = nil
 	}
-	// A last line without its line break may still grow, so it does not count as shown.
-	complete := base + bytes.Count(raw, []byte("\n"))
+	b.complete = base + bytes.Count(raw, []byte("\n"))
 	windows := file.Ranges
 	if windows == nil {
 		windows = [][2]int{{base + 1, total}}
 	}
-	echoed := false
 	for _, w := range windows {
-		before := w[0] - 1
+		win := &logWindow{lines: lines[w[0]-1-base : w[1]-base], before: w[0] - 1}
 		var mine, theirs lineSet
-		held := func(r row) bool {
-			first, last := before+r.first, before+r.last
+		var echoed bool
+		win.items, echoed = windowItems(win.lines, func(first, last int) bool {
+			first, last = win.before+first, win.before+last
 			switch {
 			case earlier.shown.holds(first, last):
 				mine = mine.with(first, last)
@@ -223,31 +295,132 @@ func (s *Shell) readLog(ctx context.Context, sess *session, entry, asked string,
 				return false
 			}
 			return true
-		}
-		rows, footer, echo := shapeLines(ctx, lines[w[0]-1-base:w[1]-base], d, saved{path: file.Display, lines: w[1] - w[0] + 1, holds: w[1] - w[0] + 1, file: true, base: before}, held)
+		})
 		if len(mine) > 0 {
-			out = append(out, fmt.Sprintf("[%s: %s left out, which your earlier %[1]s showed]", engine.Skim, saved{}.spans(mine)))
+			win.notes = append(win.notes, fmt.Sprintf("[%s: %s left out, which your earlier %[1]s showed]", engine.Skim, saved{}.spans(mine)))
 		}
 		if len(theirs) > 0 {
-			out = append(out, fmt.Sprintf("[%s: %s left out, which a tool's result showed through nib shape at %s; read %s:%s if you lack them]", engine.Skim,
-				saved{}.spans(theirs), shaped.at.Format("15:04"), file.Display, theirs.selector()))
+			win.notes = append(win.notes, fmt.Sprintf("[%s: %s left out, which a tool's result showed through nib shape at %s; read %s:%s if you lack them]",
+				engine.Skim, saved{}.spans(theirs), shaped.at.Format("15:04"), file.Display, theirs.selector()))
 		}
-		next.shown = shownIn(rows, before, complete, next.shown)
-		out = append(append(out, rowTexts(rows)...), footer...)
-		echoed = echoed || echo
+		b.windows = append(b.windows, win)
+		b.echoed = b.echoed || echoed
 	}
-	sess.setMark(file.Canonical, next)
+	b.next = &next
 	if file.Short {
 		if whole {
-			out = append(out, fmt.Sprintf("[%s: stopped after %d MiB, at line %d; the next %[1]s goes on from there]", engine.Skim, logLimit>>20, total))
+			b.tail = []string{fmt.Sprintf("[%s: stopped after %d MiB, at line %d; the next %[1]s goes on from there]", engine.Skim, logLimit>>20, total)}
 		} else {
-			out = append(out, fmt.Sprintf("[%s: only the first %d MiB of the file were read]", engine.Skim, logLimit>>20))
+			b.tail = []string{fmt.Sprintf("[%s: only the first %d MiB of the file were read]", engine.Skim, logLimit>>20)}
 		}
 	}
+	return b, nil
+}
+
+// shapeBlocks is a skim's text. Within the limits each window is shaped on its own, numbered as its file numbers its lines; past them, the
+// windows of several are one output, so many short files cannot add up to more than one long one.
+func (s *Shell) shapeBlocks(ctx context.Context, blocks []*logBlock, d decision, tools *engine.Context) string {
+	windows := 0
+	for _, b := range blocks {
+		windows += len(b.windows)
+	}
+	if windows > 1 {
+		if text, ok := s.joined(ctx, blocks, d, tools); ok {
+			return text
+		}
+	}
+	texts := make([]string, len(blocks))
+	for i, b := range blocks {
+		out := slices.Clone(b.head)
+		d.command = "cat " + b.display
+		for _, w := range b.windows {
+			out = append(out, w.notes...)
+			rows, footer := w.fit(ctx, d, saved{path: b.display, lines: len(w.lines), holds: len(w.lines), file: true, base: w.before})
+			b.shown(w, rows, 0)
+			out = append(append(out, rowTexts(rows)...), footer...)
+		}
+		b.finish()
+		out = append(out, b.tail...)
+		if b.echoed {
+			out = append(out, s.engine.EchoNote(tools)...)
+		}
+		texts[i] = strings.Join(out, "\n")
+	}
+	return strings.Join(texts, "\n\n")
+}
+
+// joined shapes the windows of blocks as one output when together they are due for it, and says whether they were. The rows of nib's own
+// about each file are lines of that output too, which a nib log holds, and every row stands under its file's head row, which a cut repeats.
+func (s *Shell) joined(ctx context.Context, blocks []*logBlock, d decision, tools *engine.Context) (string, bool) {
+	var rows []row
+	var lines, displays []string
+	head := -1
+	own := func(text string) {
+		lines = append(lines, text)
+		r := plainRow(text, len(lines), len(lines), nil)
+		r.header = head
+		rows = append(rows, r)
+	}
+	type placed struct {
+		block  *logBlock
+		window *logWindow
+		offset int
+	}
+	var at []placed
+	echoed := false
+	for _, b := range blocks {
+		head = -1
+		for _, text := range b.head {
+			own(text)
+			if head < 0 {
+				head = len(rows) - 1
+			}
+		}
+		for _, w := range b.windows {
+			for _, note := range w.notes {
+				own(note)
+			}
+			offset := len(lines)
+			lines = append(lines, w.lines...)
+			for _, r := range w.rows(offset, offset) {
+				r.header = head
+				rows = append(rows, r)
+			}
+			at = append(at, placed{b, w, offset})
+		}
+		for _, text := range b.tail {
+			own(text)
+		}
+		if len(b.windows) > 0 {
+			displays = append(displays, b.display)
+		}
+		echoed = echoed || b.echoed
+	}
+	raw := strings.Join(lines, "\n")
+	if !shapeDue(rows, raw, d) {
+		return "", false
+	}
+	d.command = "cat " + strings.Join(displays, " ")
+	var log *saved
+	rows, footer := fit(ctx, rows, raw, d, func() saved {
+		if log == nil {
+			written := s.logs.save(raw + "\n")
+			written.joined = true
+			log = &written
+		}
+		return *log
+	})
+	for _, p := range at {
+		p.block.shown(p.window, rows, p.offset)
+	}
+	for _, b := range blocks {
+		b.finish()
+	}
+	out := append(rowTexts(rows), footer...)
 	if echoed {
 		out = append(out, s.engine.EchoNote(tools)...)
 	}
-	return strings.Join(out, "\n"), nil
+	return strings.Join(out, "\n"), true
 }
 
 // selector is the set as a read's line selector, like 1-100,207-403.
@@ -262,16 +435,6 @@ func (s lineSet) selector() string {
 	return strings.Join(parts, ",")
 }
 
-// shownIn is set with the file lines of rows' plain rows up to line limit added, before the file line before their first log line.
-func shownIn(rows []row, before, limit int, set lineSet) lineSet {
-	for _, r := range rows {
-		if r.plain && r.first > 0 && before+r.first <= limit {
-			set = set.with(before+r.first, min(before+r.last, limit))
-		}
-	}
-	return set
-}
-
 // rowTexts are the texts of rows as the agent reads them.
 func rowTexts(rows []row) []string {
 	texts := make([]string, len(rows))
@@ -281,12 +444,11 @@ func rowTexts(rows []row) []string {
 	return texts
 }
 
-// shapeLines is lines as rows numbered from 1 that shape reads as the log of their own, while every note and cut row numbers them from
-// log.base on, as the file does; footer explains cut rows, and echoed says a recurring block got markers. Rows known says the agent has
-// are left out before the cut, so its budget goes to the rest; the deciders still read every line.
-func shapeLines(ctx context.Context, lines []string, d decision, log saved, known func(row) bool) (rows []row, footer []string, echoed bool) {
+// windowItems are lines as items numbered from 1, without those known says the agent has, which shape never sees, so its budget goes to the
+// rest while the deciders still read every line; echoed says a recurring block got markers.
+func windowItems(lines []string, known func(first, last int) bool) (items []item, echoed bool) {
 	if len(lines) == 0 {
-		return nil, nil, false
+		return nil, false
 	}
 	plain := make([]engine.PlainLine, len(lines))
 	at := make([]int, len(lines))
@@ -294,16 +456,11 @@ func shapeLines(ctx context.Context, lines []string, d decision, log saved, know
 		plain[i] = engine.PlainLine{At: i + 1, Text: line}
 		at[i] = i + 1
 	}
-	items, echoed := plainItems(plain, at, make([]*listedLine, len(lines)), 0)
-	for _, it := range items {
-		r := plainRowAt(it.text, log.base+it.first, it.first, it.last, nil)
-		if known == nil || !known(r) {
-			rows = append(rows, r)
+	all, echoed := plainItems(plain, at, make([]*listedLine, len(lines)), 0)
+	for _, it := range all {
+		if !known(it.first, it.last) {
+			items = append(items, it)
 		}
 	}
-	if len(rows) == 0 {
-		return nil, nil, echoed
-	}
-	rows, footer = fit(ctx, rows, strings.Join(lines, "\n"), d, func() saved { return log })
-	return rows, footer, echoed
+	return items, echoed
 }

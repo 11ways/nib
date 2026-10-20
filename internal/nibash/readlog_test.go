@@ -202,3 +202,86 @@ func TestSeveralLogsReadInOneCallAndAMissingOneIsNotedInItsPlace(t *testing.T) {
 		t.Fatalf("all missing must fail, got %v", err)
 	}
 }
+
+// prose is lines first to last of a file named name, each about 80 bytes, with want in place of line at.
+func prose(name string, last, at int, want string) string {
+	var b strings.Builder
+	for i := 1; i <= last; i++ {
+		if i == at {
+			b.WriteString(want + "\n")
+			continue
+		}
+		fmt.Fprintf(&b, "%s line %d: a sentence of the changelog, long enough to count toward a budget\n", name, i)
+	}
+	return b.String()
+}
+
+// Fourteen short files are each within the limits but together far past them: one decider shapes them as one output, and a row it chose
+// stands under its file's head row.
+func TestManyShortFilesPastTheBudgetTogetherAreShapedAsOneOutput(t *testing.T) {
+	files := map[string]string{}
+	var paths []string
+	for i := 1; i <= 14; i++ {
+		name := fmt.Sprintf("e%02d.md", i)
+		files[name] = prose(name, 61, 0, "")
+		paths = append(paths, name)
+	}
+	files["e09.md"] = prose("e09.md", 61, 30, "RENAMED: RegistryFeed is gone")
+	f := newFixture(t, files)
+	model := pickText("RENAMED")
+	f.shell.Deciding(model)
+	out := f.readLog("what must a consuming app change", paths...)
+	if len(model.asked) != 1 || model.asked[0].Command != "cat "+strings.Join(paths, " ") {
+		t.Fatalf("asked %+v", model.asked)
+	}
+	if len(out) > budgetBytes {
+		t.Fatalf("%d bytes, past the budget of %d:\n%s", len(out), budgetBytes, out)
+	}
+	// Each file is its head row and its 61 lines, so e09.md's head is line 497 of the joined log and its line 30 is line 527.
+	if !strings.HasPrefix(out, "1|[e01.md] 61 lines, plain\n2|e01.md line 1: ") ||
+		!strings.Contains(out, "\n497|[e09.md] 61 lines, plain\n524|e09.md line 27: ") || !strings.Contains(out, "\n527|RENAMED: RegistryFeed is gone\n") {
+		t.Fatalf("read:\n%s", out)
+	}
+	closing := regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 868 log lines; m and keywords chose the middle for what you expect; N\| is a row's line in the joined files: read (\S+):A-B plain:true for others\]$`).FindStringSubmatch(out)
+	if closing == nil {
+		t.Fatalf("closing note:\n%s", out)
+	}
+	log, err := os.ReadFile(closing[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(string(log), "\n"); lines[496] != "[e09.md] 61 lines, plain" || lines[526] != "RENAMED: RegistryFeed is gone" {
+		t.Fatalf("log lines 497 and 527: %q, %q", lines[496], lines[526])
+	}
+	// The lines shown count as shown in their own file.
+	again := f.readLog("is anything removed", "e09.md")
+	if !strings.HasPrefix(again, "[e09.md] 61 lines, plain\n["+engine.Skim+": lines 27-33 left out, which your earlier "+engine.Skim+" showed]\n") {
+		t.Fatalf("again:\n%s", again)
+	}
+}
+
+// Short files within the limits apiece but past the summary's together get one summary of them all, its passage under its file's head row.
+func TestShortFilesPastTheSummaryLimitsTogetherGetOneSummary(t *testing.T) {
+	files := map[string]string{}
+	var paths []string
+	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"} {
+		files[name] = prose(name, 40, 0, "")
+		paths = append(paths, name)
+	}
+	files["d.md"] = prose("d.md", 40, 10, "REMOVED: Models.withoutIndexWait")
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "d.md removes Models.withoutIndexWait.", Ranges: [][2]int{{134, 134}}}
+	}}
+	model := pickText("REMOVED")
+	f := newFixture(t, files)
+	f.shell.Deciding(model).Summarizing(summary)
+	out := f.readLog("what was removed", paths...)
+	if len(summary.asked) != 1 || len(summary.asked[0].Log) != 246 || summary.asked[0].Log[133] != "REMOVED: Models.withoutIndexWait" || len(model.asked) != 0 {
+		t.Fatalf("asked %+v, decider %+v", summary.asked, model.asked)
+	}
+	// d.md's head is line 124 of the joined log, as each file is its head row and its 40 lines.
+	if !strings.HasPrefix(out, "<summary>d.md removes Models.withoutIndexWait.</summary>\n124|[d.md] 40 lines, plain\n133|d.md line 9: ") ||
+		!strings.Contains(out, "\n134|REMOVED: Models.withoutIndexWait\n135|d.md line 11: ") || !strings.Contains(out, "N| is a row's line in the joined files: read ") {
+		t.Fatalf("read:\n%s", out)
+	}
+}

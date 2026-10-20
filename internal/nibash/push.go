@@ -37,7 +37,7 @@ func (s *Shell) pushEnd(sess *session, j *job) {
 		body = "(no output after its call returned)"
 	case len(lines) > 0:
 		d := decision{decider: s.decider, summarizer: s.activeSummarizer(), command: j.command, purpose: purpose(j.purpose), exit: j.exit}
-		rows, footer, echoed := shapeLines(ctx, lines[j.shown:], d, saved{path: j.log, lines: len(lines), holds: len(lines), base: j.shown}, nil)
+		rows, footer, echoed := shapeLines(ctx, lines[j.shown:], d, saved{path: j.log, lines: len(lines), holds: len(lines), base: j.shown})
 		texts := append(rowTexts(rows), footer...)
 		if echoed {
 			texts = append(texts, engine.EchoLesson)

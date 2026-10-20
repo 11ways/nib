@@ -537,6 +537,16 @@ window's before they are checked, so a summary that names a line names the one t
 is the recorded one. The decision gives the models `cat PATH` as the command, `expect` as the purpose and exit status 0,
 so the prompts stay those the answers were recorded with; notes say `for what you expect`.
 
+The limits hold for the whole call, not for each window: many short files can add up to far more than one long one,
+and each would print whole on its own. So `shapeBlocks` first lays out every file's window, and when a call has
+several windows whose rows together are due for `shape` (`shapeDue`: past the budget, or due a summary), `joined`
+makes them one output: each file's head row and notes are lines of it, under which the file's lines follow, and it
+goes to `fit` once, with `cat` of every path as the command, so one decider call and one summary serve the whole
+call. Its log is a nib log of its own (`saved.joined`: notes say `skim`, the whole is `joined files`), cut rows are
+numbered with its lines, and a row shown without its file's head row gets that row first (`gapped`, as `fixedCut`
+repeats a file header), so every row stays under the file it came from. The lines shown still count as shown in
+their own files. Within the limits, each window is shaped alone and numbered as its file numbers its lines.
+
 Each agent's shell session remembers, per file read whole, its size, its first 4 KiB, the whole lines read and the
 offset after them, and how much of a last line without its line break was shown. The next whole read starts at that
 offset, so the window is what was added, numbered after the lines already read; nothing added, or the same unfinished

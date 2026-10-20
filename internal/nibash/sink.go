@@ -299,13 +299,12 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 
 // fit brings rows within the budget and saves the log when it cuts them or a row was cut at rowLimit; footer explains cut rows.
 func fit(ctx context.Context, rows []row, raw string, d decision, save func() saved) ([]row, []string) {
-	over := len(rows) > budgetLines || size(rows) > budgetBytes
-	summarize := d.summarizer != nil && summaryDue(rows, raw)
-	if !over && !summarize && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
+	due := shapeDue(rows, raw, d)
+	if !due && !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
 		return rows, nil
 	}
 	log := save()
-	if over || summarize {
+	if due {
 		rows = shape(ctx, rows, raw, log, d)
 	}
 	if !slices.ContainsFunc(rows, func(r row) bool { return r.capped }) {
@@ -323,6 +322,14 @@ func cutFooter(log saved, teach func(lesson string) bool) string {
 		return fmt.Sprintf("[cut rows: read %s:N whole]", log.path)
 	}
 	return fmt.Sprintf("[cut rows: N is the row's line in the %s; read %s:N with maxLineLength to see one whole]", log.whole(), log.path)
+}
+
+// overBudget says whether rows are past budgetLines or budgetBytes.
+func overBudget(rows []row) bool { return len(rows) > budgetLines || size(rows) > budgetBytes }
+
+// shapeDue says whether rows go to shape: past the budget, or due a summary.
+func shapeDue(rows []row, raw string, d decision) bool {
+	return overBudget(rows) || d.summarizer != nil && summaryDue(rows, raw)
 }
 
 // summaryDue says whether output gets a summary: past summaryLines or summaryBytes, or past lower limits the more it shrinks under dedupe.
@@ -477,8 +484,9 @@ func size(rows []row) int {
 	return n
 }
 
-// row is one rendered row; header is the index of the file header an anchored row sits under, -1 for a plain row or a header itself. first and
-// last are the log lines it stands for, 0 for a row of nib's own such as a file header; capped marks a plain row cut at rowLimit.
+// row is one rendered row; header is the index of the file header an anchored row, or a plain row of joined skim output, sits under, -1 for
+// other plain rows and a header itself. first and last are the log lines it stands for, 0 for a row of nib's own such as a file header;
+// capped marks a plain row cut at rowLimit.
 type row struct {
 	text        string
 	header      int
@@ -712,17 +720,18 @@ func (l *logDirectory) holds(path string) bool {
 }
 
 // saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds. A
-// file read with skim is its own log, whose notes name skim and number its lines from base on: the log's line N is the file's base+N.
+// file read with skim is its own log, whose notes name skim and number its lines from base on: the log's line N is the file's base+N. The
+// files of a skim shaped together are joined in a log of their own, whose notes name skim too.
 type saved struct {
 	path         string
 	lines, holds int
-	file         bool
+	file, joined bool
 	base         int
 }
 
 // note is a row of nib's own about the log.
 func (l saved) note(text string) string {
-	if l.file {
+	if l.file || l.joined {
 		return "[" + engine.Skim + ": " + text + "]"
 	}
 	return "[nibash: " + text + "]"
@@ -730,8 +739,11 @@ func (l saved) note(text string) string {
 
 // whole names what the log holds.
 func (l saved) whole() string {
-	if l.file {
+	switch {
+	case l.file:
 		return "whole file"
+	case l.joined:
+		return "joined files"
 	}
 	return "whole output"
 }

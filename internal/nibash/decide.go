@@ -30,7 +30,7 @@ func purpose(description string) string {
 // decider asked unless the summary fails; a longer one goes as the excerpt of the decider's picks. Without a summary, output within the
 // budget stays whole. A decision model and a summarizer read the output deduplicated (dedupe); the agent still gets its real rows.
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
-	over := len(rows) > budgetLines || size(rows) > budgetBytes
+	over := overBudget(rows)
 	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })
 	model := d.decider != nil && d.decider.Kind() == decider.OpenRouter
 	var lines []string
@@ -437,11 +437,25 @@ func summaryText(text string) string {
 }
 
 // gapped is the rows keep marks, each numbered with the log lines it stands for, so the numbers show every gap; a gap that starts at a note
-// gets the note, and one whose rows stand for no log line a row counting them.
+// gets the note, and one whose rows stand for no log line a row counting them. A kept row under a header row (a file's head in joined skim
+// output) that is not the last one shown gets it first.
 func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
+	heads := map[int]bool{}
+	for _, r := range rows {
+		if r.header >= 0 {
+			heads[r.header] = true
+		}
+	}
 	var out []row
+	under := -1
 	for i := 0; i < len(rows); {
 		if keep[i] {
+			if h := rows[i].header; heads[i] {
+				under = i
+			} else if h >= 0 && h != under {
+				out = append(out, log.numbered(rows[h]))
+				under = h
+			}
 			out = append(out, log.numbered(rows[i]))
 			i++
 			continue

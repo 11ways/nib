@@ -198,7 +198,11 @@ What an agent was shown no longer counts once its context is compacted or cleare
 4 KiB changed is read whole again and says so. A selector (`run.log:200-900`, `run.log:-500`) reads those lines, an open
 range to the end, leaves nothing out, and leaves where the next whole skim goes on alone; the lines it shows count as
 shown.
-Several files are read in one call, a missing one noted in its place; at most 64 MiB of a file is read per call.
+Several files are read in one call, a missing one noted in its place; at most 64 MiB of a file is read per call. The
+limits hold for the call, not for each file: files that are short apiece but past them together are shaped as one
+output, one decider or summary serving them all, each file's head row a line of it that a row shown without it gets
+first, and their rows numbered as lines of a log joining them (`N| is a row's line in the joined files: read LOG:A-B
+plain:true for others`).
 `expect` is required. `read` itself never takes it, so a read always gives rows to edit from.
 
 #### Changes since a tag

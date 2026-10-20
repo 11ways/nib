@@ -25,13 +25,13 @@ func shapeLog(ctx context.Context, raw []byte, path, command, description string
 		return "(no output)", nil
 	}
 	d := decision{decider: choose, summarizer: summarizer, command: command, purpose: purpose(description), exit: exit}
-	rows, footer, echoed := shapeLines(ctx, lines, d, saved{path: path, lines: len(lines), holds: len(lines)}, nil)
+	rows, footer, echoed := shapeLines(ctx, lines, d, saved{path: path, lines: len(lines), holds: len(lines)})
 	texts := append(rowTexts(rows), footer...)
 	// No agent is known here, so a recurring block's markers are always explained.
 	if echoed {
 		texts = append(texts, engine.EchoLesson)
 	}
-	return strings.Join(texts, "\n"), shownIn(rows, 0, len(lines), nil)
+	return strings.Join(texts, "\n"), shownIn(rows, 0, len(lines), 0, len(lines), nil)
 }
 
 // Shape is ShapeLog with this server's deciders, as nib shape asks it through the session's socket: summaries follow the server's switch,
