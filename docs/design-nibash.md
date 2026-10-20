@@ -60,7 +60,7 @@ internal/tag/       file tag (oh-my-pi file_hash), pinned vectors
 internal/js/        JavaScript string semantics (UTF-16 lengths, JS whitespace) that nib's output rules were defined with
 internal/diff/      port of jsdiff's diffArrays, pinned against jsdiff on a corpus
 internal/snapshots/ per-session versions, seen and known lines, remapping, shifted-line rescue
-internal/patch/     patch language parser, pinned against the TypeScript parser on a corpus
+internal/patch/     patch language parser, pinned on a corpus that began as the TypeScript parser's answers
 internal/names/     named directories: configuration, automatic names, expansion and display
 internal/engine/    read, grep, find, edit, write
 internal/nibash/    interpreter wiring, sessions, stage classification, record links, nib commands, the terminal sink, jobs, sandbox

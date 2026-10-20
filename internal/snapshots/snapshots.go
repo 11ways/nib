@@ -49,7 +49,8 @@ const (
 // Tail is the start and end of an edit that appends after whatever the last line is when applied.
 const Tail = int(^uint(0) >> 2)
 
-// LineEdit is one edit in 1-based line coordinates; see the TypeScript LineEdit for what each field means.
+// LineEdit is one edit in 1-based line coordinates; see the TypeScript LineEdit for what each field means. Import is an IMPORT's name,
+// which nib places among the file's imports itself, so the edit depends on no line the agent saw.
 type LineEdit struct {
 	Start, End int
 	Operation  Operation
@@ -64,6 +65,7 @@ type LineEdit struct {
 	Opaque     bool
 	Old        []string
 	Written    string
+	Import     string
 }
 
 const (

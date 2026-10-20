@@ -77,6 +77,13 @@ reads the file as asked, though a minified file still gets shorter lines.
 - **Minified lines.** When a range read of a minified file has lines over 300 characters and no `maxLineLength` was
   passed, its lines are cut at 300 characters instead of 2000, and the header says so; passing `maxLineLength` restores
   the usual cut.
+- **Imports.** In a Java or Kotlin file, a read whose rows go past a run of 10 or more imports (blank lines between them
+  included) shows that run as one row per package with the names it imports, instead of one row per import:
+  `[lines 3-111: 105 imports, by package; read PATH:3-111 for their lines]`, then rows like
+  `[java.util: ArrayList, HashMap, List]`, `[static org.junit.Assert: assertEquals]` and
+  `[be.example.orm.query.criteria: *]`. On a real file of 105 imports the rows go from 6,324 bytes to 2,922, about
+  1,800 tokens to 830. The folded lines are not seen, so an edit of them is refused until they are read; a range that
+  ends within the imports, like `PATH:3-111`, shows them as rows, and `IMPORT` adds one without reading any.
 - **Outlines.** Code files over 200 lines or 8 KiB, whose outline is at most a third of their length, and any file over
   500 lines or 20 KiB return `[PATH#TAG] N lines, about Xk tokens; outline only...` followed by real `LINE:TEXT` rows:
   every top-level code line, plus the first-level members of top-level classes, interfaces, structs, enums, traits,
@@ -442,8 +449,9 @@ REM
 | `REM` | Delete the file; must be the only operation in its section, and needs a current tag. |
 | `MV DEST` | After the section's edits, write the file to `DEST` (missing parents are created) and delete the source. Refuses an existing destination. |
 | `CP DEST` | Like `MV DEST`, but the source stays as it was: the section's edits land only in `DEST`, which keeps the source's mode. The response gives the copy's tag, and the copy inherits what the agent saw and knew of the source, so it can be edited right away. |
+| `IMPORT NAME, ...` | In a Java or Kotlin file, add an import for each name (`a.b.C`, `a.b.*`, `static a.b.C.m`, Kotlin's `a.b.C as D`; `import` and `;` may be written too) where the file keeps its own: beside the imports that share most of its package, in their alphabetical order, else after the last import, else after the package line. It depends on no line the agent saw and needs no tag. An import the file has, or that another hunk of the patch writes, adds nothing and gets a note; one whose simple name another import already brings in is refused, since the two would clash. |
 | `*** Add File: PATH` | Create a file from the `+` rows that follow; refuses an existing path. |
-| `[PATH]` | A section header without `#TAG`; it may only append with `PUT >$:`. |
+| `[PATH]` | A section header without `#TAG`; it may only append with `PUT >$:` and add imports with `IMPORT`. |
 
 - Line numbers refer to the tagged output and are never shifted by earlier hunks. Hunks are sorted by position (after
   block ends are resolved) and must not overlap: a line can be replaced by one hunk only, two hunks cannot insert at the
@@ -542,6 +550,18 @@ REM
   `and its rows go on from there as line 3, so the range started one line late.`
   A line another hunk anchors is never taken in. In a Hawkeye template (`.hwk`) only its comments, `{# #}` and
   `<!-- -->`, are left out: its text is prose, where an apostrophe opens no string.
+- An edit that leaves a file in a language nib parses (see declared names under [read](#read)) no longer parsing, when
+  it parsed before, warns with the line of the first error (`The file no longer parses as Java: ...`); files over 512 KiB
+  are not parsed for this, and a parse of a file of a few hundred lines takes a few milliseconds.
+- An edit to a Java file whose new rows use a class by a name that nothing in the file imports or declares, that
+  `java.lang` does not hold and that the file did not mention before, warns with the class nib finds by that name: the
+  Java or Kotlin files named after it in the workspace roots, read for their package. One class gives the hunk that adds
+  it (`[PATH]` and `IMPORT be.example.common.Clock`); several are listed; none, a class in the file's own package or a
+  package it imports with `*`, says nothing. A wildcard import of a package with no source file in the workspace (a
+  library's), a static wildcard import, a module import, or a file with no top-level class (a compact source file)
+  turns the check off, since nib cannot tell what those bring in. Names count as classes by Java's naming: a capital
+  first and a small letter in them, in a type, an annotation, a `new`, a cast, a `catch`, a method reference or before a
+  call or field (`Duration.ofSeconds`).
 - An edit or write that leaves a `.json` file unsound, when it was sound before or is new, warns with the first fault
   and its line: a syntax error, or a key that repeats within one object
   (`The file is not valid JSON now: line 4: key "save" repeats in its object (first on line 2).`), which parsers resolve

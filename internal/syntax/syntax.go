@@ -30,12 +30,14 @@ var ErrNotABlock = errors.New("not a multi-line block")
 type Range struct{ Start, End int }
 
 // declaration is one name a file declares: its lines, from the comments and attributes above it through its end; the enclosing declaration
-// (-1 for none); the type it belongs to though declared outside it (a Go method's receiver); and whether its lines parsed cleanly.
+// (-1 for none); the type it belongs to though declared outside it (a Go method's receiver); what it declares; and whether its lines parsed
+// cleanly.
 type declaration struct {
 	name   string
 	lines  Range
 	parent int
 	owner  string
+	kind   kind
 	broken bool
 }
 
@@ -63,6 +65,14 @@ func parse(path string, src []byte) (*tree, error) {
 
 // Supported reports whether nib has a grammar for the file at path.
 func Supported(path string) bool { return languageOf(path) != nil }
+
+// Language is the name of the language of the file at path, "" when nib has no grammar for it.
+func Language(path string) string {
+	if l := languageOf(path); l != nil {
+		return l.name
+	}
+	return ""
+}
 
 // Find is the lines of each declaration of symbol in src, the file at path, where Outer.inner names inner declared directly inside Outer (or
 // belonging to it, as a Go method to its receiver's type); a bare name takes the declarations at the least depth, so overloads come together.
@@ -158,7 +168,7 @@ func (t *tree) declarations() []declaration {
 					at := len(found)
 					lines := t.span(c)
 					for _, name := range names {
-						found = append(found, declaration{name: name, lines: lines, parent: parent, owner: owner, broken: c.HasError()})
+						found = append(found, declaration{name: name, lines: lines, parent: parent, owner: owner, kind: r.kind, broken: c.HasError()})
 					}
 					walk(c, at, r.kind == function)
 					continue

@@ -42,6 +42,7 @@ var (
 	sub          = regexp.MustCompile(`(?s)^SUB ([1-9][0-9]*): (.+)$`)
 	move         = regexp.MustCompile(`^MV (.+)$`)
 	copyLine     = regexp.MustCompile(`^CP (.+)$`)
+	importLine   = regexp.MustCompile(`^IMPORT (.+)$`)
 	tagLike      = regexp.MustCompile(`#[0-9A-Za-z]*$`)
 	contaminated = []struct {
 		pattern *regexp.Regexp
@@ -167,7 +168,7 @@ func Parse(input string) ([]*Section, error) {
 			continue
 		}
 		if len(section.Edits) == 0 && !section.Remove && section.Move == "" && section.Copy == "" {
-			problems = append(problems, fmt.Sprintf("Section [%s%s] has no PUT, CUT, SUB, REM, MV or CP", section.Path, tagSuffix(section.Tag)))
+			problems = append(problems, fmt.Sprintf("Section [%s%s] has no PUT, CUT, SUB, IMPORT, REM, MV or CP", section.Path, tagSuffix(section.Tag)))
 		}
 		slices.SortStableFunc(section.Edits, func(a, b snapshots.LineEdit) int {
 			pa, pb := position(a), position(b)
@@ -305,6 +306,19 @@ func parseLine(line string, at int, current **Section, sections *[]*Section, row
 		}
 		return
 	}
+	// IMPORT names what to import, a list with commas; nib places each among the file's imports, so it needs no tag and no line.
+	if im := importLine.FindStringSubmatch(line); im != nil {
+		for _, spec := range strings.Split(im[1], ",") {
+			if js.Trim(spec) == "" {
+				fail(at, "IMPORT takes names with commas between them, like IMPORT java.util.List, java.util.Map")
+			}
+			section.Edits = append(section.Edits, snapshots.LineEdit{Start: snapshots.Tail, End: snapshots.Tail, Operation: snapshots.After, Edge: true, Content: []string{}, Import: js.Trim(spec)})
+		}
+		if *index < last && len(lines[*index]) > 0 && strings.ContainsRune("-+~", rune(lines[*index][0])) {
+			fail(at, "IMPORT takes no + - or ~ rows; nib writes the import line itself")
+		}
+		return
+	}
 	var edit snapshots.LineEdit
 	checks := 1
 	body := true
@@ -369,7 +383,7 @@ func parseLine(line string, at int, current **Section, sections *[]*Section, row
 	default:
 		hint, ok := hintFor(line)
 		if !ok {
-			hint = "expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header"
+			hint = "expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, IMPORT NAME, REM, MV DEST, CP DEST, or a new section header"
 		}
 		fail(at, hint)
 	}

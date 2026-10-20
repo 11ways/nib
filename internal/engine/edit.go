@@ -1473,10 +1473,12 @@ type staged struct {
 	applied  applied
 	result   *text
 	warnings []string
-	bytes    []byte
-	created  snapshots.View
-	replace  *held
-	kept     []string
+	// notes say what an IMPORT did instead of adding a line.
+	notes   []string
+	bytes   []byte
+	created snapshots.View
+	replace *held
+	kept    []string
 }
 
 func hardlinked(h *held) bool { return h.links > 1 }
@@ -1485,6 +1487,8 @@ var errHardlinked = errors.New("Hardlinked targets are not supported; refusing t
 
 func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error) {
 	r, t := h.request, h.target
+	// IMPORT edits are placed among the file's imports as it is, so they depend on no line the agent saw, and on no tag.
+	requestedEdits, imports := splitImports(r.edits)
 	if h.destination != nil {
 		if err := destinationFree(h.destination); err != nil {
 			return nil, err
@@ -1513,19 +1517,25 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 	finish := func(edits []snapshots.LineEdit, warnings []string) (*staged, error) {
 		edits, fixes := extendSlips(h.target.canonical, source, edits)
 		warnings = append(warnings, fixes...)
+		edits, notes, err := placeImports(t.canonical, live.Lines, edits, imports)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", t.display, err)
+		}
 		result := applyChanges(source, rawChanges(source, edits))
 		if bytes.Equal(result.bytes, current.bytes) && r.move == "" && r.copy == "" {
-			return &staged{kind: stagedNoop, handle: h, source: source, live: live, prior: prior, applied: result}, nil
+			return &staged{kind: stagedNoop, handle: h, source: source, live: live, prior: prior, applied: result, notes: notes}, nil
 		}
 		decoded, err := decodeText(result.bytes)
 		if err != nil {
 			return nil, err
 		}
-		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, warnings: slices.Concat(warnings, offByOne(source, edits, result), swallowed(source, edits, result), unbalanced(h.target.canonical, source, edits, result), jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)))}, nil
+		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, notes: notes,
+			warnings: slices.Concat(warnings, offByOne(source, edits, result), swallowed(source, edits, result), unbalanced(h.target.canonical, source, edits, result),
+				jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)), codeWarnings(ctx, t, source, result))}, nil
 	}
-	// A tagless section only appends, which depends on nothing but where the file ends.
-	if r.tag == nil {
-		return finish(snapshots.ResolveEdges(r.edits, len(live.Lines)), nil)
+	// A tagless section only appends, which depends on nothing but where the file ends, and IMPORTs alone on nothing at all.
+	if r.tag == nil || len(requestedEdits) == 0 && len(imports) > 0 && !r.remove && r.move == "" && r.copy == "" {
+		return finish(snapshots.ResolveEdges(requestedEdits, len(live.Lines)), nil)
 	}
 	tagValue := *r.tag
 	var tagged []*snapshots.Version
@@ -1546,7 +1556,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		allSafe := true
 		allEdge := true
 		var anchors []int
-		for _, e := range r.edits {
+		for _, e := range requestedEdits {
 			allSafe = allSafe && safe(e)
 			allEdge = allEdge && e.Edge
 			anchors = append(anchors, snapshots.AnchorLines(e)...)
@@ -1593,7 +1603,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		return top > length
 	}
 	var beyond, within []snapshots.LineEdit
-	for _, e := range r.edits {
+	for _, e := range requestedEdits {
 		if past(e) {
 			beyond = append(beyond, e)
 		} else {
@@ -1914,6 +1924,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	switch item.kind {
 	case stagedNoop:
 		if len(item.applied.runs) == 0 {
+			if len(item.notes) > 0 {
+				return response{strings.Join(append([]string{fmt.Sprintf("[%s#%s]", display, item.live.Tag)}, item.notes...), "\n"), nothing}
+			}
 			return response{fmt.Sprintf("[%s#%s]\nNo changes: the edit reproduces the current content; this tag is still current.", display, item.live.Tag), nothing}
 		}
 		// The lines come back whole, so an edit that keeps landing as it already is shows what the file holds.
@@ -1934,6 +1947,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		lines := []string{fmt.Sprintf("[%s#%s]", display, item.live.Tag), "No changes: these lines already read as the edit writes them; this tag is still current."}
 		lines = append(lines, rows.output...)
 		lines = append(lines, rowNotes(display, rows.marks)...)
+		lines = append(lines, item.notes...)
 		if unterminated {
 			lines = append(lines, fmt.Sprintf("[%s has no final newline, which an edit keeps; %s]", display, finalNewlineHint))
 		}
@@ -2045,6 +2059,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		output = append(output, fmt.Sprintf("[%s now ends with a newline]", shownDisplay))
 	}
 	output = append(output, rowNotes(shownDisplay, rows.marks)...)
+	output = append(output, item.notes...)
 	if rows.moved && store.Teach(ctx.Session, "moved") {
 		output = append(output, movedLesson)
 	}

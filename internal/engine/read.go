@@ -1637,7 +1637,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 				for i := range rows {
 					rows[i] = rowFor(i + 1)
 				}
-				rows = held(rows)
+				rows = foldImports(name, t.canonical, anchored.Lines, held(rows))
 				return &block{
 					head: fmt.Sprintf("%s %s; first %d lines only. Continue with %s:%d-, or grep it.", head, sizeText, count, name, count+1),
 					rows: rows,
@@ -1665,7 +1665,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 		}
 		last = r.end
 	}
-	rows = held(rows)
+	rows = foldImports(name, t.canonical, anchored.Lines, held(rows))
 	return &block{head: head, rows: rows, finish: func(shown int) []string {
 		record(rows[:shown])
 		notes := cuts(rows[:shown])

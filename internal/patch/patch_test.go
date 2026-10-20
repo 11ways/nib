@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,9 @@ func shape(sections []*Section) []any {
 			if e.Written != "" {
 				edit["written"] = e.Written
 			}
+			if e.Import != "" {
+				edit["import"] = e.Import
+			}
 			edits = append(edits, edit)
 		}
 		section["edits"] = edits
@@ -65,8 +69,9 @@ func toAny(lines []string) []any {
 	return out
 }
 
-// testdata/corpus.json holds patches with what the TypeScript parser returned for them, or its error message.
-func TestParseMatchesTypeScriptParser(t *testing.T) {
+// testdata/corpus.json holds patches with what nib's parser returns for them, or its error message; it began as the TypeScript parser's
+// answers, which nib's language has grown past.
+func TestParseMatchesCorpus(t *testing.T) {
 	data, err := os.ReadFile("testdata/corpus.json")
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +100,36 @@ func TestParseMatchesTypeScriptParser(t *testing.T) {
 			gotJSON, _ := json.Marshal(got)
 			wantJSON, _ := json.Marshal(c.Sections)
 			t.Errorf("Parse(%q)\n got %s\nwant %s", c.Input, gotJSON, wantJSON)
+		}
+	}
+}
+
+func TestImportTakesNamesAndNeedsNoTag(t *testing.T) {
+	sections, err := Parse("[A.java]\nIMPORT java.util.List, static org.junit.Assert.assertEquals\n[B.java#ABCD]\nPUT 2:\n+x\nIMPORT a.B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := shape(sections)
+	want := []any{
+		map[string]any{"kind": "edit", "path": "A.java", "line": float64(1), "edits": []any{
+			map[string]any{"start": float64(-1), "end": float64(-1), "edge": "tail", "operation": "after", "content": []any{}, "import": "java.util.List"},
+			map[string]any{"start": float64(-1), "end": float64(-1), "edge": "tail", "operation": "after", "content": []any{}, "import": "static org.junit.Assert.assertEquals"},
+		}},
+		map[string]any{"kind": "edit", "path": "B.java", "tag": "ABCD", "line": float64(3), "edits": []any{
+			map[string]any{"start": float64(2), "end": float64(2), "operation": "replace", "content": []any{"x"}},
+			map[string]any{"start": float64(-1), "end": float64(-1), "edge": "tail", "operation": "after", "content": []any{}, "import": "a.B"},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.Marshal(got)
+		t.Fatalf("got %s", gotJSON)
+	}
+	for input, message := range map[string]string{
+		"[A.java]\nIMPORT a.B\n+import a.B;": "IMPORT takes no + - or ~ rows",
+		"[A.java]\nIMPORT a.B,,c.D":          "IMPORT takes names with commas between them",
+	} {
+		if _, err := Parse(input); err == nil || !strings.Contains(err.Error(), message) {
+			t.Errorf("%q: %v", input, err)
 		}
 	}
 }

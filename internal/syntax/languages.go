@@ -36,12 +36,16 @@ type rule struct {
 
 // language is one grammar and what its trees declare. above are node types that belong to the declaration below them (comments,
 // attributes, decorators); wrappers are node types that wrap one declaration with lines of their own (export, decorators, template<>).
+// imports is how its import declarations read, nil where nib reads none, and types the node types that name a type, nil where nib does
+// not tell type names apart.
 type language struct {
 	name     string
 	grammar  func() *ts.Language
 	rules    map[string]rule
 	above    map[string]bool
 	wrappers map[string]bool
+	imports  *imports
+	types    *typeNodes
 }
 
 // languages are the grammars nib parses, by file extension: the one home of that mapping.
@@ -59,6 +63,11 @@ var languages = func() map[string]*language {
 		"field_declaration":                   {variable, declarators("declarator")},
 		"constant_declaration":                {variable, declarators("declarator")},
 		"enum_constant":                       {variable, field("name")},
+	}, imports: jvmImports(true, true, false, true, javaLang), types: &typeNodes{
+		name: "type_identifier", scoped: "scoped_type_identifier", parameter: "type_parameter",
+		annotations: set("marker_annotation", "annotation"),
+		receivers:   map[string]string{"method_invocation": "object", "field_access": "object"},
+		references:  "method_reference",
 	}}
 	kotlinLike := &language{name: "Kotlin", grammar: kotlin.Language, above: set("line_comment", "multiline_comment"), wrappers: set(), rules: map[string]rule{
 		"class_declaration":    {container, child("type_identifier")},
@@ -68,7 +77,7 @@ var languages = func() map[string]*language {
 		"property_declaration": {variable, path("variable_declaration", "simple_identifier")},
 		"type_alias":           {variable, child("type_identifier")},
 		"enum_entry":           {variable, child("simple_identifier")},
-	}}
+	}, imports: jvmImports(false, false, true, false, nil)}
 	script := func(name string, grammar func() *ts.Language) *language {
 		return &language{name: name, grammar: grammar, above: set("comment", "decorator"), wrappers: set("export_statement"), rules: map[string]rule{
 			"function_declaration":           {function, field("name")},

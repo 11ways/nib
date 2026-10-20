@@ -403,7 +403,7 @@
  },
  {
   "input": "*** Begin Patch\n[a.ts#ABCD]\n*** End Patch",
-  "error": "Section [a.ts#ABCD] has no PUT, CUT, SUB, REM, MV or CP"
+  "error": "Section [a.ts#ABCD] has no PUT, CUT, SUB, IMPORT, REM, MV or CP"
  },
  {
   "input": "*** Begin Patch\n*** End Patch",
@@ -642,11 +642,11 @@
  },
  {
   "input": "foo\nbar",
-  "error": "Patch line 1: expected a [PATH#TAG] header or *** Add File: PATH; got \"foo\"\nPatch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"bar\""
+  "error": "Patch line 1: expected a [PATH#TAG] header or *** Add File: PATH; got \"foo\"\nPatch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, IMPORT NAME, REM, MV DEST, CP DEST, or a new section header; got \"bar\""
  },
  {
   "input": "[a.ts#ABCD]\nPUT 1.=1:\n+x\ngarbage\n+y\n[b.ts#ABCD]\nCUT 2",
-  "error": "Patch line 4: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"garbage\""
+  "error": "Patch line 4: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, IMPORT NAME, REM, MV DEST, CP DEST, or a new section header; got \"garbage\""
  },
  {
   "input": "[a.ts#ABCD]\n  REM  ",
@@ -734,11 +734,11 @@
  },
  {
   "input": "[a.ts#ABCD]\nPUT 0:\n+x",
-  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"PUT 0:\""
+  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, IMPORT NAME, REM, MV DEST, CP DEST, or a new section header; got \"PUT 0:\""
  },
  {
   "input": "[a.ts#ABCD]\nCUT 01",
-  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, REM, MV DEST, CP DEST, or a new section header; got \"CUT 01\""
+  "error": "Patch line 2: expected PUT N.=M:, PUT N:, PUT N*:, PUT <N:, PUT >N:, PUT >N*:, PUT >$:, CUT N.=M, CUT N, CUT N*, SUB N: OLD, IMPORT NAME, REM, MV DEST, CP DEST, or a new section header; got \"CUT 01\""
  },
  {
   "input": "[a.ts#ABCD]\n~early\nPUT 1:\n+x",
