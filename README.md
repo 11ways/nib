@@ -502,7 +502,8 @@ REM
   the new rows nearly matches the first new row (the range started one line late, as when `PUT 66.=70:` rewrites a
   header that sits on line 65), or the kept line just below nearly matches the last new row (it ended one line early).
   Lines count as alike when their common start and end, indentation aside, make up at least 75% of the longer one; lines
-  under 12 characters never count. A new row that is even more like the line it replaced, as in an ordinary rewrite,
+  under 12 characters count only when they are the same apart from indentation and hold a letter or digit (a repeated
+  `cancel()`, never a blank line or a lone `}`). A new row that is even more like the line it replaced, as in an ordinary rewrite,
   raises nothing. The warning ends with the hunks that undo the slip under the new tag: for a late start, `CUT` of the
   kept line plus a `PUT >N:` that puts back the line the range overwrote; for an early end, `CUT` of the kept line.
 - A replace that drops one edge line of its range still applies, with a warning, when the range likely ran one line too
@@ -520,6 +521,11 @@ REM
   line just above), and widening the range by that one line, and no other widening, keeps the brackets balanced, the
   edit replaces the wider range and says so
   (`The edit of lines 1-2 replaced lines 1-3: its last new row repeats line 3, which would have stayed below it with the brackets unbalanced, so the range ended one line early.`).
+  It is just as certain when the rows are a copy taken one line too far: the first new row equals the line just above
+  the range and holds a letter or digit, and the next row is the range's own first line (or, at the end, the last row
+  equals the line just below and the row before it is the range's last line), as when `PUT 3.=4:` starts with line 2's
+  `cancel()` and goes on with line 3's `c.killAll()`. The range then takes that line in, with the same note ending
+  `and its rows go on from there as line 3, so the range started one line late.`
   A line another hunk anchors is never taken in. In a Hawkeye template (`.hwk`) only its comments, `{# #}` and
   `<!-- -->`, are left out: its text is prose, where an apostrophe opens no string.
 - An edit or write that leaves a `.json` file unsound, when it was sound before or is new, warns with the first fault

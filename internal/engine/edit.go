@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/js"
@@ -645,6 +646,18 @@ func alike(a, b string) float64 {
 	return float64(start+end) / float64(max(len(x), len(y)))
 }
 
+// likeness is alike, except that two lines too short for alike to judge count as the same (1) when they match apart from indentation and
+// hold a letter or digit, as a repeated short statement would.
+func likeness(a, b string) float64 {
+	if score := alike(a, b); score > 0 {
+		return score
+	}
+	if js.Trim(a) == js.Trim(b) && meaningful(a) {
+		return 1
+	}
+	return 0
+}
+
 // offByOne warns about replaced ranges that look one line off: the kept line next to the new rows nearly matches the new edge row. Each warning
 // carries the hunks that undo the slip, since a model told only that a range was off tends to delete the wrong line.
 func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string {
@@ -661,12 +674,12 @@ func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string
 		}
 		at, length := result.runs[index].at, result.runs[index].length
 		first, last := edit.Content[0], edit.Content[len(edit.Content)-1]
-		if above, ok := kept(at - 1); ok && alike(above, first) >= alikeThreshold && alike(above, first) > alike(lineContent(source.lines[edit.Start-1]), first) {
+		if above, ok := kept(at - 1); ok && likeness(above, first) >= alikeThreshold && likeness(above, first) > likeness(lineContent(source.lines[edit.Start-1]), first) {
 			// Shifted down by one, the range kept the line it meant to replace and overwrote the line after its end.
 			overwritten := lineContent(source.lines[edit.End-1])
 			warnings = append(warnings, fmt.Sprintf("Lines %d and %d now nearly match: line %d was kept just above an edit and line %d is the edit's first new line. If the edit was meant to replace line %d, its range started one line late and overwrote the line below it instead; these hunks, with the new tag, delete line %d and put that line back:\nCUT %d\nPUT >%d:\n+%s", at, at+1, at, at+1, at, at, at, at+length, overwritten))
 		}
-		if below, ok := kept(at + length); ok && alike(below, last) >= alikeThreshold && alike(below, last) > alike(lineContent(source.lines[edit.End-1]), last) {
+		if below, ok := kept(at + length); ok && likeness(below, last) >= alikeThreshold && likeness(below, last) > likeness(lineContent(source.lines[edit.End-1]), last) {
 			warnings = append(warnings, fmt.Sprintf("Lines %d and %d now nearly match: line %d is an edit's last new line and line %d was kept just below it. If the edit was meant to replace line %d, its range ended one line early; this hunk, with the new tag, deletes it:\nCUT %d", at+length, at+length+1, at+length, at+length+1, at+length+1, at+length+1))
 		}
 	}
@@ -882,9 +895,10 @@ func rawChanges(source *text, edits []snapshots.LineEdit) []rawEdit {
 	return changes
 }
 
-// extendSlips widens a replaced range by the line just past it when the model's rows end (or start) with that very line and only the wider
-// range keeps a file whose brackets balanced balanced: the range ended one line early (or started one late), the slip offByOne cannot see on
-// a line as short as a closing brace. It corrects only when exactly one such widening restores the balance, and says what it did.
+// extendSlips widens a replaced range by the line just past it when the model's rows end (or start) with that very line, the range having ended
+// one line early (or started one late), and the widening is proven: only the wider range keeps a file whose brackets balanced balanced, which
+// catches the slip on a line as short as a closing brace; or the rows go on past that line as the range's own edge line, as a copy of the
+// lines from one line too far would, which catches it on a statement. It corrects only when exactly one widening is proven, and says what it did.
 func extendSlips(file string, source *text, edits []snapshots.LineEdit) ([]snapshots.LineEdit, []string) {
 	count := bracketCounter(file)
 	total := func(lines []string) brackets {
@@ -898,9 +912,7 @@ func extendSlips(file string, source *text, edits []snapshots.LineEdit) ([]snaps
 	balanced := func(candidate []snapshots.LineEdit) bool {
 		return total(appliedLines(applyChanges(source, rawChanges(source, candidate)))) == brackets{}
 	}
-	if total(lines) != (brackets{}) || balanced(edits) {
-		return edits, nil
-	}
+	byBrackets := total(lines) == (brackets{}) && !balanced(edits)
 	touched := func(skip, line int) bool {
 		for j, other := range edits {
 			if j != skip && (slices.Contains(snapshots.AnchorLines(other), line) || other.Operation == snapshots.Replace && other.Start <= line && line <= other.End) {
@@ -923,31 +935,46 @@ func extendSlips(file string, source *text, edits []snapshots.LineEdit) ([]snaps
 			span = "line " + itoa(e.Start)
 		}
 		for _, below := range []bool{true, false} {
-			line, row := e.End+1, e.Content[len(e.Content)-1]
+			// line is the neighbour the edge row repeats; inner is the row next to it and edge the range's own line it would go on as.
+			line, row, inner, edge := e.End+1, e.Content[len(e.Content)-1], len(e.Content)-2, e.End
 			if !below {
-				line, row = e.Start-1, e.Content[0]
+				line, row, inner, edge = e.Start-1, e.Content[0], 1, e.Start
 			}
 			if line < 1 || line > len(lines) || js.Trim(row) == "" || js.Trim(row) != js.Trim(lines[line-1]) || touched(i, line) {
 				continue
 			}
+			copied := meaningful(row) && inner >= 0 && inner < len(e.Content) && js.Trim(e.Content[inner]) == js.Trim(lines[edge-1])
 			wider := slices.Clone(edits)
-			var note string
 			if below {
 				wider[i].End = line
-				note = fmt.Sprintf("The edit of %s replaced lines %d-%d: its last new row repeats line %d, which would have stayed below it with the brackets unbalanced, so the range ended one line early.", span, e.Start, line, line)
 			} else {
 				wider[i].Start = line
-				note = fmt.Sprintf("The edit of %s replaced lines %d-%d: its first new row repeats line %d, which would have stayed above it with the brackets unbalanced, so the range started one line late.", span, line, e.End, line)
 			}
-			if balanced(wider) {
-				found = append(found, slip{wider, note})
+			var why string
+			switch {
+			case byBrackets && balanced(wider):
+				why = "with the brackets unbalanced"
+			case copied:
+				why = fmt.Sprintf("and its rows go on from there as line %d", edge)
+			default:
+				continue
 			}
+			note := fmt.Sprintf("The edit of %s replaced lines %d-%d: its first new row repeats line %d, which would have stayed above it %s, so the range started one line late.", span, line, e.End, line, why)
+			if below {
+				note = fmt.Sprintf("The edit of %s replaced lines %d-%d: its last new row repeats line %d, which would have stayed below it %s, so the range ended one line early.", span, e.Start, line, line, why)
+			}
+			found = append(found, slip{wider, note})
 		}
 	}
 	if len(found) != 1 {
 		return edits, nil
 	}
 	return found[0].edits, []string{found[0].note}
+}
+
+// meaningful says whether a line holds a letter or digit, unlike a blank line or a lone closing bracket, which a file often repeats.
+func meaningful(line string) bool {
+	return strings.ContainsFunc(line, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
 }
 
 type previewed struct {

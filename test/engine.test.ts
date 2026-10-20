@@ -2576,6 +2576,37 @@ describe("ranges one line off", () => {
     expect((await g.patch(`[file.txt#${s.tag}]\nPUT 2.=2:\n+repeated line of some length\n+an added line below it`)).text).not.toContain("Warnings:")
   })
 
+  const shutdown = ["func stop() {", "\tcancel()", "\tc.killAll()", "\tstatus := 0", "\treturn status", "}"].join("\n") + "\n"
+
+  test("rows copied from one line too far, a short statement first, take that line into the range, with a note", async () => {
+    // Meant 2.=4: the rows start with line 2 and go on as lines 3 and 4 did, but the range began at 3.
+    const f = await fixture(shutdown)
+    const r = await f.read()
+    const late = await f.patch(`[file.txt#${r.tag}]\nPUT 3.=4:\n+\tcancel()\n+\tc.killAll()\n+\tstatus := 1`)
+    expect(await readFile(f.filePath, "utf8")).toBe(shutdown.replace("status := 0", "status := 1"))
+    expect(late.text).toContain("The edit of lines 3-4 replaced lines 2-4: its first new row repeats line 2, which would have stayed above it and its rows go on from there as line 3, so the range started one line late.")
+    // The mirror slip: a range that ends one line early.
+    const g = await fixture(shutdown)
+    const s = await g.read()
+    const early = await g.patch(`[file.txt#${s.tag}]\nPUT 3.=4:\n+\tc.killAll(ctx)\n+\tstatus := 0\n+\treturn status`)
+    expect(await readFile(g.filePath, "utf8")).toBe(shutdown.replace("killAll()", "killAll(ctx)"))
+    expect(early.text).toContain("its last new row repeats line 5, which would have stayed below it and its rows go on from there as line 4, so the range ended one line early.")
+  })
+
+  test("a short statement repeated next to an edit warns, and a repeated blank line or brace does neither", async () => {
+    // The rows repeat line 2 but do not go on as line 3 did, so the slip is likely but not proven.
+    const f = await fixture(shutdown)
+    const r = await f.read()
+    const repeated = await f.patch(`[file.txt#${r.tag}]\nPUT 3.=3:\n+\tcancel()\n+\tc.stop()`)
+    expect(await readFile(f.filePath, "utf8")).toBe(shutdown.replace("c.killAll()", "cancel()\n\tc.stop()"))
+    expect(repeated.text).toContain("Warnings:\nLines 2 and 3 now nearly match: line 2 was kept just above an edit and line 3 is the edit's first new line.")
+    const g = await fixture("a\n\nb\nc\n")
+    const s = await g.read()
+    const blank = await g.patch(`[file.txt#${s.tag}]\nPUT 3.=3:\n+\n+b`)
+    expect(await readFile(g.filePath, "utf8")).toBe("a\n\n\nb\nc\n")
+    expect(blank.text).not.toContain("Warnings:")
+  })
+
   const code = ["function save(record) {", "  const row = toRow(record)", "  validate(row, schema)", "  store.insert(row)", "  audit.log(row.id)", "}"].join("\n") + "\n"
 
   test("a range one line too long, whose dropped edge line no new row resembles while they keep the others, warns with the hunk that puts it back", async () => {
