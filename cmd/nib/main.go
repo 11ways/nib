@@ -29,7 +29,7 @@ const usage = `nib: hashline file tools and a shell for coding agents
                        also offer the tools of PROGRAM (run as PROGRAM nib-provider) as NAME_TOOL; repeatable
   nib setup            register nib in this folder (.mcp.json, .claude/settings.local.json, opencode.json); --user for every project, --dry-run to preview,
                        --provider NAME=PROGRAM to host a provider (NAME= stops hosting it), --decider KIND[:MODEL,...], --summary LIST and --opencode PROGRAM for every nib
-  nib hook             Claude Code PreToolUse hook: refuses the built-in Read for files nib reads better, and tells nib's server which subagent calls it
+  nib hook             Claude Code hook: refuses the built-in Read for files nib reads better, tells nib's server which subagent calls it, and tells the agent the named directories a message uses
   nib shape --log PATH --purpose TEXT [--exit N] [--command TEXT]
                        print what nibash would show of a program whose whole output is the log at PATH, for tools that keep their own logs
   nib --version        print the version`
@@ -138,6 +138,13 @@ func main() {
 		os.Setenv(server.ShapeSocketEnv, server.SocketPath(key))
 		go s.ServeShape(ctx, listener)
 		defer listener.Close()
+	}
+	// After a /clear, Claude Code's hooks and commands know the session by a new id; its process, which started this server, stays.
+	if parent := server.ParentKey(os.Getenv); parent != "" {
+		if listener, err := server.ListenShape(parent); err == nil && listener != nil {
+			go s.ServeShape(ctx, listener)
+			defer listener.Close()
+		}
 	}
 	err = s.Run(ctx, s.Transport(&mcp.StdioTransport{}))
 	s.Close()

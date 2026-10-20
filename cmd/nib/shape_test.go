@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -87,7 +88,7 @@ func TestShapeAsksTheSessionsServerAndShapesTheLogItselfWithoutOne(t *testing.T)
 	if status, out := shaped(t, "--log", log, "--purpose", "why", "--exit", "1", "--command", "zenit-dev test"); status != 0 || out != "from the session\n" {
 		t.Fatalf("with a session: %d %q", status, out)
 	}
-	if want := (server.ShapeRequest{Log: log, Purpose: "why", Command: "zenit-dev test", Exit: 1}); len(*asked) != 1 || (*asked)[0] != want {
+	if want := (server.ShapeRequest{Log: log, Purpose: "why", Command: "zenit-dev test", Exit: 1}); len(*asked) != 1 || !reflect.DeepEqual((*asked)[0], want) {
 		t.Fatalf("asked %+v", *asked)
 	}
 	// A refusal is the session's answer: nib shape does not shape the log behind its back.

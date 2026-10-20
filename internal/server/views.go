@@ -154,7 +154,8 @@ type NameRow struct {
 	// Directory reads from the server's directory when under it.
 	Directory string `json:"directory"`
 	// Source is server (nib.json, detected source roots, names kept from earlier sessions), defined (by the agent with hash -d),
-	// automatic (made by nib) or inherited (from the agent that started this one).
+	// automatic (made by nib), inherited (from the agent that started this one)
+	// or message (told with a message the user sent that used it).
 	Source string `json:"source"`
 	// Uses counts the paths nib printed under the name.
 	Uses int `json:"uses"`

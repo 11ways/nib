@@ -9,7 +9,7 @@ import (
 type Described struct {
 	Name      string
 	Directory string
-	// Source is "server" for nib's own table, else what the agent's list says: "defined", "automatic" or "inherited".
+	// Source is "server" for nib's own table, else what the agent's list says: "defined", "automatic", "inherited" or "message".
 	Source string
 	Uses   int
 }

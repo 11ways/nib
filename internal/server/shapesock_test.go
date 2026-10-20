@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/11ways/nib/internal/names"
 )
 
 // serving is a server answering nib shape requests on the socket known by key, under a private runtime folder of the test's.
@@ -107,6 +109,57 @@ func TestShapeSocketsAreTheSessionsThenTheOneNibNamed(t *testing.T) {
 	}
 	if key := ShapeKey(env(nil)); key != fmt.Sprintf("nib-%d", os.Getpid()) {
 		t.Fatalf("own key %q", key)
+	}
+	// Claude Code's process outlives a /clear, which gives hooks and commands a new session id but leaves its servers the old one.
+	got := ShapeSockets(env(map[string]string{"CLAUDE_CODE_SESSION_ID": "abc-2", "CLAUDE_PID": "64603", ShapeSocketEnv: named}))
+	if len(got) != 3 || got[0] != SocketPath("claude-abc-2") || got[1] != SocketPath("claude-pid-64603") || got[2] != named {
+		t.Fatalf("with Claude Code's process: %v", got)
+	}
+	if got := ShapeSockets(env(map[string]string{"CLAUDE_PID": "../1"})); len(got) != 0 {
+		t.Fatalf("a process id that could name a path: %v", got)
+	}
+	if key := ParentKey(env(map[string]string{"CLAUDE_CODE_SESSION_ID": "abc-1"})); key != fmt.Sprintf("claude-pid-%d", os.Getppid()) {
+		t.Fatalf("parent key %q", key)
+	}
+	if key := ParentKey(env(nil)); key != "" {
+		t.Fatalf("outside Claude Code the parent key is %q", key)
+	}
+}
+
+// nib's hook asks which named directories of a message the main agent must be told, with the moment its context was last dropped.
+func TestPromptNamesAfterADrop(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	directory, _ := filepath.EvalSymlinks(t.TempDir())
+	widgets := filepath.Join(directory, "src", "server", "widgets")
+	if err := os.MkdirAll(widgets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Directory: directory, Names: &names.Table{Base: directory}})
+	if err := s.options.Names.For(s.defined, s.engineSession("")).Define("w", widgets); err != nil {
+		t.Fatal(err)
+	}
+	serving(t, s, "claude-pid-1")
+	ask := func(dropped time.Time) string {
+		t.Helper()
+		request := ShapeRequest{Mentioned: []string{"w", "nothing"}}
+		if !dropped.IsZero() {
+			request.Dropped = dropped.UnixNano()
+		}
+		answer, ok := AskShape(context.Background(), sockets("claude-pid-1"), request)
+		if !ok || answer.Status != 0 {
+			t.Fatalf("answer %+v %v", answer, ok)
+		}
+		return answer.Text
+	}
+	if text := ask(time.Time{}); text != "" {
+		t.Fatalf("a name the agent holds was told: %q", text)
+	}
+	cleared := time.Now().Add(time.Minute)
+	if text := ask(cleared); text != "~w = src/server/widgets" {
+		t.Fatalf("after a clear: %q", text)
+	}
+	if text := ask(cleared); text != "" {
+		t.Fatalf("told twice: %q", text)
 	}
 }
 

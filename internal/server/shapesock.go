@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,11 +23,15 @@ import (
 )
 
 // ShapeRequest is what nib shape asks the session's server: the log, the run's description, its exit status and the command that wrote it.
+// nib's hook asks with Mentioned instead of a log: the named directories a message the user sent uses, which the main agent's context last
+// dropped at Dropped (Unix nanoseconds, 0 for never).
 type ShapeRequest struct {
-	Log     string `json:"log"`
-	Purpose string `json:"purpose"`
-	Command string `json:"command,omitempty"`
-	Exit    int    `json:"exit"`
+	Log       string   `json:"log,omitempty"`
+	Purpose   string   `json:"purpose,omitempty"`
+	Command   string   `json:"command,omitempty"`
+	Exit      int      `json:"exit,omitempty"`
+	Mentioned []string `json:"mentioned,omitempty"`
+	Dropped   int64    `json:"dropped,omitempty"`
 }
 
 // ShapeAnswer is the server's answer: the shaped text, or with Status 2 why the log was refused.
@@ -67,12 +73,25 @@ func ShapeKey(getenv func(string) string) string {
 	return fmt.Sprintf("nib-%d", os.Getpid())
 }
 
-// ShapeSockets are the sockets nib shape asks, in order: the Claude Code session's it runs in, then the one the nib server whose program
-// started it named.
+// ParentKey is the key this server's second socket is known by under Claude Code: the process that started it, Claude Code itself, whose
+// id its hooks and commands see as CLAUDE_PID; "" outside Claude Code. A /clear gives the session a new id but leaves its MCP servers
+// with the old one, so after it only this socket is found.
+func ParentKey(getenv func(string) string) string {
+	if !hookstate.IsID(getenv("CLAUDE_CODE_SESSION_ID")) {
+		return ""
+	}
+	return fmt.Sprintf("claude-pid-%d", os.Getppid())
+}
+
+// ShapeSockets are the sockets nib shape and nib's hook ask, in order: the Claude Code session's they run in, its process's, then the one
+// the nib server whose program started them named.
 func ShapeSockets(getenv func(string) string) []string {
 	var paths []string
 	if session := getenv("CLAUDE_CODE_SESSION_ID"); hookstate.IsID(session) {
 		paths = append(paths, SocketPath("claude-"+session))
+	}
+	if pid, err := strconv.Atoi(getenv("CLAUDE_PID")); err == nil && pid > 0 {
+		paths = append(paths, SocketPath(fmt.Sprintf("claude-pid-%d", pid)))
 	}
 	if named := getenv(ShapeSocketEnv); filepath.IsAbs(named) && !slices.Contains(paths, named) {
 		paths = append(paths, named)
@@ -127,13 +146,16 @@ func (s *Server) answerShape(ctx context.Context, conn net.Conn) {
 	if err == nil {
 		err = json.Unmarshal(line, &request)
 	}
-	if err == nil && !filepath.IsAbs(request.Log) {
+	if err == nil && request.Mentioned == nil && !filepath.IsAbs(request.Log) {
 		err = fmt.Errorf("the log %q is not an absolute path", request.Log)
 	}
 	answer := ShapeAnswer{Status: 2}
-	if err != nil {
+	switch {
+	case err != nil:
 		answer.Error = err.Error()
-	} else {
+	case request.Mentioned != nil:
+		answer = s.promptAnswer(request)
+	default:
 		answer = s.shapeAnswer(ctx, request)
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -171,6 +193,20 @@ func (s *Server) shapeAnswer(ctx context.Context, request ShapeRequest) ShapeAns
 	}
 	end(&mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}})
 	return ShapeAnswer{Text: text}
+}
+
+// promptAnswer is what the main agent must be told of the named directories a message the user sent uses, one line each, after its context
+// was dropped at the moment the request names, which the server applies now as its next call would.
+func (s *Server) promptAnswer(request ShapeRequest) ShapeAnswer {
+	main := s.engineSession("")
+	s.seeding.Lock()
+	defer s.seeding.Unlock()
+	if request.Dropped > 0 {
+		if moment := time.Unix(0, request.Dropped); s.engine.Store.Forget(main, moment) {
+			s.defined.Forget(main, moment)
+		}
+	}
+	return ShapeAnswer{Text: strings.Join(s.options.Names.For(s.defined, main).Prompted(request.Mentioned), "\n")}
 }
 
 // knownRoots are the roots the sandbox confines a nib shape request to: the client's, as last listed for one of its calls, or the server's

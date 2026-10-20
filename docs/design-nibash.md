@@ -716,6 +716,15 @@ Where the implementation departed from the text above, deliberately:
   match; edit responses show one kept row on each side of a change, which never makes a run, and the agent checks its
   range against them. An immediate repeat of the same call is how an agent asks for the rows again, besides `full: true`
   on a read.
+- **Names in a user's message.** A handoff typed after a `/clear` keeps using the names of the session before it, and
+  a message gets no notes of nib's, so `UserPromptSubmit` runs the hook too: it pulls the `~name`s out of the message
+  (only those leave the hook) and asks the session's server, over the `nib shape` socket, which the main agent must be
+  told, passing the latest drop moment it filed so the server forgets first; the answer goes back as
+  `additionalContext`. The server tells a name the agent got before the drop, and gives the agent, as one it defined, a
+  name another agent of the server or the learned file of an earlier session has. A `/clear` gives hooks a new session
+  id but leaves MCP servers with the old one in their environment, so the session socket is not found after it; Claude
+  Code's process id is stable, hooks see it as `CLAUDE_PID`, and a server under Claude Code is its child, so the server
+  also listens on `session-claude-pid-<ppid>.sock` and the hook asks that second.
 - **OpenCode sessions.** OpenCode 2 (`@opencode/cli` 2.0.30) sends `_meta["ai.opencode/sessionID"]` on every tool call
   and runs a subagent in a child session with its own id, over the one connection that serves every session of a
   project. One function names the caller for both clients: `opencode:<session id>` or `agent:<agent id>`, which is also

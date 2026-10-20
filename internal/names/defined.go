@@ -70,7 +70,8 @@ type made struct {
 type definition struct {
 	Entry
 	at int64
-	// kind is where the agent got the name: "defined" by itself, "automatic" made by nib, "inherited" from the agent that started it.
+	// kind is where the agent got the name: "defined" by itself, "automatic" made by nib, "inherited" from the agent that started it,
+	// "message" with a message the user sent it that used it.
 	kind string
 }
 

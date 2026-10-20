@@ -16,7 +16,7 @@ export type Status = { commands: Command[]; jobs: Job[]; models?: ModelCall[]; s
 /** A path nib moved to the trash that is still there; path is absolute and what a restore takes. */
 export type TrashEntry = { path: string; shown: string; when: number; dir?: boolean }
 
-/** The named directories of each agent, as nib lists them; source is server, defined, automatic or inherited. */
+/** The named directories of each agent, as nib lists them; source is server, defined, automatic, inherited or message. */
 export type NameList = { agent: string; names: { name: string; directory: string; source: string; uses: number }[] }[]
 
 /** The lines nib counts each agent as having seen of its files: inclusive 1-based ranges; anywhere says nib has no record, so edits may anchor on any line. */

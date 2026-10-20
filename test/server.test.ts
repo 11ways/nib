@@ -158,6 +158,32 @@ describe("MCP server", () => {
     expect(after).not.toContain("~line")
   })
 
+  test("a message the user sends after a /clear is told the named directories it uses that the agent had", async () => {
+    const directory = await workspace()
+    const runtime = await workspace()
+    const widgets = path.join(directory, "modules/server/src/main/java/be/example/widgets")
+    await mkdir(widgets, { recursive: true })
+    // The server keeps the session id it started with; after a /clear, hooks see a new one, and Claude Code's process id.
+    const { call } = await connect(directory, { env: { XDG_RUNTIME_DIR: runtime, NIB_SHELL: "1", CLAUDE_CODE_SESSION_ID: "6d0b5e1c" } })
+    const hook = async (session: string, input: Record<string, unknown>) => {
+      const env = { ...process.env, XDG_RUNTIME_DIR: runtime, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) }
+      const run = Bun.spawn([await binary(), "hook"], { stdin: new Blob([JSON.stringify({ session_id: session, ...input })]), stdout: "pipe", env })
+      expect(await run.exited).toBe(0)
+      return await new Response(run.stdout).text()
+    }
+    await call("nibash", { command: `hash -d w=${widgets}` })
+    const message = { hook_event_name: "UserPromptSubmit", prompt: "go on in ~w/Repo.java" }
+    expect(await hook("6d0b5e1c", message)).toBe("")
+    await hook("7e1f0a2b", { hook_event_name: "SessionStart", source: "clear" })
+    const told = JSON.parse(await hook("7e1f0a2b", message)) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } }
+    expect(told.hookSpecificOutput).toEqual({
+      hookEventName: "UserPromptSubmit",
+      additionalContext: "nib's named directories in this message, which work in every nib tool and in nibash:\n~w = modules/server/src/main/java/be/example/widgets",
+    })
+    expect(await hook("7e1f0a2b", message)).toBe("")
+    expect((await call("nibash", { command: "test -d ~w && echo resolves" })).text).toBe("resolves")
+  })
+
   test("named directories from nib.json are announced, resolve in every tool and print in short form", async () => {
     const directory = await workspace()
     const deep = path.join(directory, "modules/server/src/main/java/be/example/server/orm")

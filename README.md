@@ -1059,6 +1059,18 @@ another worktree of the server's repository, and one no session used for 30 days
 keeping off; without a home folder they are off too. Bare `hash -d` in nibash lists every name an agent has, the
 table's, its own and nib's.
 
+A message the user sends reaches the agent with no notes of nib's, so a handoff written after a `/clear` that goes on
+using `~bewidgets/...` would name a directory the agent no longer knows. nib's hook (see [the hook](#the-hook)) finds
+every `~name` in the message and asks the session's server which of them the main agent must be told, and Claude Code
+adds the answer to the message as context:
+`nib's named directories in this message, which work in every nib tool and in nibash:` and a line `~name = directory`
+for each. Told are a name the agent got before its context was last compacted or cleared (nib's later notes then do not
+tell it again), and a name the agent does not see that another agent of the same server has, or that an earlier session
+of the same server directory used (the kept names above, at any count), which then works for the agent as one it
+defined. A name the instructions list, or one the agent holds, is told only when an earlier session had it for another
+directory, which the line names (`(in an earlier session ~w was ...)`); a name nothing knows adds nothing. Only the
+names leave the hook, never the message.
+
 Subagents are not given the server instructions (Claude Code's are not), so a subagent's first nib call starts with what
 the main agent read there: the names it has, the table's and the ones it inherited, one per line, and the `hash -d`
 line. A subagent working in a worktree is told that first (see [the hook](#the-hook)). Only the first call carries it,
@@ -1193,7 +1205,8 @@ too. A relative program path is made absolute; a bare name is looked up on `PATH
 - `.mcp.json`: the `nib` server.
 - `.claude/settings.local.json`: the approval of that server in `enabledMcpjsonServers` (one listed in
   `disabledMcpjsonServers` stays off, and setup says so), nib's Claude Code hook (below) for `Read` and for nib's own
-  tools (`mcp__nib__.*`) and for `SessionStart` and `PostCompact`, which tell nib when an agent's context is dropped,
+  tools (`mcp__nib__.*`), for `SessionStart` and `PostCompact`, which tell nib when an agent's context is dropped, and for
+  `UserPromptSubmit`, which tells the agent what the named directories in a message the user sends stand for,
   and `permissions.deny` for `Bash`, `Grep`, `Glob`, `Edit` and `Write`, with `permissions.allow` for
   `mcp__nib__nibash_status`, which only reads what nib runs and which the nibash mod (below) asks every second while
   something runs; a `MultiEdit` deny rule an older setup wrote is removed, since Claude Code no longer has that tool and
@@ -1313,6 +1326,14 @@ saw, gets no markers. Without a record, because the hook is not installed, Claud
 the client is not Claude Code, every call is the main agent's, as before. A subagent's jobs end with the connection,
 never sooner. A subagent with no version of a file is not restricted, like any session after a restart, so a tag passed
 to it in its prompt edits as it would after a restart.
+
+For a message the user sends (`UserPromptSubmit`), the hook takes every `~name` the message uses, a `~` that starts no
+word or path followed by a name, and asks the session's server, through the socket `nib shape` asks, which of them the
+main agent must be told (see named directories above), with the latest moment the session's hooks filed for its context,
+which the server applies at once rather than at the next nib call. A `/clear` gives the session a new id that hooks and
+commands see, while its MCP servers keep the one they started with, so a server under Claude Code also listens on a
+socket named after its parent, Claude Code's own process, which hooks see as `CLAUDE_PID`; the hook asks the session's
+socket first, then that one. With no server answering within 3 seconds, the message goes on with nothing added.
 
 A subagent Claude Code spawned in a git worktree (the Agent tool's `isolation: "worktree"`; its meta file, below, holds
 `spawnedWithWorktree` and `worktreePath`) works in that worktree, as Claude Code's own tools do for it: its relative

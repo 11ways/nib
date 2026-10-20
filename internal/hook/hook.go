@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/11ways/nib/internal/hookstate"
+	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/platform"
 )
 
@@ -29,20 +30,22 @@ import (
 // tool name, or for the other events a trigger or source).
 type Matcher struct{ Event, Matcher, Selects string }
 
-// Matchers are the hook's registrations: the built-in Read it guards, nib's own tools, whose calls it files for the server, and the events
+// Matchers are the hook's registrations: the built-in Read it guards, nib's own tools, whose calls it files for the server, the events
 // that drop an agent's context: every session start (a new conversation, /clear, a resume, or a compaction) and every compaction, whose
-// matchers select by trigger.
+// matchers select by trigger, and every message the user sends, whose named directories it tells the agent of.
 var Matchers = []Matcher{
 	{"PreToolUse", "Read", "Read"},
 	{"PreToolUse", "mcp__nib__.*", "mcp__nib__read"},
 	{"SessionStart", "", "clear"},
 	{"PostCompact", "", "auto"},
+	{"UserPromptSubmit", "", "prompt"},
 }
 
 // taggedLimit is the engine's text limit: past it nib reads a file only plain.
 const taggedLimit = 2 * 1024 * 1024
 
-// Input is the part of Claude Code's hook input the hook uses; AgentID and AgentType are set only for a subagent's call.
+// Input is the part of Claude Code's hook input the hook uses; AgentID and AgentType are set only for a subagent's call, Prompt only for a
+// message the user sent.
 type Input struct {
 	SessionID      string         `json:"session_id"`
 	TranscriptPath string         `json:"transcript_path"`
@@ -53,7 +56,12 @@ type Input struct {
 	ToolUseID      string         `json:"tool_use_id"`
 	AgentID        string         `json:"agent_id"`
 	AgentType      string         `json:"agent_type"`
+	Prompt         string         `json:"prompt"`
 }
+
+// Ask asks the session's nib server what the main agent must be told of mentioned, the named directories a message the user sent uses,
+// after its context was last dropped at dropped (zero for never): lines ~name = directory, none when no server answered.
+type Ask func(mentioned []string, dropped time.Time) []string
 
 // metaLimit bounds the read of a subagent's meta file, a few hundred bytes in Claude Code 2.1.
 const metaLimit = 64 * 1024
@@ -335,8 +343,8 @@ func firstTime(session, call, directory string) bool {
 // Run reads one hook call and returns Claude Code's deny decision when nib should take the call, or "" to let it run. An MCP tool's call is
 // never refused; a subagent's is filed under its tool_use id, with its parent, spawn moment and whether it is a fork when those are known,
 // and a failure to file it only leaves that call to the main agent's state. A session start or compaction is noted for the agent it drops
-// the context of.
-func Run(stdin []byte, state string) string {
+// the context of. A message the user sent gets, as context for the agent, the named directories it uses that ask says to tell.
+func Run(stdin []byte, state string, ask Ask) string {
 	var input Input
 	if json.Unmarshal(stdin, &input) != nil {
 		return ""
@@ -351,6 +359,8 @@ func Run(stdin []byte, state string) string {
 			_ = hookstate.OpenContexts(state).Drop(key, now, now)
 		}
 		return ""
+	case "UserPromptSubmit":
+		return prompted(input, state, ask)
 	}
 	if strings.HasPrefix(input.ToolName, "mcp__") {
 		var found origin
@@ -386,6 +396,25 @@ func contextKey(session, agent string) (string, bool) {
 		key = hookstate.AgentKey(agent)
 	}
 	return key, session != "" && hookstate.IsID(session) && (agent == "" || hookstate.IsID(agent)) && hookstate.IsID(key)
+}
+
+// prompted is the context a message the user sent gets: the lines ask gives for the named directories it uses, for the session's main agent,
+// whose context was dropped when the session's hooks filed it.
+func prompted(input Input, state string, ask Ask) string {
+	mentioned := names.Mentioned(input.Prompt)
+	if ask == nil || len(mentioned) == 0 {
+		return ""
+	}
+	dropped, _ := droppedAt(input.SessionID, hookstate.Agent{}, state)
+	lines := ask(mentioned, dropped)
+	if len(lines) == 0 {
+		return ""
+	}
+	encoded, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName":     "UserPromptSubmit",
+		"additionalContext": "nib's named directories in this message, which work in every nib tool and in nibash:\n" + strings.Join(lines, "\n"),
+	}})
+	return string(encoded)
 }
 
 // droppedAt is the latest moment what agent had been shown was dropped, zero for never; known is false when the session's hooks do not report
