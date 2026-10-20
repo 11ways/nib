@@ -3,12 +3,14 @@ package engine
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/11ways/nib/internal/snapshots"
 	"github.com/11ways/nib/internal/syntax"
@@ -19,6 +21,8 @@ const (
 	importFold = 10
 	// checkBytes caps the files an edit's syntax checks parse: a parse costs about 70 ms per 1,000 lines.
 	checkBytes = 512 * 1024
+	// classSearchTimeout bounds the search for a class an edit uses without an import; a workspace of 15,000 Java files takes 0.3 s.
+	classSearchTimeout = 5 * time.Second
 )
 
 // foldImports shows each run of at least importFold imports the rows hold, blank lines between them included, as one row per package with
@@ -159,10 +163,17 @@ func placeImports(canonical string, lines []string, edits, imports []snapshots.L
 
 // codeWarnings parses a file an edit changed, in a language nib has a grammar for: an edit that leaves it no longer parsing, when it parsed
 // before and unbalanced brackets do not already say so (bracketed), says where the first error is, and an edit to a Java file that uses a
-// class nothing in the file imports or declares says which class nib finds by that name, with the IMPORT that adds it.
-func codeWarnings(ctx *Context, t *target, before *text, result applied, bracketed bool) []string {
+// class nothing in the file imports or declares says which class nib finds by that name, with the IMPORT that adds it. Silence must not
+// pass for a clean check: a check skipped where an agent would not expect it says so, once per file for a cause the file keeps.
+func codeWarnings(ctx *Context, store *snapshots.Store, t *target, before *text, result applied, bracketed bool) []string {
 	body := strings.TrimPrefix(string(result.bytes), bom)
-	if !syntax.Supported(t.canonical) || len(body) > checkBytes {
+	if !syntax.Supported(t.canonical) {
+		return nil
+	}
+	if len(body) > checkBytes {
+		if store.Teach(ctx.Session, "unchecked-size:"+t.canonical) {
+			return []string{fmt.Sprintf("Edits to this file get no syntax or import checks: it is over %d KiB, too big to parse on every edit.", checkBytes>>10)}
+		}
 		return nil
 	}
 	after, err := syntax.Inspect(t.canonical, []byte(body))
@@ -174,7 +185,14 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied, bracket
 			return nil
 		}
 		earlier, err := syntax.Inspect(t.canonical, []byte(before.body))
-		if err != nil || earlier.ErrorLine > 0 {
+		if err != nil {
+			return nil
+		}
+		if earlier.ErrorLine > 0 {
+			if store.Teach(ctx.Session, "unchecked-broken:"+t.canonical) {
+				return []string{fmt.Sprintf("This file did not parse as %s before this edit either (first error at line %d), so nib cannot tell whether an edit breaks it, and checks no imports in it while that lasts.",
+					syntax.Language(t.canonical), earlier.ErrorLine)}
+			}
 			return nil
 		}
 		return []string{fmt.Sprintf("The file no longer parses as %s: before this edit it did, and now its first error is at line %d; check the new rows above it too.", syntax.Language(t.canonical), after.ErrorLine)}
@@ -223,6 +241,13 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied, bracket
 		}
 	}
 	found := searchClasses(ctx, t.canonical, missing, searched)
+	if found.failed != "" {
+		form := "%s, used in the new rows, is not imported, and nib could not look for it: %s."
+		if len(missing) > 1 {
+			form = "%s, used in the new rows, are not imported, and nib could not look for them: %s."
+		}
+		return []string{fmt.Sprintf(form, listNames(missing), found.failed)}
+	}
 	// A wildcard of a package neither the JDK nor the workspace holds, such as a library's, may bring in a class of any name.
 	for _, w := range searched {
 		if !found.packages[w] {
@@ -259,22 +284,29 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied, bracket
 		if len(named) > 1 {
 			form = "%s, used in the new rows, are not imported, and nib knows one class of each name; if they are the ones meant, this adds them:\n[%s]\nIMPORT %s"
 		}
-		names := named[0]
-		if last := len(named) - 1; last > 0 {
-			names = strings.Join(named[:last], ", ") + " and " + named[last]
-		}
-		warnings = append(warnings, fmt.Sprintf(form, names, t.display, strings.Join(sure, ", ")))
+		warnings = append(warnings, fmt.Sprintf(form, listNames(named), t.display, strings.Join(sure, ", ")))
 	}
 	return append(warnings, unsure...)
+}
+
+// listNames is names as prose: "A", "A and B", "A, B and C".
+func listNames(names []string) string {
+	last := len(names) - 1
+	if last == 0 {
+		return names[0]
+	}
+	return strings.Join(names[:last], ", ") + " and " + names[last]
 }
 
 // class is a class found by its file's name: its full name and the file.
 type class struct{ path, file string }
 
-// found is what a search of the workspace found: the classes named after each name, and the packages it holds a source file of.
+// found is what a search of the workspace found: the classes named after each name, and the packages it holds a source file of; failed
+// says why the search could not run, "" when it did.
 type found struct {
 	classes  map[string][]class
 	packages map[string]bool
+	failed   string
 }
 
 // packageLine reads a JVM file's package declaration.
@@ -291,12 +323,13 @@ func packageOf(lines []string) string {
 }
 
 // searchClasses finds, in the workspace roots that hold canonical, the Java and Kotlin files named after each name, with the class each
-// declares by its package, and whether each of packages has a source file there, in one search; nothing when no root holds canonical or
-// the search fails.
+// declares by its package, and whether each of packages has a source file there, in one search of at most classSearchTimeout, since an
+// edit waits for it.
 func searchClasses(ctx *Context, canonical string, names, packages []string) found {
 	result := found{classes: map[string][]class{}, packages: map[string]bool{}}
 	roots, err := workspaceRoots(ctx)
 	if err != nil {
+		result.failed = "the workspace roots could not be read (" + err.Error() + ")"
 		return result
 	}
 	var holding []string
@@ -306,16 +339,22 @@ func searchClasses(ctx *Context, canonical string, names, packages []string) fou
 		}
 	}
 	if len(holding) == 0 {
+		result.failed = "the file is outside the workspace roots"
 		return result
 	}
 	command := []string{"--files", "--null", "--no-config", "--hidden", "--glob", "!.git", "--glob", "**/{" + strings.Join(names, ",") + "}.{java,kt}"}
 	for _, p := range packages {
 		command = append(command, "--glob", "**/"+strings.ReplaceAll(p, ".", "/")+"/*.{java,kt}")
 	}
-	signal, cancel := context.WithTimeout(ctx.Ctx, grepTimeout)
+	signal, cancel := context.WithTimeout(ctx.Ctx, classSearchTimeout)
 	defer cancel()
 	out, err := ripgrep(ctx, signal, holding, command)
-	if err != nil {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		result.failed = fmt.Sprintf("the workspace search took over %s", classSearchTimeout)
+		return result
+	case err != nil:
+		result.failed = err.Error()
 		return result
 	}
 	for _, file := range strings.Split(out.stdout, "\x00") {

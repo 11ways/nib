@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +229,52 @@ func TestALibraryWildcardKeepsTheImportCheckQuietAndAJDKOneDoesNot(t *testing.T)
 		if err != nil || strings.Contains(out.Text, "IMPORT be.example.common.Gauge") != warned {
 			t.Fatalf("%s: %v\n%s", wildcard, err, out.Text)
 		}
+	}
+}
+
+func TestAnEditSaysWhenItsChecksCouldNotRun(t *testing.T) {
+	e, ctx, file := javaWorkspace(t)
+	directory := filepath.Join(ctx.Directory, "app", "src", "main", "java", "be", "example", "app")
+	appendRows := func(name, rows string) string {
+		t.Helper()
+		out, err := e.Patch(ctx, "["+filepath.Join(directory, name)+"]\nPUT >$:\n"+rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.Text
+	}
+	// A class search that cannot run says which names it could not look for.
+	outside := *ctx
+	elsewhere, _ := filepath.EvalSymlinks(t.TempDir())
+	outside.Roots = func(context.Context) ([]string, error) { return []string{elsewhere}, nil }
+	outside.Authorize = func(context.Context, string, string) error { return nil }
+	out, err := e.Patch(&outside, "["+file+"]\nPUT >$:\n+class Extra { Gauge gauge; Pulse pulse; }")
+	if err != nil || !strings.Contains(out.Text, "Gauge and Pulse, used in the new rows, are not imported, and nib could not look for them: the file is outside the workspace roots.") {
+		t.Fatalf("outside: %v\n%s", err, out.Text)
+	}
+	// A file too big to parse, or one that did not parse before, says so once.
+	var big strings.Builder
+	big.WriteString("package be.example.app;\n\npublic class Big {\n")
+	for i := 0; big.Len() <= checkBytes; i++ {
+		fmt.Fprintf(&big, "    int field%d;\n", i)
+	}
+	big.WriteString("}\n")
+	if err := os.WriteFile(filepath.Join(directory, "Big.java"), []byte(big.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := appendRows("Big.java", "+class Gap { Gauge gauge; }"); !strings.Contains(out, "Edits to this file get no syntax or import checks: it is over 512 KiB") {
+		t.Fatalf("big:\n%s", out)
+	}
+	if out := appendRows("Big.java", "+class Gap2 {}"); strings.Contains(out, "Warnings:") {
+		t.Fatalf("big again:\n%s", out)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "Broken.java"), []byte("package be.example.app;\n\nclass Broken {\n    void f( {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := appendRows("Broken.java", "+class Gap { Gauge gauge; }"); !strings.Contains(out, "This file did not parse as Java before this edit either (first error at line 4)") {
+		t.Fatalf("broken:\n%s", out)
+	}
+	if out := appendRows("Broken.java", "+class Gap2 {}"); strings.Contains(out, "did not parse") {
+		t.Fatalf("broken again:\n%s", out)
 	}
 }

@@ -565,8 +565,11 @@ REM
   A line another hunk anchors is never taken in. In a Hawkeye template (`.hwk`) only its comments, `{# #}` and
   `<!-- -->`, are left out: its text is prose, where an apostrophe opens no string.
 - An edit that leaves a file in a language nib parses (see declared names under [read](#read)) no longer parsing, when
-  it parsed before, warns with the line of the first error (`The file no longer parses as Java: ...`); files over 512 KiB
-  are not parsed for this, and a parse of a file of a few hundred lines takes a few milliseconds.
+  it parsed before, warns with the line of the first error (`The file no longer parses as Java: ...`); a parse of a
+  file of a few hundred lines takes a few milliseconds. Silence must never pass for a clean check, so a check skipped
+  for a cause the agent would not expect says so: a file over 512 KiB, which is not parsed on every edit, and a file that
+  did not parse before the edit, where nib cannot tell what an edit broke, each say it once per file until the agent's
+  context is dropped.
 - An edit to a Java file whose new rows use a class by a name that nothing in the file imports or declares, that
   `java.lang` does not hold and that the file did not mention before, warns with the classes nib knows by that name: the
   public classes of the JDK's `java.base`, `java.sql`, `java.net.http` and `java.logging` (a table from JDK 25 that
@@ -578,6 +581,8 @@ REM
   off, since nib cannot tell what those bring in. Names count as classes by Java's naming: a capital first and a small
   letter in them, in a type, an annotation, a `new`, a cast, a `catch`, a method reference or before a call or field
   (`Duration.ofSeconds`). When unbalanced brackets already say the edit broke the file, the parse warning is left out.
+  When the search for a class cannot run (a file outside the workspace roots, an `rg` failure, or a search past 5
+  seconds), the warning names the classes it could not look for and why, instead of saying nothing.
 - An edit or write that leaves a `.json` file unsound, when it was sound before or is new, warns with the first fault
   and its line: a syntax error, or a key that repeats within one object
   (`The file is not valid JSON now: line 4: key "save" repeats in its object (first on line 2).`), which parsers resolve

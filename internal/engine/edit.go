@@ -1532,7 +1532,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		brackets := unbalanced(h.target.canonical, source, edits, result)
 		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, notes: notes,
 			warnings: slices.Concat(warnings, offByOne(source, edits, result), swallowed(source, edits, result), brackets,
-				jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)), codeWarnings(ctx, t, source, result, len(brackets) > 0))}, nil
+				jsonWarnings(h.target.canonical, sourceLines(source), appliedLines(result)), codeWarnings(ctx, store, t, source, result, len(brackets) > 0))}, nil
 	}
 	// A tagless section only appends, which depends on nothing but where the file ends, and IMPORTs alone on nothing at all.
 	if r.tag == nil || len(requestedEdits) == 0 && len(imports) > 0 && !r.remove && r.move == "" && r.copy == "" {
