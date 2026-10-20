@@ -354,6 +354,8 @@ no path is left is the call an error, so a missing path never reads as a search 
   20-per-file limit), so one token covers the whole page; matches past the output budget or on later pages, and files
   nib cannot hold whole, are left out and say so. Applying the token repeats that: its response ends with
   `[N more lines that the search would change were not in this token; grep again with the same pattern and replace for them]`.
+  A line selector on a path (`src/a.ts:110-136`) limits the replace to those lines, for changing some matches of a file
+  and not others.
   A file whose token applies as previewed, under its tag and one line for one, answers with just
   `[PATH#TAG] N lines replaced as previewed`, since the `>N|` rows already showed every new line; those that showed
   whole count as seen, so follow-up edits need no read. A token that had to be rebased, or a replacement that added

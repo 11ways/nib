@@ -2454,6 +2454,14 @@ describe("grep replace", () => {
     expect(await readFile(f.filePath, "utf8")).toBe("zero\none\nTWO\nthree\n")
   })
 
+  test("a line selector on a path limits a replace to those lines", async () => {
+    const f = await fixture("other\nother\nother\nother\n")
+    const preview = (await f.engine.grep(f.ctx, { pattern: "other", replace: "mine", paths: ["file.txt:2-3"] })).text
+    expect(preview).toContain("]\n>2|mine\n>3|mine\n\nTo apply the 2 replaced lines shown")
+    await f.patch(`REAPPLY ${token(preview)}`)
+    expect(await readFile(f.filePath, "utf8")).toBe("other\nmine\nmine\nother\n")
+  })
+
   test("a replace shows every match of its files, so one token covers them, and applied as previewed it answers with tags and counts", async () => {
     const content = Array.from({ length: 25 }, (_, index) => `hit ${index}`).join("\n") + "\n"
     const f = await fixture(content)
