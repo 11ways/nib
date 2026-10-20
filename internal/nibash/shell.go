@@ -54,7 +54,7 @@ type Shell struct {
 	modelMu      sync.Mutex
 	models       map[int]server.ModelCall
 	modelNext    int
-	// shaped is what nib shape requests showed of each log, by canonical path, which a later skim by any agent goes on from.
+	// shaped is what nib shape requests showed of each log, by canonical path, which a later skim by any agent folds.
 	shapeMu sync.Mutex
 	shaped  map[string]logMark
 	// writers are the calls of every session running now, a job's included, and those that ended while one of them ran; mu guards it and

@@ -28,7 +28,7 @@ bun typecheck           # go vet and tsgo --noEmit
 | `write` | `path`, `content`, optional `tag` | Creates a file (with parents), or overwrites one when given its current tag, keeping a CRLF file's line endings and a BOM; answers with a row map of the new file. |
 | `nibash` | `command`, optional `description`, `expect` (offered with a decision model or a summarizer), `timeout`, `background` | A shell whose calls each start afresh in the project directory and run in parallel; its own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n`, `cut -c` and `wc` print anchored rows, everything else runs as real programs, and output is shaped for the model. |
 | `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists what nibash runs for the client, every agent of it: commands still in their call and jobs (running, or ended in the last 10 minutes), with how long each ran, its log and, with `tail`, its last output lines; as text and as structured content, which Claude Code's nib mod polls. `view` adds one more list for the mod's panes (`trash`, `seen`, `names`, `tokens`); `restore` puts one trashed path back through the trash code behind `trash restore`, refusing, as it does, a path where a file is now; `summaries` turns summaries of long output on or off for the session. |
-| `skim` | `paths[]`, `expect` | Offered with nibash. Reads any long text file the agent wants answers from rather than to edit (logs, test reports, data dumps, generated output, `PATH@REV`) for what it expects to learn: plain lines, the long ones shaped as nibash shapes long output, and a reread of a whole file shows only what was added. |
+| `skim` | `paths[]`, `expect` | Offered with nibash. Reads any long text file the agent wants answers from rather than to edit (logs, test reports, data dumps, generated output, `PATH@REV`) for what it expects to learn: plain lines, the long ones shaped as nibash shapes long output; a reread of a whole file with the same `expect` shows only what was added, and one with another `expect` everything but the lines the agent was shown. |
 
 ### read
 
@@ -166,11 +166,17 @@ a gap left out.
 ...
 ```
 
-A file the agent skimmed whole before shows only the lines added since, numbered as the file numbers them, so polling
-a test log costs only what it grew by; a last line still being written shows as it stands and again once it is
-finished, and `[...] N lines, plain: nothing new since your last skim` answers a skim of a log that did not grow. A file
-that shrank or whose first 4 KiB changed is read whole again and says so. A selector (`run.log:200-900`,
-`run.log:-500`) reads those lines, an open range to the end, and leaves where the next whole skim goes on alone.
+A skim remembers which of the file's lines the agent was shown, not how far the decider or summarizer read. Skimmed
+again with the same `expect` (in any case and spacing), a file shows only the lines added since, numbered as the file
+numbers them, so polling a test log costs only what it grew by; a last line still being written shows as it stands and
+again once it is finished, and `[...] N lines, plain: nothing new since your last skim with this expect` answers a skim
+of a log that did not grow. With another `expect` the whole file is shaped again, its deciders reading every line, but
+the lines the agent was shown are left out before the cut, named in one row
+(`[skim: lines 1-30, 351-450 left out, which your earlier skim showed]`), so the budget goes to lines it has not seen.
+What an agent was shown no longer counts once its context is compacted or cleared. A file that shrank or whose first
+4 KiB changed is read whole again and says so. A selector (`run.log:200-900`, `run.log:-500`) reads those lines, an open
+range to the end, leaves nothing out, and leaves where the next whole skim goes on alone; the lines it shows count as
+shown.
 Several files are read in one call, a missing one noted in its place; at most 64 MiB of a file is read per call.
 `expect` is required. `read` itself never takes it, so a read always gives rows to edit from.
 
@@ -931,10 +937,12 @@ When `nib shape` runs in the same Claude Code session as a nib server, as zenit-
 nibash started, it asks that server, through a socket in nib's private runtime folder named after the session
 (`CLAUDE_CODE_SESSION_ID`, which every program of the session sees) or named to nibash's programs in
 `NIB_SHAPE_SOCKET`, and prints its answer. The log is then shaped with the session's state: `/nibash summaries off`
-applies, the mod's band shows a `shape` card naming the log while it runs, `/tokens` counts it under `nib shape`, and a
-later `skim` of the same log, by any agent since nothing tells which one asked, shows only what was added since. Under
-`NIB_SANDBOX=1` a log outside the roots is refused with exit 2. With no such server, or one that cannot be asked,
-`nib shape` shapes the log itself, the same way.
+applies, the mod's band shows a `shape` card naming the log while it runs, and `/tokens` counts it under `nib shape`.
+What it showed went into another tool's result, and nothing tells which agent got that, so it counts as no agent's
+skim: a later `skim` of the same log leaves those lines out in one row that names when and how to read them
+(`[skim: lines 1-100, 204-403 left out, which a tool's result showed through nib shape at 14:16; read
+build.log:1-100,204-403 if you lack them]`). Under `NIB_SANDBOX=1` a log outside the roots is refused with exit 2. With
+no such server, or one that cannot be asked, `nib shape` shapes the log itself, the same way.
 
 **Privacy.** `NIB_DECIDER=openrouter` sends program output to OpenRouter: the command as written, the `description`, the
 exit status, the lines of a file `skim` reads and the rows between the kept start and end of each output long

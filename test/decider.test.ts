@@ -112,7 +112,7 @@ describe("deciders", () => {
       // Read again, a log that did not grow is nothing new, and the model is not asked.
       requests.length = 0
       const again = await client.callTool({ name: skim, arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }
-      expect(again.content[0]!.text).toBe(`[run.log] 3002 lines, plain: nothing new since your last ${skim}`)
+      expect(again.content[0]!.text).toBe(`[run.log] 3002 lines, plain: nothing new since your last ${skim} with this expect`)
       expect(requests).toHaveLength(0)
     } finally {
       server.stop(true)

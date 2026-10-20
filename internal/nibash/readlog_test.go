@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
@@ -114,7 +115,7 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	}
 	appendTo(t, path, numbered(11, 12)+"half a li")
 	expect(t, f.readLog("progress", "run.log"), "[run.log] lines 11-13 of 13, plain: new since your last "+engine.Skim+"\nline 11\nline 12\nhalf a li")
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 13 lines, plain: nothing new since your last "+engine.Skim)
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 13 lines, plain: nothing new since your last "+engine.Skim+" with this expect")
 	appendTo(t, path, "ne\n"+strings.Repeat("x", 2100)+"\n")
 	out := f.readLog("progress", "run.log")
 	if !strings.HasPrefix(out, "[run.log] lines 13-14 of 14, plain: new since your last "+engine.Skim+"\nhalf a line\n[line 14, chars 1-2000 of 2100]|xxx") ||
@@ -125,7 +126,7 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	model := pickText("error:")
 	f.shell.Deciding(model)
 	appendTo(t, path, numbered(15, 199)+"error: disk full\n"+numbered(201, 600))
-	out = f.readLog("did it fail", "run.log")
+	out = f.readLog("progress", "run.log")
 	if !strings.HasPrefix(out, "[run.log] lines 15-600 of 600, plain: new since your last "+engine.Skim+"\nline 15\n") || !strings.Contains(out, "\n["+engine.Skim+": log lines 45-") ||
 		!strings.Contains(out, "\nerror: disk full\n") || !strings.Contains(out, " rows shown of 586 log lines;") {
 		t.Fatalf("long addition:\n%s", out)
@@ -135,7 +136,49 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	}
 	// A selector reads those lines, and leaves where the next read goes on alone.
 	expect(t, f.readLog("progress", "run.log:2-3"), "[run.log] lines 2-3 of 600, plain\nline 2\nline 3")
-	expect(t, f.readLog("progress", "run.log"), "[run.log] 600 lines, plain: nothing new since your last "+engine.Skim)
+	expect(t, f.readLog("progress", "run.log"), "[run.log] 600 lines, plain: nothing new since your last "+engine.Skim+" with this expect")
+}
+
+// Another question reads the file whole again, but no line the agent was shown before: those are named, and the budget goes to the rest.
+func TestASkimForAnotherQuestionShowsOnlyLinesTheAgentWasNotShown(t *testing.T) {
+	f := newFixture(t, map[string]string{"build.log": numbered(1, 49) + "error: missing symbol Foo\n" + numbered(51, 450)})
+	f.shell.Deciding(pickText("error:"))
+	first := f.readLog("did the build pass", "build.log")
+	if !strings.Contains(first, "\nerror: missing symbol Foo\n") {
+		t.Fatalf("first read:\n%s", first)
+	}
+	shown := map[string]bool{}
+	for _, row := range strings.Split(first, "\n")[1:] {
+		if !strings.HasPrefix(row, "[") {
+			shown[row] = true
+		}
+	}
+	f.shell.Deciding(pickText("line 300"))
+	second := f.readLog("what happened at line 300", "build.log")
+	rows := strings.Split(second, "\n")
+	if rows[0] != "[build.log] 450 lines, plain" || !strings.HasPrefix(rows[1], "["+engine.Skim+": lines 1-") || !strings.HasSuffix(rows[1], " left out, which your earlier "+engine.Skim+" showed]") ||
+		!strings.Contains(second, "\nline 300\n") {
+		t.Fatalf("second read:\n%s", second)
+	}
+	for _, row := range rows[2:] {
+		if shown[row] {
+			t.Fatalf("%q was shown again:\n%s", row, second)
+		}
+	}
+	expect(t, f.readLog("What happened at  line 300", "build.log"), "[build.log] 450 lines, plain: nothing new since your last "+engine.Skim+" with this expect")
+	// Once the agent's context is cleared, it holds none of those lines.
+	f.engine.Store.Forget("s", time.Now())
+	if again := f.readLog("what happened at line 300", "build.log"); strings.Contains(again, "left out, which your earlier") || !strings.Contains(again, "\nline 1\n") {
+		t.Fatalf("after a clear:\n%s", again)
+	}
+}
+
+func TestASkimFoldsWhatAnotherQuestionShowedOfAShortLog(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.log": numbered(1, 3)})
+	f.readLog("anything wrong", "a.log")
+	expect(t, f.readLog("did it finish", "a.log"), "[a.log] 3 lines, plain\n["+engine.Skim+": lines 1-3 left out, which your earlier "+engine.Skim+" showed]")
+	// A selector asks for lines again, and counts them shown.
+	expect(t, f.readLog("x", "a.log:2"), "[a.log] lines 2 of 3, plain\nline 2")
 }
 
 func TestALogRewrittenSinceTheLastReadIsReadWhole(t *testing.T) {

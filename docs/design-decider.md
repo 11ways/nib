@@ -556,5 +556,6 @@ caller.
 The server shapes with `Shell.Shape`: the same `ShapeLog` with its own decider and its live summaries switch, a model
 call of kind `shape` named after the log while it runs, which the mod's band shows (the mod polls nib while any other MCP
 server's tool runs, since that tool may be the wrapper), and the result counted in the token report under `nib shape`.
-What it showed of the whole log becomes a skim mark every agent's next `skim` of the file goes on from, as the agent that
-asked is unknown; an agent's own later mark wins when it reaches further.
+What it showed went into another tool's result, and the agent that got it is unknown, so it is no agent's skim mark: a
+later `skim` of the file by any agent leaves those lines out before its cut, in one row naming them, the time and the
+read that shows them, and shapes the rest for its own `expect`.

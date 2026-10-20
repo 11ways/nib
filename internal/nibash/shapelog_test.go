@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,8 +91,8 @@ func TestShapeLogIsWhatNibashShowsOfTheSameOutput(t *testing.T) {
 }
 
 // A request through the session's socket is shaped as nib shape shapes it alone, shows in the band while it runs, and a later skim of the
-// log by any agent goes on from what it showed.
-func TestShapeThroughTheServerIsNibShapesViewAndTheSkimGoesOnFromIt(t *testing.T) {
+// log by any agent leaves out what it showed, naming those lines and how to read them, as no agent is known to have them.
+func TestShapeThroughTheServerIsNibShapesViewAndTheSkimLeavesOutWhatItShowed(t *testing.T) {
 	f := newFixture(t, map[string]string{"build.log": failedBuild()})
 	path := filepath.Join(f.directory, "build.log")
 	var during []server.ModelCall
@@ -118,10 +119,12 @@ func TestShapeThroughTheServerIsNibShapesViewAndTheSkimGoesOnFromIt(t *testing.T
 	}
 	appendTo(t, path, "retry 1\nretry 2\nBUILD FAILED again\n")
 	out := f.readLog("did the retry pass", "build.log")
-	if !strings.HasPrefix(out, "[build.log] lines 404-406 of 406, plain: new since nib shape showed it\nretry 1\n") {
+	rows := strings.Split(out, "\n")
+	if rows[0] != "[build.log] 406 lines, plain" || !regexp.MustCompile(`^\[skim: lines 1-\d+, \d+-403 left out, which a tool's result showed through nib shape at \d\d:\d\d; read build\.log:1-\d+,\d+-403 if you lack them\]$`).MatchString(rows[1]) ||
+		!strings.HasSuffix(out, "\nretry 1\nretry 2\nBUILD FAILED again") || slices.Contains(rows, "error: cannot find symbol Foo") {
 		t.Fatalf("skim after nib shape:\n%s", out)
 	}
-	if out := f.readLog("did the retry pass", "build.log"); out != "[build.log] 406 lines, plain: nothing new since your last skim" {
+	if out := f.readLog("did the retry pass", "build.log"); out != "[build.log] 406 lines, plain: nothing new since your last skim with this expect" {
 		t.Fatalf("skim again:\n%s", out)
 	}
 }
