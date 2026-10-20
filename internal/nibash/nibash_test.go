@@ -126,6 +126,24 @@ func TestPipelinesOfNibCommandsKeepOriginAndReportFacts(t *testing.T) {
 	expect(t, out, fmt.Sprintf("[a.txt#%s]\n4:four needle\n5:five\n[a.txt: lines 4-5 of 5]", tagOf(t, out)))
 }
 
+func TestHeadAfterGrepCountsWhatGrepRowsStandFor(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers, "sub/b.txt": "needle b\n"})
+	for command, fact := range map[string]string{
+		// One input, a pipe included, says nothing of files.
+		`printf 'x1\nx2\nx3\n' | grep x | head -1`:    "[head: 1 of 3 matching lines shown]",
+		"cat a.txt sub/b.txt | grep needle | head -1": "[head: 1 of 3 matching lines shown]",
+		"grep -rl needle . | head -1":                 "[head: 1 of 2 files shown]",
+		"grep -rc needle . | head -1":                 "[head: 1 of 2 files shown]",
+		"grep -o needle a.txt | head -1":              "[head: 1 of 2 matches shown]",
+		// Context rows are not matches.
+		"grep -C1 needle a.txt | head -3": "[head: 1 of 2 matching lines shown]",
+	} {
+		if out := f.run(command); !strings.HasSuffix(out, fact) {
+			t.Errorf("%s: want %s, got %s", command, fact, out)
+		}
+	}
+}
+
 func TestPlainOutputShapedLikeRowsIsSetApartFromAFilesRows(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
 	// tr makes grep's output a real program's: lines shaped like anchors, which must not read as more of a.txt's rows.

@@ -379,13 +379,16 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 		return
 	}
 	if !p.tail {
-		shown := 0
+		shown, matched := 0, 0
 		files := map[string]bool{}
 		if p.count > 0 {
 			inv.stdin(func(r record) bool {
 				shown++
-				if r.origin != nil {
-					files[r.origin.source.Canonical] = true
+				if !r.context && !r.separator {
+					matched++
+				}
+				if r.input != "" {
+					files[r.input] = true
 				}
 				inv.out.emit(r)
 				return shown < p.count
@@ -393,7 +396,7 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 		} else {
 			inv.in.stop()
 		}
-		inv.edgeFact(shown, len(files))
+		inv.edgeFact(shown, matched, len(files))
 		return
 	}
 	// tail of program output keeps everything it read in a log, so the model can grep it instead of running the command again.
@@ -425,8 +428,9 @@ func (p *edgePlan) edgeOfStdin(inv *invocation) {
 	}
 }
 
-// edgeFact says, for head at the terminal reading another nib command, how much its writer had in all.
-func (inv *invocation) edgeFact(shown, files int) {
+// edgeFact says, for head at the terminal reading another nib command, how much its writer had in all: matched are the rows head showed
+// that were not grep's context, and files the inputs they came from.
+func (inv *invocation) edgeFact(shown, matched, files int) {
 	if inv.out.sink == nil || inv.inLink == nil {
 		return
 	}
@@ -435,14 +439,19 @@ func (inv *invocation) edgeFact(shown, files int) {
 		s := l.stats
 		switch s.kind {
 		case "grep":
-			if s.total <= shown {
+			if s.total <= matched {
 				return ""
 			}
 			atLeast := ""
 			if s.partial {
 				atLeast = "at least "
 			}
-			return fmt.Sprintf("[head: %d of %s%s matching lines shown, from %d of %s%d files]", shown, atLeast, thousands(s.total), files, atLeast, s.files)
+			fact := fmt.Sprintf("[head: %d of %s%s %s shown", matched, atLeast, thousands(s.total), s.unit)
+			// From one input, which a piped grep always reads, the files say nothing.
+			if s.unit != "files" && s.files > 1 {
+				fact += fmt.Sprintf(", from %d of %s%d files", files, atLeast, s.files)
+			}
+			return fact + "]"
 		case "lines":
 			if s.total <= shown || s.single == nil {
 				return ""
@@ -844,11 +853,12 @@ func prepareGrep(name string, args []string) (plan, error) {
 	return p, nil
 }
 
-// grepState is what one grep run has found so far, over all its files.
+// grepState is what one grep run has found so far, over all its files: rows counts the rows it printed or would have printed after its
+// reader stopped, context and separators aside.
 type grepState struct {
 	matched  bool
 	status   int
-	total    int
+	rows     int
 	files    int
 	counting bool
 	deadline time.Time
@@ -884,10 +894,15 @@ func (p *grepPlan) run(inv *invocation) int {
 		p.grepSource(inv, state, source, operand, named)
 	}
 	if inv.outLink != nil {
-		inv.outLink.stats.kind = "grep"
-		inv.outLink.stats.total = state.total
-		inv.outLink.stats.files = state.files
-		inv.outLink.stats.partial = state.counting && time.Now().After(state.deadline)
+		unit := "matching lines"
+		switch {
+		case p.count || p.list || p.listMissing:
+			unit = "files"
+		case p.only:
+			unit = "matches"
+		}
+		inv.outLink.stats = linkStats{kind: "grep", total: state.rows, files: state.files, unit: unit,
+			partial: state.counting && time.Now().After(state.deadline)}
 	}
 	switch {
 	case p.quiet && state.matched:
@@ -988,12 +1003,13 @@ func (p *grepPlan) grepSource(inv *invocation, state *grepState, source *engine.
 		})
 		if found {
 			state.matched = true
-			state.total++
 			state.files++
 			if !p.quiet && !p.count && !p.list {
-				inv.out.emit(record{text: fmt.Sprintf("grep: %s: binary file matches", name)})
+				state.rows++
+				inv.out.emit(record{text: fmt.Sprintf("grep: %s: binary file matches", name), input: name})
 			} else if p.list {
-				inv.out.emit(record{text: name})
+				state.rows++
+				inv.out.emit(record{text: name, input: name})
 			}
 		}
 		return
@@ -1021,9 +1037,13 @@ func (p *grepPlan) grepRecords(inv *invocation, state *grepState, name string, n
 	line := 0
 	stopped := false
 	emit := func(r record) {
+		if !r.context && !r.separator {
+			state.rows++
+		}
 		if stopped {
 			return
 		}
+		r.input = name
 		if !inv.out.emit(r) {
 			stopped = true
 			if inv.outLink != nil && !state.counting {
@@ -1058,7 +1078,6 @@ func (p *grepPlan) grepRecords(inv *invocation, state *grepState, name string, n
 			return true
 		}
 		matches++
-		state.total++
 		if matches == 1 {
 			state.files++
 		}
@@ -1109,11 +1128,11 @@ func (p *grepPlan) grepRecords(inv *invocation, state *grepState, name string, n
 		if named {
 			text = name + ":" + text
 		}
-		inv.out.emit(record{text: text})
+		emit(record{text: text})
 	case p.list && matches > 0:
-		inv.out.emit(record{text: name})
+		emit(record{text: name})
 	case p.listMissing && matches == 0:
-		inv.out.emit(record{text: name})
+		emit(record{text: name})
 	}
 }
 
@@ -1305,7 +1324,7 @@ func (p *rgPlan) run(inv *invocation) int {
 			inv.out.emit(record{text: "--", separator: true})
 		}
 		lastLine[path] = event.Data.LineNumber
-		r := record{text: prefix + text, match: event.Type == "match", context: event.Type == "context"}
+		r := record{text: prefix + text, match: event.Type == "match", context: event.Type == "context", input: path}
 		if path != "" && !strings.Contains(text, "\n") {
 			if s := source(path); s != nil && s.View != nil {
 				r.origin = &origin{source: s, line: event.Data.LineNumber}
@@ -1331,7 +1350,11 @@ func (p *rgPlan) run(inv *invocation) int {
 		}
 	}
 	if inv.outLink != nil {
-		inv.outLink.stats = linkStats{kind: "grep", total: total, files: files}
+		unit, rows := "matching lines", total
+		if p.list || p.count {
+			unit, rows = "files", len(order)
+		}
+		inv.outLink.stats = linkStats{kind: "grep", total: rows, files: files, unit: unit}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {

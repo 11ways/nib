@@ -38,6 +38,8 @@ type record struct {
 	kept []engine.Stretch
 	// shape is how the terminal prints a line of git's that nib reshapes for the model, whose text stays git's line; nil prints text.
 	shape *shaped
+	// input is the file, or "(standard input)", grep found the line in, which head counts files by.
+	input string
 }
 
 type origin struct {
@@ -64,6 +66,8 @@ type linkStats struct {
 	files   int
 	partial bool
 	single  *engine.Source
+	// unit is what one of grep's rows other than context stands for: "matching lines", "matches" (-o) or "files" (-l, -L, -c).
+	unit string
 }
 
 // finish is called by the reader when it stops, so the writer stops sending.

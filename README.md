@@ -708,10 +708,11 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   `cd x && make`), after `!`, in a pipeline before its last stage, or in the background. A script a program runs
   (`bash -c`, `sh script.sh`) and a file `source` reads are not guarded.
 - **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`; a `head` of a file
-  nib does not hold stops reading, so it says nothing); `head` after a nib
-  grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s
-  after `head` stops reading); `tail` of a program's output that leaves 10 lines or more out keeps all of it in a log
-  and names it with the lines left out (`[4,762 earlier lines in <log>]`; fewer, which the agent cut on purpose, get no
+  nib does not hold stops reading, so it says nothing); `head` after a nib grep says how much there was
+  (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`; `files` after `-l` and `-c`, `matches` after `-o`, and
+  no files when grep read one input, counting for up to 2 s after `head` stops reading); `tail` of a program's output
+  that leaves 10 lines or more out keeps all of it in a log and names it with the lines left out
+  (`[4,762 earlier lines in <log>]`; fewer, which the agent cut on purpose, get no
   note); with a decision model or a summarizer, those lines may be checked first
   ([below](#long-output-and-deciders)).
 - **Byte counts.** `head -c N` and `tail -c N` (or `+N`) print exactly the bytes the system programs print, as lines: a
