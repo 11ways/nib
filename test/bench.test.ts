@@ -242,15 +242,14 @@ describe("harness output", () => {
     expect(await notes("edit", { input: `[save.ts#${save}]\nPUT 2.=3:\n+  const row = toRow(record, now())` })).toEqual([
       "warned: The edit of lines 2-3 dropped line 3, \"store.insert(row)\": no new row resembles it, while they keep the range's other lines. If the range was meant to end at line 2, this hunk, with the new tag, puts it back:",
     ])
-    // nibash's notes on cut output: keywords choosing the middle, the fixed cut when they find nothing, and the footer of a row cut for length.
+    // nibash's notes on cut output: keywords choosing the middle, whose rows name their log lines, the fixed cut when they find nothing, and
+    // the footer of a row cut for length.
     const decided = await notes("nibash", { command: "seq 1 3000; echo 'error: boom'; seq 5001 5200" })
     expect(decided).toEqual([
-      "cut: [nibash: log lines 31-2997 left out]",
-      "cut: [nibash: log lines 3005-3101 left out]",
-      expect.stringMatching(/^cut: \[nibash: 137 rows shown of 3,201 log lines; keywords chose the middle; whole output: \S+\]$/),
+      expect.stringMatching(/^cut: \[nibash: 137 rows shown of 3,201 log lines; keywords chose the middle; N\| is a row's line in the whole output: read \S+:A-B plain:true for others\]$/),
     ])
     // The log path is the form the benchmark counts follow-up reads of.
-    const log = /whole output: (\S+)\]$/.exec(decided[2]!)![1]!
+    const log = /whole output: read (\S+):A-B/.exec(decided[0]!)![1]!
     expect([OUTPUT_LOG.test(log), log.startsWith(directory)]).toEqual([true, true])
     expect(await notes("nibash", { command: "seq 1 5000" })).toEqual([expect.stringMatching(/^cut: \[nibash: 300 rows shown of 5,000 log lines; log lines 101-4800 left out; keywords found nothing in them; whole output: \S+\]$/)])
     expect(await notes("nibash", { command: "seq -s x 1 1000" })).toEqual([expect.stringMatching(/^cut: \[cut rows: N is the row's line in the whole output; read \S+:N with maxLineLength to see one whole\]$/)])

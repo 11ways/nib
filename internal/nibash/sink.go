@@ -257,7 +257,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	seen := map[*engine.Source][]int{}
 	var texts []string
 	for _, r := range rows {
-		texts = append(texts, r.text)
+		texts = append(texts, r.printed())
 		if r.anchor {
 			seen[r.source] = append(seen[r.source], r.line)
 		}
@@ -468,10 +468,11 @@ func plainItems(plain []engine.PlainLine, at []int, listed []*listedLine, end in
 	return items, echoed
 }
 
+// size is the bytes rows take as the agent reads them, each with its line break.
 func size(rows []row) int {
 	n := 0
 	for _, r := range rows {
-		n += len(r.text) + 1
+		n += len(r.printed()) + 1
 	}
 	return n
 }
@@ -488,6 +489,8 @@ type row struct {
 	plain       bool
 	capped      bool
 	first, last int
+	// label is the log lines a row of output with gaps in it prints before its text, as N or N-M, so its numbers show every gap.
+	label string
 	// covers are the lines a held marker stands for; a match row (grep's match, a line a diff adds) is what the command is for, so it always
 	// prints.
 	covers []int
@@ -495,6 +498,14 @@ type row struct {
 	mapped bool
 	// listed is the path a plain row's line names, which the terminal may print under its folder.
 	listed *listedLine
+}
+
+// printed is the row as the agent reads it: its text, after its label when it has one.
+func (r row) printed() string {
+	if r.label == "" {
+		return r.text
+	}
+	return r.label + "|" + r.text
 }
 
 // plainFollows separates a file's rows from plain output shaped like them, which is not an anchor.
@@ -657,7 +668,7 @@ func fixedCut(rows []row, log saved, because string) []row {
 	if because != "" {
 		clauses = append(clauses, because)
 	}
-	kept = append(kept, row{text: closing(shown, log, clauses), header: -1})
+	kept = append(kept, row{text: closing(shown, log, false, clauses), header: -1})
 	kept = append(kept, header...)
 	return append(kept, rows[start:]...)
 }
@@ -727,6 +738,18 @@ func (l saved) whole() string {
 
 // span names log lines first to last as notes number them.
 func (l saved) span(first, last int) string { return lineSpan(l.base+first, l.base+last) }
+
+// numbered is r with its log lines as its label when it is a plain row shown whole that stands for some; a cut row names its line already.
+func (l saved) numbered(r row) row {
+	if !r.plain || r.capped || r.first == 0 {
+		return r
+	}
+	r.label = fmt.Sprint(l.base + r.first)
+	if r.last > r.first {
+		r.label += fmt.Sprintf("-%d", l.base+r.last)
+	}
+	return r
+}
 
 // save writes text to a new log, capped at logLimit.
 func (l *logDirectory) save(text string) saved {

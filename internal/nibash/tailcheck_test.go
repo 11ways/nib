@@ -38,10 +38,10 @@ func TestATailGetsTheCauseItLeftOutAddedAfterItsOwnOutput(t *testing.T) {
 	if !slices.Equal(rows[:5], []string{"396", "397", "398", "399", "400"}) {
 		t.Fatalf("the tail's own output changed:\n%s", out)
 	}
-	if !regexp.MustCompile(`^\[397 earlier lines in \S+; m and keywords chose these of them for your description:\]$`).MatchString(rows[5]) {
+	if !regexp.MustCompile(`^\[397 earlier lines in \S+; m and keywords chose these of them for your description; N\| is a row's log line:\]$`).MatchString(rows[5]) {
 		t.Fatalf("header %q", rows[5])
 	}
-	if !slices.Equal(rows[6:], []string{"compiling", "error: missing symbol Foo", "1", "2", "3"}) {
+	if !slices.Equal(rows[6:], []string{"1|compiling", "2|error: missing symbol Foo", "3|1", "4|2", "5|3"}) {
 		t.Fatalf("added:\n%s", out)
 	}
 	// The model reads only what the tail left out, deduplicated, with the call's description.
@@ -104,12 +104,12 @@ func TestManyChosenLinesTheTailLeftOutBecomeASummaryOrTheirStart(t *testing.T) {
 	f.shell.Deciding(everything).Summarizing(summary)
 	out := f.call(server.ShellCall{Command: build, Description: "run the build"})
 	rows := strings.Split(out, "\n")
-	if !strings.HasSuffix(rows[5], "; a summary of the whole output, then the lines it points at that the tail left out:]") ||
-		rows[6] != "<summary>Foo is missing.</summary>" || !slices.Equal(rows[7:], []string{"compiling", "error: missing symbol Foo", "1"}) {
+	if !strings.HasSuffix(rows[5], "; a summary of the whole output, then the lines it points at that the tail left out; N| is a row's log line:]") ||
+		rows[6] != "<summary>Foo is missing.</summary>" || !slices.Equal(rows[7:], []string{"1|compiling", "2|error: missing symbol Foo", "3|1"}) {
 		t.Fatalf("summary:\n%s", out)
 	}
 	// The summarizer reads the whole log, the tail's lines too; a passage in the tail is not shown again.
-	if len(summary.asked) != 1 || len(summary.asked[0].Log) != 402 || slices.Contains(rows[7:], "399") {
+	if len(summary.asked) != 1 || len(summary.asked[0].Log) != 402 || slices.Contains(rows[7:], "399|399") {
 		t.Fatalf("asked %+v:\n%s", summary.asked, out)
 	}
 
@@ -118,8 +118,8 @@ func TestManyChosenLinesTheTailLeftOutBecomeASummaryOrTheirStart(t *testing.T) {
 	f.shell.Summarizing(failing)
 	out = f.call(server.ShellCall{Command: build, Description: "run the build"})
 	rows = strings.Split(out, "\n")
-	if !strings.HasSuffix(rows[5], "; m and keywords chose these of them for your description; log lines 31-397 it chose did not fit; no summary:]") ||
-		len(rows) != 6+tailAdded || rows[6] != "compiling" || rows[len(rows)-1] != "28" {
+	if !strings.HasSuffix(rows[5], "; m and keywords chose these of them for your description; log lines 31-397 it chose did not fit; no summary; N| is a row's log line:]") ||
+		len(rows) != 6+tailAdded || rows[6] != "1|compiling" || rows[len(rows)-1] != "30|28" {
 		t.Fatalf("capped:\n%s", out)
 	}
 }

@@ -33,18 +33,20 @@ var gapNote = regexp.MustCompile(`^\[nibash: (?:.*?; )?log lines? (\d+)(?:-(\d+)
 // logOf is the log a cut output names.
 func logOf(t *testing.T, out string) []string {
 	t.Helper()
-	at := strings.LastIndex(out, "whole output: ")
-	if at < 0 {
+	names := closingLog.FindAllStringSubmatch(out, -1)
+	if names == nil {
 		t.Fatalf("no log in %s", out)
 	}
-	path := out[at+len("whole output: "):]
-	path = path[:strings.Index(path, "]")]
+	path := names[len(names)-1][1] + names[len(names)-1][2]
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 }
+
+// closingLog matches where a closing note says the whole output is, with the read of others when its rows are numbered.
+var closingLog = regexp.MustCompile(`whole output: (?:read (\S+):A-B plain:true for others|(\S+))\]`)
 
 // sedLines is sed -n A,Bp on the log's lines.
 func sedLines(log []string, a, b int) []string { return log[a-1 : b] }
@@ -134,7 +136,7 @@ func TestCutNotesCiteTheLogLinesLeftOut(t *testing.T) {
 	}
 }
 
-func TestDecidedCutsKeepPicksAndAnnounceEveryGap(t *testing.T) {
+func TestDecidedCutsNumberEveryRowWithItsLogLine(t *testing.T) {
 	var lines strings.Builder
 	for i := 1; i <= 1000; i++ {
 		fmt.Fprintf(&lines, "line %d\n", i)
@@ -152,22 +154,28 @@ func TestDecidedCutsKeepPicksAndAnnounceEveryGap(t *testing.T) {
 	if len(fake.asked) != 1 || len(fake.asked[0].Rows) != 870 || fake.asked[0].Rows[0] != "line 31" || fake.asked[0].Purpose != "why" || fake.asked[0].Exit != 2 {
 		t.Fatalf("asked %+v", fake.asked)
 	}
-	rows := strings.Split(out, "\n")
-	pairs := [][2]string{{"line 30", "[nibash: log lines 31-37 left out]"}, {"[nibash: log lines 31-37 left out]", "line 38"}, {"line 44", "[nibash: log lines 45-427 left out]"},
-		{"[nibash: log lines 45-427 left out]", "line 428"}, {"line 458", "[nibash: log lines 459-900 left out]"}, {"[nibash: log lines 459-900 left out]", "line 901"}}
+	pairs := [][2]string{{"30|line 30", "38|line 38"}, {"44|line 44", "428|line 428"}, {"458|line 458", "901|line 901"}}
 	for _, pair := range pairs {
 		if !strings.Contains(out, "\n"+pair[0]+"\n"+pair[1]+"\n") {
 			t.Fatalf("%q is not followed by %q in\n%s", pair[0], pair[1], out)
 		}
 	}
+	rows := strings.Split(out, "\n")
 	last := rows[len(rows)-1]
-	if !strings.HasPrefix(last, "[nibash: 168 rows shown of 1,000 log lines; fake chose the middle for your description; whole output: ") {
+	if !strings.HasPrefix(last, "[nibash: 168 rows shown of 1,000 log lines; fake chose the middle for your description; N| is a row's line in the whole output: read ") ||
+		!strings.HasSuffix(last, ":A-B plain:true for others]") {
 		t.Fatalf("closing note %q", last)
 	}
-	// The gaps hold exactly the left-out lines.
+	// Every other row is the log line its number names, so the numbers show each gap and no note is needed for one.
 	log := logOf(t, out)
-	if got := sedLines(log, 45, 427); got[0] != "line 45" || got[len(got)-1] != "line 427" {
-		t.Fatalf("gap %q ... %q", got[0], got[len(got)-1])
+	for _, r := range rows[:len(rows)-1] {
+		m := numberedRow.FindStringSubmatch(r)
+		if m == nil {
+			t.Fatalf("row %q carries no log line in\n%s", r, out)
+		}
+		if n, _ := strconv.Atoi(m[1]); log[n-1] != m[2] {
+			t.Fatalf("row %q, log line %d is %q", r, n, log[n-1])
+		}
 	}
 }
 
@@ -190,11 +198,11 @@ func TestDecidedCutNotes(t *testing.T) {
 			Picks: []decider.Pick{{Range: decider.Range{Start: 5, End: 6}, Score: 1}}}, decision{purpose: "count"},
 			[]string{"; log lines 101-800 left out; m and keywords judged that your description needs every line, so filter or count the whole output instead; whole output: "}},
 		{"a failed model leaves keywords to choose", decider.Choice{Who: "keywords", Failure: "OpenRouter 429", Picks: []decider.Pick{{Range: decider.Range{Start: 5, End: 6}, Score: 0.5}}}, decision{},
-			[]string{"[nibash: log lines 31-32 left out]", "; the decision model failed (OpenRouter 429), so keywords chose the middle; whole output: "}},
+			[]string{"\n30|line 30\n33|line 33\n", "; the decision model failed (OpenRouter 429), so keywords chose the middle; N| is a row's line in the whole output: read "}},
 		{"unjudged windows and picks that did not fit are named", decider.Choice{Who: "m and keywords", Model: true,
 			Picks:    []decider.Pick{{Range: decider.Range{Start: 0, End: 165}, Score: 0.9}, {Range: decider.Range{Start: 300, End: 301}, Score: 0.8}, {Range: decider.Range{Start: 600, End: 601}, Score: 0.7}},
 			Unjudged: []decider.Unjudged{{Range: decider.Range{Start: 700, End: 725}, Reason: "OpenRouter 502"}, {Range: decider.Range{Start: 750, End: 775}, Reason: "OpenRouter 502"}}}, decision{purpose: "p"},
-			[]string{"[nibash: 298 rows shown of 1,000 log lines; m and keywords chose the middle for your description; 2 more passages it chose did not fit (log lines 328-334, 628-634); log lines 731-755, 781-805 were not judged (OpenRouter 502); whole output: "}},
+			[]string{"[nibash: 298 rows shown of 1,000 log lines; m and keywords chose the middle for your description; 2 more passages it chose did not fit (log lines 328-334, 628-634); log lines 731-755, 781-805 were not judged (OpenRouter 502); N| is a row's line in the whole output: read "}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -229,7 +237,7 @@ func TestKeywordsChooseTheErrorInALongRun(t *testing.T) {
 	f := newFixture(t, nil)
 	f.shell.Deciding(decider.Config{Kind: decider.Keywords}.New())
 	out := f.call(server.ShellCall{Command: "seq 1 1500; echo 'error: boom'; seq 1501 3000; exit 1", Description: "find the error"})
-	for _, want := range []string{"\n1498\n1499\n1500\nerror: boom\n1501\n1502\n1503\n[nibash: log lines 1505-", "\n30\n[nibash: log lines 31-1497 left out]\n1498\n", "; keywords chose the middle; whole output: ", "\n[exit 1]"} {
+	for _, want := range []string{"\n1498|1498\n1499|1499\n1500|1500\n1501|error: boom\n1502|1501\n1503|1502\n1504|1503\n", "\n30|30\n1498|1498\n", "; keywords chose the middle; N| is a row's line in the whole output: read ", "\n[exit 1]"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("no %q in\n%s", want, out)
 		}
@@ -301,3 +309,6 @@ func TestDescriptionSaysHowEachDeciderCuts(t *testing.T) {
 		t.Error("the fixed cut's description changed")
 	}
 }
+
+// numberedRow is a row of a decided cut: its log line and its text.
+var numberedRow = regexp.MustCompile(`^(\d+)\|(.*)$`)

@@ -337,9 +337,10 @@ When the command finishes or its time runs out, the sink is rendered once:
   last 100 and choose the middle.
   - The whole output goes to a log in `$XDG_RUNTIME_DIR/nib/` (falling back to a folder of the user's own under
     `os.TempDir()`). The directory is `0700`, and a log is capped at 64 MiB [m5].
-  - Every gap names the log lines it leaves out (`[nibash: log lines 101-4612 left out]`), counted in the log, not in
-    rows, so `sed -n 101,4612p LOG` shows exactly that; the closing note says how many rows are shown of how many log
-    lines and who chose. 30 KiB stays under Claude Code's 50,000-character result limit [m2].
+  - The fixed cut names its one gap with the log lines it leaves out (`[nibash: ...; log lines 101-4612 left out; ...]`),
+    counted in the log, not in rows, so `sed -n 101,4612p LOG` shows exactly that; a cut whose middle a decider chose
+    numbers each row with its log line as `N|TEXT`, so the numbers show every gap. The closing note says how many rows
+    are shown of how many log lines and who chose. 30 KiB stays under Claude Code's 50,000-character result limit [m2].
   - A plain row longer than 2,000 characters is cut in `read`'s bracketed form, numbered with its log line
     (`[line 2, chars 1-2000 of 20157]|...`), and the log is kept so it can be read whole.
   - A block of at least `foldMin` (5) plain rows that one of the agent's last `recallCalls` (50) calls showed, row for

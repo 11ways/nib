@@ -37,20 +37,24 @@ async function connect(directory: string, env: Record<string, string>) {
 const LONG_RUN = "seq 1 1500; echo 'routes: /v1/payments -> upstream payments-v2 (0 hosts)'; echo 'error: pool exhausted'; seq 1501 3000; exit 1"
 
 describe("deciders", () => {
-  test("keywords are the default: the error is shown and every gap names the log lines it leaves out", async () => {
+  test("keywords are the default: the error is shown and every row names its log line", async () => {
     const { client, nibash } = await connect(await workspace(), {})
     const { tools } = await client.listTools()
     const description = tools.find((tool) => tool.name === "nibash")!.description!
     expect(description).toContain("long output cut to its start, its end and the lines between that name errors or failures")
     expect(description.length).toBeLessThanOrEqual(2048)
     const out = await nibash(LONG_RUN)
-    expect(out).toContain("\n1500\nroutes: /v1/payments -> upstream payments-v2 (0 hosts)\nerror: pool exhausted\n1501\n")
-    const gap = /^\[nibash: log lines (\d+)-(\d+) left out\]$/m.exec(out)!
-    expect(gap).not.toBeNull()
-    const closing = out.split("\n").at(-2)!
-    expect(closing).toMatch(/^\[nibash: \d+ rows shown of 3,002 log lines; keywords chose the middle; whole output: \S+\]$/)
-    const log = (await readFile(closing.slice(closing.indexOf("whole output: ") + 14, -1), "utf8")).split("\n")
-    expect(log.slice(Number(gap[1]) - 1, Number(gap[2]))).toEqual(Array.from({ length: Number(gap[2]) - Number(gap[1]) + 1 }, (_, index) => String(Number(gap[1]) + index)))
+    expect(out).toContain("\n1500|1500\n1501|routes: /v1/payments -> upstream payments-v2 (0 hosts)\n1502|error: pool exhausted\n1503|1501\n")
+    const rows = out.split("\n")
+    const closing = rows.at(-2)!
+    const where = /^\[nibash: \d+ rows shown of 3,002 log lines; keywords chose the middle; N\| is a row's line in the whole output: read (\S+):A-B plain:true for others\]$/.exec(closing)
+    expect(where).not.toBeNull()
+    // Every row is the log line its number names, so the numbers show each gap.
+    const log = (await readFile(where![1]!, "utf8")).split("\n")
+    for (const row of rows.slice(0, -2)) {
+      const [, line, text] = /^(\d+)\|(.*)$/.exec(row) ?? []
+      expect([row, log[Number(line) - 1]]).toEqual([row, text])
+    }
   })
 
   test("the fixed cut keeps its start and end, and its description says so", async () => {
@@ -94,8 +98,8 @@ describe("deciders", () => {
       expect(requests[0].body.state.purpose).toBe("find why payments fail")
       expect(requests[0].body.provider).toEqual({ zdr: true, data_collection: "deny" })
       expect(JSON.stringify(requests)).not.toContain("line 500")
-      expect(out).toContain("\n1500\nroutes: /v1/payments -> upstream payments-v2 (0 hosts)\nerror: pool exhausted\n1501\n")
-      expect(out).toMatch(/\n\[nibash: \d+ rows shown of 3,002 log lines; typesafe\/jev-1\.14 and keywords chose the middle for your description; whole output: \S+\]\n\[exit 1\]$/)
+      expect(out).toContain("\n1500|1500\n1501|routes: /v1/payments -> upstream payments-v2 (0 hosts)\n1502|error: pool exhausted\n1503|1501\n")
+      expect(out).toMatch(/\n\[nibash: \d+ rows shown of 3,002 log lines; typesafe\/jev-1\.14 and keywords chose the middle for your description; N\| is a row's line in the whole output: read \S+:A-B plain:true for others\]\n\[exit 1\]$/)
       // skim is the same for a log file: the model reads its lines with expect as the purpose, and notes name the file; read never takes expect.
       const skim = skimName(tools as never)
       expect(JSON.stringify(tools.find((tool) => tool.name === "read")!.inputSchema)).not.toContain('"expect"')
@@ -106,9 +110,9 @@ describe("deciders", () => {
       const log = read.content[0]!.text
       expect(requests.length).toBeGreaterThan(0)
       expect(requests[0].body.state.purpose).toBe("why do payments fail")
-      expect(log).toStartWith("[run.log] 3002 lines, plain\n1\n")
-      expect(log).toContain("\n1500\nroutes: /v1/payments -> upstream payments-v2 (0 hosts)\nerror: pool exhausted\n1501\n")
-      expect(log).toMatch(new RegExp(`\\n\\[${skim}: \\d+ rows shown of 3,002 log lines; typesafe/jev-1\\.14 and keywords chose the middle for what you expect; whole file: run\\.log\\]$`))
+      expect(log).toStartWith("[run.log] 3002 lines, plain\n1|1\n")
+      expect(log).toContain("\n1500|1500\n1501|routes: /v1/payments -> upstream payments-v2 (0 hosts)\n1502|error: pool exhausted\n1503|1501\n")
+      expect(log).toMatch(new RegExp(`\\n\\[${skim}: \\d+ rows shown of 3,002 log lines; typesafe/jev-1\\.14 and keywords chose the middle for what you expect; N\\| is a row's line in the whole file: read run\\.log:A-B plain:true for others\\]$`))
       // Read again, a log that did not grow is nothing new, and the model is not asked.
       requests.length = 0
       const again = await client.callTool({ name: skim, arguments: { paths: ["run.log"], expect: "why do payments fail" } }) as { content: { text: string }[] }

@@ -272,11 +272,11 @@ func shownIn(rows []row, before, limit int, set lineSet) lineSet {
 	return set
 }
 
-// rowTexts are the texts of rows.
+// rowTexts are the texts of rows as the agent reads them.
 func rowTexts(rows []row) []string {
 	texts := make([]string, len(rows))
 	for i, r := range rows {
-		texts[i] = r.text
+		texts[i] = r.printed()
 	}
 	return texts
 }

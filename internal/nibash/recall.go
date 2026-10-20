@@ -141,7 +141,7 @@ func foldMarker(log saved, command string, block []row) (string, bool) {
 		log.span(block[0].first, block[len(block)-1].last), log.path))
 	cost := 0
 	for _, r := range block {
-		cost += js.Len(r.text) + 1
+		cost += js.Len(r.printed()) + 1
 	}
 	return marker, js.Len(marker)+1 < cost
 }

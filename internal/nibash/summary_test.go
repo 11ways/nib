@@ -46,24 +46,19 @@ func TestASummaryShowsEveryPassageItPointsAtWithinItsShare(t *testing.T) {
 	if rows[0] != "<summary>Line 500 fails. fake</summary>" || strings.Contains(out, "vendor/model") {
 		t.Fatalf("first row %q", rows[0])
 	}
-	if rows[1] != "[nibash: log lines 1-99 left out]" || rows[2] != "line 100" || !slices.Contains(rows, "line 499") || !slices.Contains(rows, "line 506") ||
-		!slices.Contains(rows, "line 801") || !slices.Contains(rows, "line 900") {
+	if rows[1] != "100|line 100" || !slices.Contains(rows, "499|line 499") || !slices.Contains(rows, "506|line 506") ||
+		!slices.Contains(rows, "801|line 801") || !slices.Contains(rows, "900|line 900") {
 		t.Fatalf("passages:\n%s", out)
 	}
-	// Passages longer than their share of summaryRows lose their context lines first, then show their start and a read of the rest; the
-	// lines past a passage are named by a gap row of their own.
-	rest := func(span string) bool {
-		return slices.ContainsFunc(rows, func(r string) bool {
-			return strings.HasPrefix(r, "[nibash: log lines "+span+" left out; the rest of this passage: read ") && strings.HasSuffix(r, ":"+span+" plain:true]")
-		})
-	}
-	if !slices.Contains(rows, "line 109") || slices.Contains(rows, "line 110") || !rest("110-160") || !slices.Contains(rows, "[nibash: log lines 161-498 left out]") ||
-		!slices.Contains(rows, "line 908") || slices.Contains(rows, "line 909") || !rest("909-910") || slices.Contains(rows, "line 911") ||
-		!slices.Contains(rows, "[nibash: log lines 911-1000 left out]") {
+	// Passages longer than their share of summaryRows lose their context lines first, then show their start and a note on the rest; the
+	// numbers show the lines between passages.
+	if !slices.Contains(rows, "109|line 109") || slices.Contains(rows, "110|line 110") || !slices.Contains(rows, "[nibash: log lines 110-160 left out, the rest of this passage]") ||
+		!slices.Contains(rows, "908|line 908") || slices.Contains(rows, "909|line 909") || !slices.Contains(rows, "[nibash: log lines 909-910 left out, the rest of this passage]") ||
+		slices.Contains(rows, "911|line 911") {
 		t.Fatalf("share:\n%s", out)
 	}
 	last := rows[len(rows)-1]
-	for _, want := range []string{"30 rows shown", "of 1,000 log lines", "whole output: "} {
+	for _, want := range []string{"30 rows shown", "of 1,000 log lines", "N| is a row's line in the whole output: read ", ":A-B plain:true for others]"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("closing lacks %q: %s", want, last)
 		}
@@ -71,10 +66,18 @@ func TestASummaryShowsEveryPassageItPointsAtWithinItsShare(t *testing.T) {
 	if strings.Contains(last, "quotes") || strings.Contains(last, "dropped") || strings.Contains(last, "other passages") {
 		t.Errorf("closing names what the agent need not read: %s", last)
 	}
-	for _, r := range rows {
-		if gap := gapNote.FindStringSubmatch(r); gap == nil && strings.HasPrefix(r, "[nibash: log") {
-			t.Errorf("gap row %q", r)
+	notes := 0
+	for _, r := range rows[1 : len(rows)-1] {
+		if strings.HasSuffix(r, ", the rest of this passage]") {
+			notes++
+			continue
 		}
+		if m := numberedRow.FindStringSubmatch(r); m == nil || m[2] != "line "+m[1] {
+			t.Errorf("row %q", r)
+		}
+	}
+	if notes != 2 {
+		t.Errorf("%d notes in\n%s", notes, out)
 	}
 	// The summarizer reads the log's lines and an excerpt of the start, the end and the decider's pick widened.
 	in := summary.asked[0]
@@ -84,14 +87,14 @@ func TestASummaryShowsEveryPassageItPointsAtWithinItsShare(t *testing.T) {
 	}
 }
 
-func TestASummaryThatPointsAtNothingShowsItselfAndNamesEveryLineLeftOut(t *testing.T) {
+func TestASummaryThatPointsAtNothingShowsItselfAndHowMuchItLeftOut(t *testing.T) {
 	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
 		return decider.Summary{Text: "All 1000 steps ran.", Who: "vendor/model"}
 	}}
 	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
 	rows := strings.Split(renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, purpose: "did every step run"}), "\n")
-	if len(rows) != 3 || rows[0] != "<summary>All 1000 steps ran.</summary>" || rows[1] != "[nibash: log lines 1-1000 left out]" ||
-		!strings.HasPrefix(rows[2], "[nibash: 0 rows shown of 1,000 log lines") {
+	if len(rows) != 2 || rows[0] != "<summary>All 1000 steps ran.</summary>" ||
+		!strings.HasPrefix(rows[1], "[nibash: 0 rows shown of 1,000 log lines; whole output: ") {
 		t.Fatalf("rows:\n%s", strings.Join(rows, "\n"))
 	}
 }

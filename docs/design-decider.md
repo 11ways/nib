@@ -14,7 +14,8 @@ of always the first 100 and last 200. Same trigger and budget as before (over 40
 **Rules for every decider:**
 1. **Choices only.** A decider returns ranges of rows and scores. Every row shown is a row of the output, unchanged;
    every note is a fixed template with numbers, paths and the decider's name filled in.
-2. **Every cut is announced** at each gap with the log lines it leaves out, and a closing note says who chose.
+2. **Every cut is announced**: each row a decider chose among is numbered with its log line (`N|TEXT`), so the numbers
+   show each gap; the fixed cut names its one gap; a closing note says who chose.
 3. **The whole output stays in the log.**
 4. **Output leaves the machine only when asked:** `NIB_DECIDER=openrouter`, and under `NIB_SANDBOX=1` also
    `NIB_DECIDER_SANDBOX=1`; any other combination with `openrouter` stops nib at startup.
@@ -115,18 +116,24 @@ Constants in `sink.go`: `decidedHead` 30, `decidedTail` 100, `pickContext` 3, ne
 3. If no pick fits or reaches the threshold: the fixed cut, saying the decider found nothing.
 4. If the model judged that the purpose needs every line (`Whole` at least 0.7): the fixed cut, saying to filter or
    count the log instead.
-5. Rows stay in output order, with a gap note at every gap.
+5. Rows stay in output order, each numbered with its log line as `N|TEXT` (a row that stands for several, such as a
+   collapsed run, as `N-M|TEXT`), so the numbers show every gap and no gap needs a note of its own. The number is never
+   an anchor: `|` is the separator nib uses for numbered rows that are not edit anchors, and a row cut at the line
+   limit keeps its own bracketed `[line N, ...]|` form.
 
 ## 7. Notes
 
 ```
-[nibash: log lines 31-1179 left out]
-[nibash: 161 rows shown of 3,013 log lines; typesafe/jev-1.14 and keywords chose the middle for your description; whole output: LOG]
-[nibash: 137 rows shown of 3,013 log lines; keywords chose the middle; whole output: LOG]
+30|line 30
+1180|error: boom
+[nibash: 161 rows shown of 3,013 log lines; typesafe/jev-1.14 and keywords chose the middle for your description; N| is a row's line in the whole output: read LOG:A-B plain:true for others]
+[nibash: 137 rows shown of 3,013 log lines; keywords chose the middle; N| is a row's line in the whole output: read LOG:A-B plain:true for others]
 [nibash: 300 rows shown of 5,000 log lines; log lines 101-4800 left out; whole output: LOG]
 [nibash: 300 rows shown of 5,000 log lines; log lines 101-4800 left out; keywords found nothing in them; whole output: LOG]
 [nibash: 300 rows shown of 9,003 log lines; log lines 101-8803 left out; typesafe/jev-1.14 and keywords judged that your description needs every line, so filter or count the whole output instead; whole output: LOG]
 ```
+The fixed cut, with one gap, names it in its closing note and leaves its rows unnumbered; a cut that chose its middle
+numbers its rows and names the read of the others once, in its closing note.
 Optional clauses of the closing note: `the decision model failed (REASON), so keywords chose the middle`;
 `2 more passages it chose did not fit (log lines 328-334, 628-634)`;
 `log lines 731-755 were not judged (OpenRouter 502)` or `(over the 8-request limit)`;
@@ -267,9 +274,10 @@ the latency too.
   the model off, the deadline, the gate (no request for exit 0 without a purpose, none when cancelled, a timeout judged
   as one), the cache (hit without a request, modes, no output text in entries, a tampered entry refused, the URL in the
   key), and a recorded real Jev response.
-- `internal/nibash`: rows and log lines (section 5), gap notes checked with `sed`, assembly with a fake decider (head,
-  tail, threshold, widening, budget, order), every note template, file rows never reaching the decider, keywords end to
-  end, the row cap, the capped log, the description per kind; the existing cut test with the new note.
+- `internal/nibash`: rows and log lines (section 5), gap notes checked with `sed`, numbered rows checked against the
+  log, assembly with a fake decider (head, tail, threshold, widening, budget, order), every note template, file rows
+  never reaching the decider, keywords end to end, the row cap, the capped log, the description per kind; the existing
+  cut test with the new note.
 - Offline check (section 3), in `go test ./...`.
 - Black-box (`test/decider.test.ts`): keywords as the default end to end with the log checked by line; the fixed cut and
   its description; the OpenRouter decider against a `Bun.serve` fake under `NIB_SANDBOX=1` with `NIB_DECIDER_SANDBOX=1`
@@ -370,9 +378,9 @@ next entry is asked within the same deadline. A checked summary replaces the dec
 (its text on one line, the model's name left out, summary tags in the text removed), the real rows of every range (1
 line around each; the ranges share `summaryRows`, 30: by `shared`, one that fits an even split of what is left shows
 whole and the longer ones split the rest, at least 3 rows each, dropping their surrounding lines first and then showing
-their start with a named read of the rest), named gaps, and a closing note with nib's own counts; the agent sees fewer
-rows than any decider shows, and nothing in it is the model's but the `<summary>` element. When every entry fails, the
-decider's cut stands with `no summary` in its note.
+their start and a note naming the rest), every row numbered with its log line, and a closing note with nib's own counts
+and the read of the other lines; the agent sees fewer rows than any decider shows, and nothing in it is the model's but
+the `<summary>` element. When every entry fails, the decider's cut stands with `no summary` in its note.
 
 Picks enter the excerpt best first, so the cap, not the 0.3 score, decides what a long log loses: at 400 lines the
 captures lost go-build-x's error (its block ranked past the cap) and git-log-stat's commit (a 0.49 block ranked 14th),
@@ -464,6 +472,12 @@ zenit-workspace session, three runs each: a 150-line `sqlite3` listing went from
 findings (the 1970 timestamps, the largest lock waits); a 124-line task listing went from 1.9-2.1 KB to 1.2-2.1 KB, and
 one of the three new summaries no longer said that no timing lines were shown.
 
+Rows of a decided cut and of a summary's passages then got their log lines as `N|TEXT` (`gapped`). Before, every gap
+had a note of its own, and a passage cut short two: one with a full `read LOG:A-B plain:true` for its rest, and one for
+the gap after it. A real `git show` of a 328-line file through a summary had 11 notes for its 30 rows, the log's path
+five times, about a third of the output. Numbers cost about 5 bytes a row and make the gaps plain; a passage cut short
+keeps one short note, since its rest is what the summary pointed at, and the closing note names the read once.
+
 The dedup ratio (log lines over entries) also moves when a summary starts: past 1.5 the 150-line and 12 KB limits are
 divided by ratio/1.5, floored at 50 lines and 3 KB (`summaryDue`). The recorded set holds no small repetitive output
 (every capture under the old limits shrinks 1.06 times or less: session-e2e 1.06, session-zemble-help 1.03, the rest
@@ -490,12 +504,12 @@ output's middle, about the lines the tail left out (the decision model reads the
 cover them), so the candidates are those lines and the tail plays the part of the kept end. Picks rated
 `PickThreshold` or more go in `novelFirst` order, a pick mostly like the tail's own lines waiting, each widened by
 `pickContext` lines. No pick leaves the plain note. Up to `tailAdded` (30) rows and `tailAddedBytes` (8 KB) of picks
-follow the tail's output under one header naming the left-out lines, the log, who chose and for what; gaps between
-them are named as everywhere, those before the first and after the last are left to the header. Past 30 rows with a
-summarizer, the summarizer reads the whole log (all entries, or past `excerptLines` the excerpt of the picks, the last
-100 entries, the tail included) and `summaryPassages` shows the passages it points at that the tail left out; one it
-points at in the tail is not shown twice. A failed summary falls to the capped rows with `no summary`; a failed model
-to the plain note with the failure. A judgement that every line counts says so instead of adding rows.
+follow the tail's output under one header naming the left-out lines, the log, who chose and for what, and that `N|` is
+a row's log line; each row is numbered with its log line, as in a decided cut, so the numbers show the gaps. Past 30
+rows with a summarizer, the summarizer reads the whole log (all entries, or past `excerptLines` the excerpt of the
+picks, the last 100 entries, the tail included) and `summaryPassages` shows the passages it points at that the tail
+left out; one it points at in the tail is not shown twice. A failed summary falls to the capped rows with `no summary`;
+a failed model to the plain note with the failure. A judgement that every line counts says so instead of adding rows.
 
 Two halves of the first idea were dropped. `head` is not checked: the program before it is closed once `head` has its
 lines, as in bash, so the rest was never printed, and reading on would change what the command does. And the exit

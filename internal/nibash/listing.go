@@ -172,7 +172,7 @@ func compactListing(lines []string, parse func(string) (listed, bool)) []string 
 }
 
 // groupListings lays out each run of shown plain rows that are still the path lines a program printed with each folder once; a folder row
-// stands for no log line, and every other row keeps the log lines it stood for.
+// stands for no log line, and every other row keeps the log lines it stood for. A row numbered with its log line keeps its whole path.
 func groupListings(rows []row) []row {
 	var out []row
 	var run []row
@@ -197,7 +197,7 @@ func groupListings(rows []row) []row {
 		run = nil
 	}
 	for _, r := range rows {
-		if r.plain && !r.capped && r.listed != nil && r.text == r.listed.text {
+		if r.plain && !r.capped && r.label == "" && r.listed != nil && r.text == r.listed.text {
 			run = append(run, r)
 			continue
 		}

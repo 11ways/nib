@@ -249,7 +249,7 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 	if summarize != nil && os.Getenv("NIB_CAPTURES_SHOW") == c.Name {
 		var texts []string
 		for _, r := range shown {
-			texts = append(texts, r.text)
+			texts = append(texts, r.printed())
 		}
 		t.Log("\n" + strings.Join(texts, "\n"))
 	}

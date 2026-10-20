@@ -130,8 +130,8 @@ func (t *tailed) check(ctx context.Context, d decision) {
 			TimedOut: d.timedOut, Log: lines, Excerpt: excerpted, Entries: chosen, Legend: legend})
 		if s.Failure == "" {
 			out, _ := summaryPassages(rows, s, t.log, lines)
-			t.added = append([]string{"[" + t.earlier() + "; a summary of the whole output, then the lines it points at that the tail left out:]",
-				out[0].text}, t.texts(inner(out[1:]))...)
+			t.added = append([]string{"[" + t.earlier() + "; a summary of the whole output, then the lines it points at that the tail left out; N| is a row's log line:]",
+				out[0].text}, t.texts(out[1:])...)
 			return
 		}
 		clauses = append(clauses, "no summary")
@@ -169,18 +169,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 	for _, clause := range clauses {
 		header += "; " + clause
 	}
-	t.added = append([]string{header + ":]"}, t.texts(inner(gapped(rows, keep, nil, t.log)))...)
-}
-
-// inner drops the rows of nib's own at either end of rows, the gaps before the first chosen line and after the last, which the header covers.
-func inner(rows []row) []row {
-	for len(rows) > 0 && !rows[0].plain {
-		rows = rows[1:]
-	}
-	for len(rows) > 0 && !rows[len(rows)-1].plain {
-		rows = rows[:len(rows)-1]
-	}
-	return rows
+	t.added = append([]string{header + "; N| is a row's log line:]"}, t.texts(gapped(rows, keep, nil, t.log))...)
 }
 
 // texts are the rows' texts, with the footer that explains cut rows when one is.
@@ -188,7 +177,7 @@ func (t *tailed) texts(rows []row) []string {
 	out := make([]string, len(rows))
 	capped := false
 	for i, r := range rows {
-		out[i] = r.text
+		out[i] = r.printed()
 		capped = capped || r.capped
 	}
 	if capped {

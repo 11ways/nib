@@ -51,10 +51,10 @@ func TestALongLogReadWithExpectGetsTheLinesTheModelChoseForIt(t *testing.T) {
 	f.shell.Deciding(model)
 	out := f.readLog("did the build pass", "build.log")
 	rows := strings.Split(out, "\n")
-	if rows[0] != "[build.log] 450 lines, plain" || !strings.Contains(out, "\nerror: missing symbol Foo\n") {
+	if rows[0] != "[build.log] 450 lines, plain" || !strings.Contains(out, "\n50|error: missing symbol Foo\n") {
 		t.Fatalf("read:\n%s", out)
 	}
-	if !regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 450 log lines; m and keywords chose the middle for what you expect; whole file: build.log\]$`).MatchString(out) {
+	if !regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 450 log lines; m and keywords chose the middle for what you expect; N\| is a row's line in the whole file: read build.log:A-B plain:true for others\]$`).MatchString(out) {
 		t.Fatalf("closing note:\n%s", out)
 	}
 	if len(model.asked) != 1 || model.asked[0].Purpose != "did the build pass" || model.asked[0].Command != "cat build.log" {
@@ -70,10 +70,10 @@ func TestALogPastTheSummaryLimitsLeadsWithASummaryOfIt(t *testing.T) {
 	f.shell.Deciding(pickText("FAIL")).Summarizing(summary)
 	out := f.readLog("which tests failed and why", "test.log")
 	rows := strings.Split(out, "\n")
-	if rows[0] != "[test.log] 200 lines, plain" || rows[1] != "<summary>TestFoo failed.</summary>" || !strings.Contains(out, "\nline 99\nFAIL TestFoo: want 1, got 2\nline 101\n[skim: log lines 102-200 left out]\n") {
+	if rows[0] != "[test.log] 200 lines, plain" || rows[1] != "<summary>TestFoo failed.</summary>" || !strings.Contains(out, "\n99|line 99\n100|FAIL TestFoo: want 1, got 2\n101|line 101\n["+engine.Skim+": 3 rows shown of 200 log lines; ") {
 		t.Fatalf("read:\n%s", out)
 	}
-	if !strings.HasSuffix(out, "; whole file: test.log]") || len(summary.asked) != 1 || summary.asked[0].Purpose != "which tests failed and why" {
+	if !strings.HasSuffix(out, "; N| is a row's line in the whole file: read test.log:A-B plain:true for others]") || len(summary.asked) != 1 || summary.asked[0].Purpose != "which tests failed and why" {
 		t.Fatalf("asked %+v:\n%s", summary.asked, out)
 	}
 	// What the log gained is summarized on its own, the summarizer told which of the file's lines it reads.
@@ -83,7 +83,7 @@ func TestALogPastTheSummaryLimitsLeadsWithASummaryOfIt(t *testing.T) {
 	}
 	out = f.readLog("which tests failed and why", "test.log")
 	if len(summary.asked) != 2 || summary.asked[1].Base != 200 || len(summary.asked[1].Log) != 200 ||
-		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last "+engine.Skim+"\n<summary>TestBar timed out.</summary>\n["+engine.Skim+": log lines 201-298 left out]\nline 299\nFAIL TestBar: timeout\nline 301\n["+engine.Skim+": log lines 302-400 left out]\n") {
+		!strings.HasPrefix(out, "[test.log] lines 201-400 of 400, plain: new since your last "+engine.Skim+"\n<summary>TestBar timed out.</summary>\n299|line 299\n300|FAIL TestBar: timeout\n301|line 301\n["+engine.Skim+": 3 rows shown of 200 log lines; ") {
 		t.Fatalf("asked %+v:\n%s", summary.asked, out)
 	}
 }
@@ -127,8 +127,8 @@ func TestAGrowingLogShowsOnlyWhatWasAddedSinceTheLastRead(t *testing.T) {
 	f.shell.Deciding(model)
 	appendTo(t, path, numbered(15, 199)+"error: disk full\n"+numbered(201, 600))
 	out = f.readLog("progress", "run.log")
-	if !strings.HasPrefix(out, "[run.log] lines 15-600 of 600, plain: new since your last "+engine.Skim+"\nline 15\n") || !strings.Contains(out, "\n["+engine.Skim+": log lines 45-") ||
-		!strings.Contains(out, "\nerror: disk full\n") || !strings.Contains(out, " rows shown of 586 log lines;") {
+	if !strings.HasPrefix(out, "[run.log] lines 15-600 of 600, plain: new since your last "+engine.Skim+"\n15|line 15\n") || !strings.Contains(out, "\n44|line 44\n") ||
+		strings.Contains(out, "\n45|") || !strings.Contains(out, "\n200|error: disk full\n") || !strings.Contains(out, " rows shown of 586 log lines;") {
 		t.Fatalf("long addition:\n%s", out)
 	}
 	if rows := model.asked[0].Rows; len(rows) == 0 || rows[0] != "line 45" {
@@ -144,7 +144,7 @@ func TestASkimForAnotherQuestionShowsOnlyLinesTheAgentWasNotShown(t *testing.T) 
 	f := newFixture(t, map[string]string{"build.log": numbered(1, 49) + "error: missing symbol Foo\n" + numbered(51, 450)})
 	f.shell.Deciding(pickText("error:"))
 	first := f.readLog("did the build pass", "build.log")
-	if !strings.Contains(first, "\nerror: missing symbol Foo\n") {
+	if !strings.Contains(first, "\n50|error: missing symbol Foo\n") {
 		t.Fatalf("first read:\n%s", first)
 	}
 	shown := map[string]bool{}
@@ -168,7 +168,7 @@ func TestASkimForAnotherQuestionShowsOnlyLinesTheAgentWasNotShown(t *testing.T) 
 	expect(t, f.readLog("What happened at  line 300", "build.log"), "[build.log] 450 lines, plain: nothing new since your last "+engine.Skim+" with this expect")
 	// Once the agent's context is cleared, it holds none of those lines.
 	f.engine.Store.Forget("s", time.Now())
-	if again := f.readLog("what happened at line 300", "build.log"); strings.Contains(again, "left out, which your earlier") || !strings.Contains(again, "\nline 1\n") {
+	if again := f.readLog("what happened at line 300", "build.log"); strings.Contains(again, "left out, which your earlier") || !strings.Contains(again, "\n1|line 1\n") {
 		t.Fatalf("after a clear:\n%s", again)
 	}
 }

@@ -153,12 +153,12 @@ or cleared, and never across a restart of the server; a row that changed prints,
 
 Where nibash is offered, `skim` reads any long text file the agent wants answers from rather than to edit (a log, a
 test report, a data dump, generated output) for `expect`, what it needs to learn, like
-`did the unit phase pass; if not, which tests failed and why`. Each file is read as plain lines (no numbers, nothing
-to edit from) and shaped the way nibash shapes a long program output, with `expect` as the purpose: within 150 lines and
-12 KB it prints whole; past them the decider chooses the lines that bear on it (keywords when no model is configured),
-or a summary leads the lines it points at, under the same notes, which say `skim` and name the file and its own line
-numbers (`[skim: log lines 31-1179 left out]`, `whole file: run.log`), so `read run.log:31-1179 plain:true` shows what
-a gap left out.
+`did the unit phase pass; if not, which tests failed and why`. Each file is read as plain lines (nothing to edit from)
+and shaped the way nibash shapes a long program output, with `expect` as the purpose: within 150 lines and 12 KB it
+prints whole; past them the decider chooses the lines that bear on it (keywords when no model is configured), or a
+summary leads the lines it points at, each numbered with the file's own line as `N|TEXT`, under the same notes, which
+say `skim` and name the file (`N| is a row's line in the whole file: read run.log:A-B plain:true for others`), so
+`read run.log:31-1179 plain:true` shows what a gap left out.
 
 ```
 [run.log] lines 4001-5213 of 5213, plain: new since your last skim
@@ -788,11 +788,13 @@ With no bwrap, as on every OS but Linux, nib refuses to start in sandbox mode un
 #### Long output and deciders
 
 When output is cut, a decider chooses which rows stay. It only chooses among real rows: every row shown is a row of the
-output, unchanged, and every note is one of nib's fixed templates. Each gap names the log lines it leaves out, counted
-in the log rather than in rows, so `sed -n 31,1179p LOG` shows exactly what is missing
-(`[nibash: log lines 31-1179 left out]`), and a closing note says how many rows are shown of how many log lines, who
-chose and where the log is. Rows from nib's own `cat`, `grep` and friends are file content the model asked for, so
-output holding any is always cut the fixed way and never sent anywhere.
+output, unchanged, and every note is one of nib's fixed templates. A cut that chose its middle numbers each row with
+its log line, as `1180|error: boom` (a row standing for several, such as a collapsed run, as `N-M|`), so the numbers
+show every gap; the number is never an edit anchor. The fixed cut names its one gap in its closing note, counted in the
+log rather than in rows, so `sed -n 101,4800p LOG` shows exactly what is missing. The closing note says how many rows
+are shown of how many log lines, who chose and where the log is (`N| is a row's line in the whole output: read
+LOG:A-B plain:true for others`). Rows from nib's own `cat`, `grep` and friends are file content the model asked for,
+so output holding any is always cut the fixed way and never sent anywhere.
 
 - **`keywords`** (the default): the first 30 and last 100 rows, plus the rows between that name a problem (`error`,
   `failed`, `panic`, `Traceback`, `TypeError`, pytest's `E`, `FAIL`, `not ok`, `Expected`/`Received`, Bun's cross; not
@@ -844,8 +846,8 @@ stands with `no summary` in its note. A checked summary takes the place of the d
 (its text on one line, without the model's name or any summary tags of its own), then the real log rows of every range
 with 1 line around each, the ranges sharing 30 rows (a range that fits an even split of what is left shows whole; a
 longer one drops its surrounding lines first, then shows its start and
-`[nibash: log lines A-B left out; the rest of this passage: read LOG:A-B plain:true]`), each
-other gap named as above, and a closing note. The rows share 4 KiB as well: each is at most its share wide (80 to 240
+`[nibash: log lines A-B left out, the rest of this passage]`), each row numbered as above, and a closing note. The
+rows share 4 KiB as well: each is at most its share wide (80 to 240
 characters), and a longer line, or one holding encoded data (a run of 100 or more base64 or hex characters mixing
 letters and digits), shows as a cut row naming the stretches it keeps, without the encoded runs, as
 `[line 12, chars 1-60, 1061-1240 of 1300]|{"type":"thinking","signature":" ... "},...`; the log holds it whole.
@@ -865,11 +867,12 @@ before them would cost the agent another call. With a decision model or a summar
 the call has a description or failed, the decider reads those lines, deduplicated, with the call's description, as it
 would read a long output's middle. The tail's own output stays as it is. When the decider picks nothing (the usual case)
 the note is the plain `[N earlier lines in LOG]`; when it picks some, the note becomes
-`[N earlier lines in LOG; MODEL and keywords chose these of them for your description:]`, followed by those log lines
-with 3 lines around each, best first, up to 30 rows and 8 KB (a passage that does not fit whole shows its start), and
-gaps named as above. Picks over 30 rows, with a summarizer, become a `<summary>` of the whole output and the lines
-it points at that the tail left out, under `[...; a summary of the whole output, then the lines it points at that the
-tail left out:]`. A decision model that fails adds `not checked, since the decision model failed (...)` to the note.
+`[N earlier lines in LOG; MODEL and keywords chose these of them for your description; N| is a row's log line:]`,
+followed by those log lines with 3 lines around each, best first, up to 30 rows and 8 KB (a passage that does not fit
+whole shows its start), each numbered with its log line. Picks over 30 rows, with a summarizer, become a `<summary>`
+of the whole output and the lines it points at that the tail left out, under `[...; a summary of the whole output,
+then the lines it points at that the tail left out; N| is a row's log line:]`. A decision model that fails adds
+`not checked, since the decision model failed (...)` to the note.
 The keyword decider alone never checks a tail, nor does nib check `head` (the program before it is closed at once, as
 in bash, so what follows was never printed) or a `tail` of a file or of nib's own commands. The exit status a program
 before the pipe returned is not known to nib (the pipeline's is `tail`'s), so only the call's own status counts.

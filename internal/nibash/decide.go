@@ -288,7 +288,7 @@ func cmpScore(a, b float64) int {
 // summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note. lines are the log's lines.
 func summarized(rows []row, s decider.Summary, log saved, lines []string) []row {
 	out, shown := summaryPassages(rows, s, log, lines)
-	return append(out, row{text: closing(shown, log, nil), header: -1})
+	return append(out, row{text: closing(shown, log, shown > 0, nil), header: -1})
 }
 
 // encodedRun is a stretch of a line that may be encoded data, base64 or hex, which no agent reads; encodedRuns keeps the ones that are.
@@ -342,8 +342,8 @@ func briefLine(label int, line string, width int) (text string, cut bool) {
 }
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
-// a share of summaryRows; a passage longer than its share drops its context lines first, then shows the start and end of the lines pointed
-// at, with the read of what it leaves out in between. shown counts the passages' rows.
+// a share of summaryRows; a passage longer than its share drops its context lines first, then shows the start of the lines pointed at, with a
+// note on the rest. shown counts the passages' rows.
 func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
@@ -363,7 +363,7 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 	}
 	shares := shared(passages, summaryRows, summaryShare)
 	keep := make([]bool, len(rows))
-	notes := map[int]passageNote{}
+	notes := map[int]string{}
 	for k, add := range passages {
 		share := shares[k]
 		// Context rows sit at a passage's edges; they go before any line the summary pointed at.
@@ -386,11 +386,7 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 		}
 		shown += share
 		if first, last := logLines(rowsAt(rows, add[share:])); first > 0 {
-			note := "log " + log.span(first, last) + " left out; the rest of this passage"
-			if log.path != "" {
-				note += fmt.Sprintf(": read %s:%d-%d plain:true", log.path, log.base+first, log.base+last)
-			}
-			notes[add[share]] = passageNote{text: log.note(note), end: add[len(add)-1] + 1}
+			notes[add[share]] = log.note("log " + log.span(first, last) + " left out, the rest of this passage")
 		}
 	}
 	// The passages share passageBytes, each row as wide as its share; a longer line shows briefly, and the log holds it whole.
@@ -440,19 +436,13 @@ func summaryText(text string) string {
 	return strings.Join(strings.Fields(summaryTag.ReplaceAllString(text, " ")), " ")
 }
 
-// passageNote stands for a passage's rows from where it is given up to end, the index after the passage's last row.
-type passageNote struct {
-	text string
-	end  int
-}
-
-// gapped is the rows keep marks, with a row naming the log lines of each run left out between them; a run that starts at a note gets the
-// note for the rows the note covers and a row naming the rest.
-func gapped(rows []row, keep []bool, notes map[int]passageNote, log saved) []row {
+// gapped is the rows keep marks, each numbered with the log lines it stands for, so the numbers show every gap; a gap that starts at a note
+// gets the note, and one whose rows stand for no log line a row counting them.
+func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
 	var out []row
 	for i := 0; i < len(rows); {
 		if keep[i] {
-			out = append(out, rows[i])
+			out = append(out, log.numbered(rows[i]))
 			i++
 			continue
 		}
@@ -460,19 +450,27 @@ func gapped(rows []row, keep []bool, notes map[int]passageNote, log saved) []row
 		for j < len(rows) && !keep[j] {
 			j++
 		}
-		if n, ok := notes[i]; ok && n.end > i {
-			out = append(out, row{text: n.text, header: -1})
-			i = min(n.end, j)
-			continue
+		if note, ok := notes[i]; ok {
+			out = append(out, row{text: note, header: -1})
+		} else if first, _ := logLines(rows[i:j]); first == 0 {
+			out = append(out, row{text: log.note(log.leftOut(rows[i:j])), header: -1})
 		}
-		out = append(out, row{text: log.note(log.leftOut(rows[i:j])), header: -1})
 		i = j
 	}
 	return out
 }
 
-// assemble keeps the start and end and adds the picks that reach the threshold, best first and widened, while they fit the budget; every gap
-// is announced with the log lines it leaves out, and a closing note says who chose, with notes added to it.
+// numberedSize is the bytes rows take once numbered with their log lines.
+func numberedSize(rows []row, log saved) int {
+	n := 0
+	for _, r := range rows {
+		n += len(log.numbered(r).printed()) + 1
+	}
+	return n
+}
+
+// assemble keeps the start and end and adds the picks that reach the threshold, best first and widened, while they fit the budget; every row
+// is numbered with its log lines, so the numbers show each gap, and a closing note says who chose, with notes added to it.
 func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ...string) []row {
 	who := choice.Who
 	if choice.Failure != "" {
@@ -495,7 +493,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 		keep[i] = i < decidedHead || i >= end
 	}
 	shown := decidedHead + decidedTail
-	used := size(rows[:decidedHead]) + size(rows[end:])
+	used := numberedSize(rows[:decidedHead], log) + numberedSize(rows[end:], log)
 	var picks []decider.Pick
 	for _, p := range choice.Picks {
 		if p.Score >= decider.PickThreshold {
@@ -521,7 +519,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 		for i := from; i < to; i++ {
 			if !keep[i] {
 				add++
-				addBytes += len(rows[i].text) + 1
+				addBytes += numberedSize(rows[i:i+1], log)
 			}
 		}
 		if add == 0 {
@@ -568,7 +566,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	for _, reason := range reasons {
 		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", log.spans(byReason[reason]), reason))
 	}
-	return append(out, row{text: closing(shown, log, append(clauses, notes...)), header: -1})
+	return append(out, row{text: closing(shown, log, true, append(clauses, notes...)), header: -1})
 }
 
 // logLines are the first and last log lines rows stand for; 0 when none stands for any, as for file headers.
@@ -624,13 +622,17 @@ func (l saved) spans(ranges [][2]int) string {
 	return "lines " + strings.Join(parts, ", ")
 }
 
-// closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is.
-func closing(shown int, log saved, clauses []string) string {
+// closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is; numbered says
+// the rows shown carry their log lines, and how to read the others.
+func closing(shown int, log saved, numbered bool, clauses []string) string {
 	text := fmt.Sprintf("%s rows shown of %s log lines; ", thousands(shown), thousands(log.lines))
 	for _, clause := range clauses {
 		text += clause + "; "
 	}
 	if log.path == "" {
+		if numbered {
+			text += "N| is a row's log line; "
+		}
 		return log.note(text + "the whole output could not be saved")
 	}
 	if log.holds < log.lines {
@@ -639,6 +641,9 @@ func closing(shown int, log saved, clauses []string) string {
 			limit = fmt.Sprintf("%d MiB", logLimit>>20)
 		}
 		text += fmt.Sprintf("the log stops at its %s limit, in log line %s; ", limit, thousands(log.holds))
+	}
+	if numbered {
+		return log.note(text + "N| is a row's line in the " + log.whole() + ": read " + log.path + ":A-B plain:true for others")
 	}
 	return log.note(text + log.whole() + ": " + log.path)
 }
