@@ -679,6 +679,13 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   trash. An agent's first call that trashes something ends with `[moved to the trash, not deleted: ...]`, later ones
   with `[in the trash: ...; trash restore PATH]`. Deletes a program makes itself (`xargs rm`, `bash -c 'rm ...'`, a
   script) are the system's.
+- **A failed cd ends the call.** A `cd`, `pushd` or `popd` that fails where the command line does not handle it ends
+  the call: nothing after it runs, in a subshell, function, loop or `$(...)` either, since under bash the rest would run
+  in the directory before, where `cd build; rm -r *` or `cd ../other; git reset --hard` does its harm. The call ends
+  with `[cd build failed, so nothing after it ran]` and the change's exit status. One the command handles runs on as
+  under bash, by the rules of bash's `set -e`: in an `if` or `while` condition, before `&&` or `||` (`cd x || exit`,
+  `cd x && make`), after `!`, in a pipeline before its last stage, or in the background. A script a program runs
+  (`bash -c`, `sh script.sh`) and a file `source` reads are not guarded.
 - **Facts.** `head` and `tail` of a file say which lines they show (`[a.txt: lines 1-20 of 1,234]`; a `head` of a file
   nib does not hold stops reading, so it says nothing); `head` after a nib
   grep says how much there was (`[head: 20 of 312 matching lines shown, from 4 of 17 files]`, counting for up to 2 s

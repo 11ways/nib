@@ -301,8 +301,16 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
   trashed is the session's, main agent and subagents). `rm` and `unlink` are reimplemented with coreutils' messages,
   quoting (`quoteaf`'s shell escapes), prompts and exit status, and refuse what they lack rather than run the system
   program; `git rm` and `git clean` learn what they would delete from a dry run of the same words, and `find -delete`
-  from a run with each `-delete` replaced by a marked `-printf` and `-depth` set. This is the one deliberate difference
+  from a run with each `-delete` replaced by a marked `-printf` and `-depth` set. This is one deliberate difference
   in effect from bash: a deleted file can always be restored.
+- **A failed directory change ends the call.** Before a call runs, in the foreground or as a job, each `cd`, `pushd`
+  and `popd` whose failure the command line leaves unhandled (by `set -e`'s rules: outside `if` and `while` conditions,
+  before `&&` or `||`, after `!` and a pipeline's earlier stages, not in the background) becomes `cd ... || stop $?`,
+  function bodies and `$(...)` counting as unhandled of their own. `stop` marks the call halted, and from then on the
+  `CallHandler` turns every command the call reaches into `exit N` and the open handler refuses a redirect's file. A
+  fatal handler error is not enough: mvdan drops one at a subshell's end and prints one leaving `$(...)` as an
+  expansion error, then goes on. The call or the job's log ends with `[cd DIR failed, so nothing after it ran]` and
+  the change's status. This is the other deliberate difference in effect, beside deletion and `nib.json`'s refusals.
 
 ### 5.6 The terminal sink and rendering
 

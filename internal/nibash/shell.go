@@ -36,7 +36,7 @@ const (
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function carries over), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commit headers, %s, with the whole kept in a log you can read. Changed files list new tags.
-Unlike bash: deletes go to the trash; a program does not start in a deleted directory; a command past its timeout goes on as a job like cmd &; $! is a job's %%N for kill, wait and jobs, and the next call reports its end. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! is a job's %%N, and the next call reports its end. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
@@ -305,7 +305,7 @@ type call struct {
 	links *links
 	logs  *logDirectory
 	jobs  map[int]*syntax.Stmt
-	// mu guards job, groups, written, system, waitless and waited, which a call's stages and a job it turned into share.
+	// mu guards job, groups, written, system, waitless, waited and change, which a call's stages and a job it turned into share.
 	mu sync.Mutex
 	// job is set for calls that run a job's statement, and for a call that went on as a job; their processes join it.
 	job *job
@@ -333,6 +333,10 @@ type call struct {
 	origin *call
 	// reach are the directories the call's commands ran in and the paths their arguments named, canonical, which mu guards.
 	reach []string
+	// change is the words of the last cd, pushd or popd the call ran, which a failed one's note names.
+	change []string
+	// halted is set once a directory change whose failure the command left unhandled failed, ending the call.
+	halted *stopped
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -456,6 +460,8 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		}
 	}
 	observePaths(file, view, refused)
+	// After the rules judged the command as written, and before it runs in the foreground or as a job.
+	guardDirectoryChanges(file)
 	reports := append(sess.jobs.finished(), check.notes...)
 	runner, err := sess.newRunner(tools.Directory, view)
 	if err != nil {
@@ -542,6 +548,11 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	cancel()
 	c.killAll()
 	status := 0
+	var tail []string
+	note, err := c.haltNote(err)
+	if note != "" {
+		tail = append(tail, note)
+	}
 	var exit interp.ExitStatus
 	switch {
 	case errors.As(err, &exit):
@@ -552,7 +563,6 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	callTools.Ctx = ctx
 	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
-	var tail []string
 	if status != 0 {
 		tail = append(tail, fmt.Sprintf("[exit %d]", status))
 	}
@@ -639,7 +649,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		err := <-done
 		cancel()
 		c.killAll()
-		j.finish(err, out)
+		j.finish(c.jobError(err, out), out)
 		c.end()
 		s.pushEnd(c.session, j)
 	}()

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -58,6 +59,8 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 				return c.listJobs(ctx)
 			case internalWait:
 				return c.wait(ctx, args[1:])
+			case internalStop:
+				return c.stop(args[1:])
 			case internalHash:
 				return c.hash(ctx, args[2:])
 			}
@@ -83,8 +86,21 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 // callHandler sends kill, jobs and wait to nibash, since mvdan's builtins do not act on real processes, and hash -d's named directory forms,
 // and refuses a cd out of the sandbox with the reason, which the builtin would report as a missing directory.
 func (sess *session) callHandler(ctx context.Context, args []string) ([]string, error) {
+	// A call a failed directory change halted runs nothing more, wherever the shell would go on.
+	if c := callOf(ctx); c != nil {
+		if h := c.halt(); h != nil {
+			return []string{"exit", strconv.Itoa(h.status)}, nil
+		}
+	}
 	if namedHash(args) {
 		return append([]string{marker + internalHash}, args[1:]...), nil
+	}
+	if change := directoryChange(args); change != nil {
+		if c := callOf(ctx); c != nil {
+			c.mu.Lock()
+			c.change = change
+			c.mu.Unlock()
+		}
 	}
 	switch args[0] {
 	case "kill", "jobs", "wait":
@@ -496,6 +512,10 @@ func (c *call) allowedPath(path string) error {
 func (sess *session) openHandler(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 	c := callOf(ctx)
 	if c != nil {
+		// A redirect alone runs no command, so a halted call refuses the file itself.
+		if h := c.halt(); h != nil {
+			return nil, h
+		}
 		full := absolute(interp.HandlerCtx(ctx).Dir, path)
 		if err := c.allowedPath(full); err != nil {
 			return nil, err

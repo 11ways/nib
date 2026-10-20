@@ -424,6 +424,58 @@ func TestClosingEndsJobsAndCallsThatWentOnAsJobs(t *testing.T) {
 	}
 }
 
+func TestAFailedDirectoryChangeTheCommandLeavesUnhandledEndsTheCall(t *testing.T) {
+	f := newFixture(t, map[string]string{"sub/a.txt": "a\n"})
+	const missing = `cd: no such file or directory: "missing"`
+	const stop = "[cd missing failed, so nothing after it ran]\n[exit 1]"
+	// Under bash the rest would run in the directory before, where a command meant for another one does its harm.
+	for _, command := range []string{
+		"cd missing; echo ran",
+		"echo before; cd missing; echo ran",
+		"for d in sub missing; do cd $d; done; echo ran",
+		"(cd missing; echo ran); echo ran",
+		"f() { cd missing; echo ran; }; f; echo ran",
+		"echo $(cd missing; pwd); echo ran",
+		"true && cd missing; echo ran",
+		"builtin cd missing; echo ran",
+		"pushd missing; echo ran",
+	} {
+		out := f.run(command)
+		if strings.HasPrefix(out, "ran") || strings.Contains(out, "\nran") || !strings.HasSuffix(out, "failed, so nothing after it ran]\n[exit 1]") {
+			t.Errorf("%s:\n%s", command, out)
+		}
+	}
+	expect(t, f.run("echo before; cd missing; echo ran"), "before\n"+missing+"\n"+stop)
+	// A failure the command line handles runs on, as under bash.
+	for command, want := range map[string]string{
+		"cd missing || echo handled; echo ran":           missing + "\nhandled\nran",
+		"cd missing && echo no; echo ran":                missing + "\nran",
+		"if cd missing; then echo no; fi; echo ran":      missing + "\nran",
+		"! cd missing; echo ran":                         missing + "\nran",
+		"while cd missing; do echo no; done; echo ran":   missing + "\nran",
+		"x=$(cd missing && pwd); echo ran":               missing + "\nran",
+		"cd missing & wait; echo ran":                    "ran",
+		"cd sub; cat a.txt | head -1; cd ..; echo ran":   "",
+		"cd sub && cd missing 2>/dev/null || echo again": "again",
+	} {
+		out := f.run(command)
+		if want == "" {
+			if !strings.HasSuffix(out, "\nran") {
+				t.Errorf("%s:\n%s", command, out)
+			}
+			continue
+		}
+		expect(t, out, want)
+	}
+	// A job that went on in the background ends the same way, its log saying why.
+	started := f.call(server.ShellCall{Command: "cd missing; echo ran", Background: true})
+	started = started[strings.LastIndex(started, "[job %"):]
+	spec, log, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(started, "[job "), "]"), " started; output: ")
+	if out := f.run("wait " + spec + "; echo status=$?; cat " + log); !strings.HasSuffix(out, "status=1\n"+missing+"\n[cd missing failed, so nothing after it ran]") {
+		t.Fatalf("got:\n%s", out)
+	}
+}
+
 func TestSandboxConfinesShellAndPrograms(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")

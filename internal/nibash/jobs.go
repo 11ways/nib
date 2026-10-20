@@ -271,7 +271,7 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 	jobTools.Ctx = ctx
 	go func() {
 		defer devnull.Close()
-		j.finish(runner.Run(ctx, node), out)
+		j.finish(c.jobError(runner.Run(ctx, node), out), out)
 		c.end()
 		sess.shell.pushEnd(sess, j)
 	}()
