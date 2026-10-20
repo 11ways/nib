@@ -129,7 +129,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 		s := d.summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit,
 			TimedOut: d.timedOut, Log: lines, Excerpt: excerpted, Entries: chosen, Legend: legend})
 		if s.Failure == "" {
-			out, _ := summaryPassages(rows, s, t.log)
+			out, _ := summaryPassages(rows, s, t.log, lines)
 			t.added = append([]string{"[" + t.earlier() + "; a summary of the whole output, then the lines it points at that the tail left out:]",
 				out[0].text}, t.texts(inner(out[1:]))...)
 			return

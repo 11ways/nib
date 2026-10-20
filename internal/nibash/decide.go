@@ -7,9 +7,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/js"
 )
 
 // purposeChars caps the description a decider reads as the call's purpose.
@@ -77,7 +79,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	}
 	if len(entries) <= excerptLines {
 		if s, ok := ask(entries); ok {
-			return summarized(rows, s, log)
+			return summarized(rows, s, log, lines)
 		}
 		return cut(nil, "no summary")
 	}
@@ -90,7 +92,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		return cut(&choice)
 	}
 	if s, ok := ask(excerpt(middleOf(rows), choice, entries)); ok {
-		return summarized(rows, s, log)
+		return summarized(rows, s, log, lines)
 	}
 	return cut(&choice, "no summary")
 }
@@ -283,16 +285,59 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note.
-func summarized(rows []row, s decider.Summary, log saved) []row {
-	out, shown := summaryPassages(rows, s, log)
+// summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note. lines are the log's lines.
+func summarized(rows []row, s decider.Summary, log saved, lines []string) []row {
+	out, shown := summaryPassages(rows, s, log, lines)
 	return append(out, row{text: closing(shown, log, nil), header: -1})
+}
+
+// encodedRun is a stretch of a line that may be encoded data, base64 or hex, which no agent reads; encodedRuns keeps the ones that are.
+var encodedRun = regexp.MustCompile(`[A-Za-z0-9+/=_-]{100,}`)
+
+// encodedRuns are the byte ranges of line's encoded data: runs of encodedRun that mix letters and digits over at least 16 distinct characters,
+// as hex and base64 do and a long word, a separator or a run of one character never does.
+func encodedRuns(line string) [][]int {
+	var runs [][]int
+	for _, run := range encodedRun.FindAllStringIndex(line, -1) {
+		text := line[run[0]:run[1]]
+		distinct := map[rune]bool{}
+		for _, r := range text {
+			distinct[r] = true
+		}
+		if len(distinct) >= 16 && strings.ContainsAny(text, "0123456789") && strings.ContainsFunc(text, unicode.IsLetter) {
+			runs = append(runs, run)
+		}
+	}
+	return runs
+}
+
+// briefRow is a passage's row of one log line, line, at most width characters: one longer, or holding encoded runs, shows the stretches of it
+// outside those runs, cut to width, as a bracketed row naming them, which the log holds whole.
+func briefRow(r row, line string, label, width int) row {
+	if !r.capped {
+		line = r.text
+	}
+	runs := encodedRuns(line)
+	if js.Len(line) <= width && len(runs) == 0 {
+		return r
+	}
+	var kept []engine.Stretch
+	at := 0
+	for _, run := range append(runs, []int{len(line), len(line)}) {
+		if run[0] > at {
+			kept = append(kept, engine.Stretch{Start: js.Len(line[:at]), End: js.Len(line[:run[0]])})
+		}
+		at = run[1]
+	}
+	text, _ := engine.KeptRow(label, line, kept, width)
+	r.text, r.capped = text, true
+	return r
 }
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
 // a share of summaryRows; a passage longer than its share drops its context lines first, then shows the start and end of the lines pointed
 // at, with the read of what it leaves out in between. shown counts the passages' rows.
-func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown int) {
+func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
 	var pointed [][2]int
@@ -341,7 +386,15 @@ func summaryPassages(rows []row, s decider.Summary, log saved) (out []row, shown
 			notes[add[share]] = passageNote{text: log.note(note), end: add[len(add)-1] + 1}
 		}
 	}
-	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(rows, keep, notes, log)...)
+	// The passages share passageBytes, each row as wide as its share; a longer line shows briefly, and the log holds it whole.
+	width := min(passageColumns, max(passageLeast, passageBytes/max(1, shown)))
+	brief := slices.Clone(rows)
+	for i, r := range brief {
+		if keep[i] && r.plain && r.first > 0 && r.first == r.last && r.first <= len(lines) {
+			brief[i] = briefRow(r, lines[r.first-1], log.base+r.first, width)
+		}
+	}
+	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(brief, keep, notes, log)...)
 	return out, shown
 }
 

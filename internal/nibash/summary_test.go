@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/11ways/nib/internal/decider"
+	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/server"
 )
 
@@ -92,6 +93,41 @@ func TestASummaryThatPointsAtNothingShowsItselfAndNamesEveryLineLeftOut(t *testi
 	if len(rows) != 3 || rows[0] != "<summary>All 1000 steps ran.</summary>" || rows[1] != "[nibash: log lines 1-1000 left out]" ||
 		!strings.HasPrefix(rows[2], "[nibash: 0 rows shown of 1,000 log lines") {
 		t.Fatalf("rows:\n%s", strings.Join(rows, "\n"))
+	}
+}
+
+func TestASummarysPassagesShowLongAndEncodedLinesBriefly(t *testing.T) {
+	// Lines like a transcript's: JSON thousands of characters long, a signature in base64 among them.
+	signature := strings.Repeat("CAQSoDQKEAgTGAI4AUIIdGhpbmtpbmcSDGeTguog57/rJj11sRoMBL8cuBcIjI39lXGCIjDecQ8g15fkRzbF", 20)
+	var log strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&log, `{"n":%d,"type":"assistant","content":[{"type":"thinking","signature":"%s"},{"type":"text","text":"answer %d"}]}`+"\n", i, signature, i)
+	}
+	s := &sink{}
+	s.Write([]byte(log.String()))
+	var ranges [][2]int
+	for i := 2; i <= 38; i += 4 {
+		ranges = append(ranges, [2]int{i, i})
+	}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Ten answers.", Ranges: ranges}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	out := renderSink(t, s, decision{decider: choose, summarizer: summary, purpose: "the answers"})
+	if strings.Contains(out, "CAQSoDQK") || !strings.Contains(out, `|{"n":2,"type":"assistant","content":[{"type":"thinking","signature":" ... "},{"type":"text","text":"answer 2"}]}`) {
+		t.Fatalf("got:\n%.3000s", out)
+	}
+	rows := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "[line ") {
+			rows++
+			if _, shown, _ := strings.Cut(line, "]|"); js.Len(shown) > passageColumns+len(" ... ") {
+				t.Fatalf("a row of %d characters: %.300s", js.Len(shown), line)
+			}
+		}
+	}
+	if rows < 10 || len(out) > passageBytes+2048 {
+		t.Fatalf("%d rows in %d bytes:\n%.3000s", rows, len(out), out)
 	}
 }
 

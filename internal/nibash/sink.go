@@ -43,6 +43,11 @@ const (
 	summaryContext = 1
 	summaryRows    = 30
 	summaryShare   = 3
+	// passageBytes bounds the rows a summary's passages show in all, each row at most passageColumns and at least passageLeast characters
+	// wide; a pointed-at line can be thousands of characters of JSON or encoded data the summary already told.
+	passageBytes   = 4 * 1024
+	passageColumns = 240
+	passageLeast   = 80
 	// Output within the budget that reports listProblems or more problem lines, listPerKind or more of each kind, is shown whole rather
 	// than summarized (problemList).
 	listProblems = 10

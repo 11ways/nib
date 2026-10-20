@@ -829,7 +829,11 @@ stands with `no summary` in its note. A checked summary takes the place of the d
 with 1 line around each, the ranges sharing 30 rows (a range that fits an even split of what is left shows whole; a
 longer one drops its surrounding lines first, then shows its start and
 `[nibash: log lines A-B left out; the rest of this passage: read LOG:A-B plain:true]`), each
-other gap named as above, and a closing note. Summaries are not asked for when the decider judged that the description
+other gap named as above, and a closing note. The rows share 4 KiB as well: each is at most its share wide (80 to 240
+characters), and a longer line, or one holding encoded data (a run of 100 or more base64 or hex characters mixing
+letters and digits), shows as a cut row naming the stretches it keeps, without the encoded runs, as
+`[line 12, chars 1-60, 1061-1240 of 1300]|{"type":"thinking","signature":" ... "},...`; the log holds it whole.
+Summaries are not asked for when the decider judged that the description
 needs every line, nor for a successful run without a description. The prompt tells the model to state only what the
 lines show and to leave counts to the shell. Answers are cached like decisions, checked again whenever used. On the 19
 cut find cases of the research set (`research/decider-eval/` on the research branch), `google/gemini-3.1-flash-lite` and
