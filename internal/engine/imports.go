@@ -259,7 +259,11 @@ func codeWarnings(ctx *Context, t *target, before *text, result applied, bracket
 		if len(named) > 1 {
 			form = "%s, used in the new rows, are not imported, and nib knows one class of each name; if they are the ones meant, this adds them:\n[%s]\nIMPORT %s"
 		}
-		warnings = append(warnings, fmt.Sprintf(form, strings.Join(named, ", "), t.display, strings.Join(sure, ", ")))
+		names := named[0]
+		if last := len(named) - 1; last > 0 {
+			names = strings.Join(named[:last], ", ") + " and " + named[last]
+		}
+		warnings = append(warnings, fmt.Sprintf(form, names, t.display, strings.Join(sure, ", ")))
 	}
 	return append(warnings, unsure...)
 }

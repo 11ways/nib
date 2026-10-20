@@ -170,7 +170,7 @@ func TestAnEditThatUsesAClassNothingImportsSaysWhereItIs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.Text, "Gauge, Duration, used in the new rows, are not imported, and nib knows one class of each name; if they are the ones meant, this adds them:\n["+servicePath+"]\nIMPORT be.example.common.Gauge, java.time.Duration") {
+	if !strings.Contains(out.Text, "Gauge and Duration, used in the new rows, are not imported, and nib knows one class of each name; if they are the ones meant, this adds them:\n["+servicePath+"]\nIMPORT be.example.common.Gauge, java.time.Duration") {
 		t.Fatalf("Gauge:\n%s", out.Text)
 	}
 	for _, both := range []string{"Clock is not imported, and nib finds be.example.common.Clock and java.time.Clock; IMPORT the one meant.",
