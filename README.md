@@ -317,7 +317,8 @@ characters shows only its first 40 and the 40 on each side of its first matches,
 bounds it instead. Matched lines over `maxLineLength` characters (default 512, at most 2000) are cut and not
 anchorable; when the first match sits past the cut, the row shows the stretches around the first 3 matches instead of
 the line's start, as `*[line N, chars 3142-3324, 28924-29106 of 31625]|...`. The search uses `rg --hidden` without
-`.git/`. It follows git's ignore
+`.git/`, and `--engine auto`, so a pattern with look-around or backreferences (`\.migrated\((?!\))`, `(\w+) \1`) runs
+on PCRE2 where ripgrep was built with it, and every other pattern on ripgrep's own engine. It follows git's ignore
 rules, which count only inside a repository (ripgrep's default; outside git a `.gitignore` means nothing), plus
 ripgrep's own `.ignore` and `.rgignore`. A nested repository is searched by its own rules even when the repository
 holding it ignores it, as a workspace whose `.gitignore` keeps out every checkout it holds does: git lists the nested

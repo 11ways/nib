@@ -2435,6 +2435,20 @@ describe("grep replace", () => {
     expect((await f.engine.grep(f.ctx, { pattern: "colou?r", replace: "color", paths: ["mixed.txt"] })).text).toContain("]\n*1:color\n>2|color\n")
   })
 
+  test("look-around and backreferences run on PCRE2, in a search and in a replace", async () => {
+    const f = await fixture("a.migrated(x)\nb.migrated()\nsame same\nsame other\n")
+    const ahead = (await f.engine.grep(f.ctx, { pattern: "\\.migrated\\((?!\\))" })).text
+    expect(ahead).toContain("*1:a.migrated(x)\n")
+    expect(ahead).not.toContain("*2:")
+    const repeated = (await f.engine.grep(f.ctx, { pattern: "(\\w+) \\1" })).text
+    expect(repeated).toContain("*3:same same\n")
+    expect(repeated).not.toContain("*4:")
+    const preview = (await f.engine.grep(f.ctx, { pattern: "(?<=a)\\.migrated\\((\\w)\\)", replace: ".adopted($1)" })).text
+    expect(preview).toContain(">1|a.adopted(x)\n")
+    await f.patch(`REAPPLY ${token(preview)}`)
+    expect(await readFile(f.filePath, "utf8")).toBe("a.adopted(x)\nb.migrated()\nsame same\nsame other\n")
+  })
+
   test("a long line shows the stretch around its replacement, and the token changes it without a full read", async () => {
     const line = "a".repeat(3000) + "NEEDLE" + "b".repeat(100)
     const f = await fixture(`${line}\nshort\n`)

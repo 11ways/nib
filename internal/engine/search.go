@@ -837,7 +837,8 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (result Result, err error) {
 		result.Text = fmt.Sprintf("[%s; searched the other paths]\n\n%s", strings.Join(skipped, "; "), result.Text)
 		return result, nil
 	}
-	command := []string{"--json", "--no-config", "--hidden", "--glob", "!.git", "--max-columns", "0"}
+	// The engine is ripgrep's own unless the pattern needs PCRE2's look-around or backreferences.
+	command := []string{"--json", "--no-config", "--hidden", "--glob", "!.git", "--max-columns", "0", "--engine", "auto"}
 	if args.IgnoreCase {
 		command = append(command, "--ignore-case")
 	}
