@@ -134,6 +134,18 @@ func redirectsOutput(s *syntax.Stmt) bool {
 	return false
 }
 
+// mergesError reports whether a statement sends its standard error where its standard output goes (2>&1), which a link cannot carry.
+func mergesError(s *syntax.Stmt) bool {
+	for _, r := range s.Redirs {
+		if r.Op == syntax.DplOut && r.N != nil && r.N.Value == "2" {
+			if value, ok := wordLiteral(r.Word); ok && value == "1" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *classifier) stmt(s *syntax.Stmt, out destination) {
 	if s.Background {
 		c.background(s)
@@ -200,7 +212,8 @@ func literal(value string) *syntax.Word {
 	return &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: value}}}
 }
 
-// stages flattens a pipeline into its stages, left to right, and says for each link whether it carries standard error too (|&).
+// stages flattens a pipeline into its stages, left to right, and says for each link whether it carries standard error too (|&, or 2>&1 on the
+// stage writing it).
 func stages(cmd *syntax.BinaryCmd) ([]*syntax.Stmt, []bool) {
 	var list []*syntax.Stmt
 	var all []bool
@@ -215,11 +228,14 @@ func stages(cmd *syntax.BinaryCmd) ([]*syntax.Stmt, []bool) {
 		list = append(list, s)
 	}
 	walk(&syntax.Stmt{Cmd: cmd})
+	for i := range all {
+		all[i] = all[i] || mergesError(list[i])
+	}
 	return list, all
 }
 
 // pipeline classifies right to left. A stage writes to a nib reader only when the next stage is a single nib command: by a link when the stage
-// is one too, else through the pipe with its nib writers' rows in band.
+// is one too and its standard error stays out of the pipe, else through the pipe with its nib writers' rows in band.
 func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 	list, all := stages(cmd)
 	verdicts := make([]verdict, len(list))
@@ -228,7 +244,7 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 		stageOut := out
 		if i < len(list)-1 {
 			stageOut = toOther
-			if verdicts[i+1] == own && !all[i] && !redirectsInput(list[i+1]) && !readsBytes(list[i+1]) {
+			if verdicts[i+1] == own && !redirectsInput(list[i+1]) && !readsBytes(list[i+1]) {
 				stageOut = toBand
 			}
 		}
@@ -251,9 +267,9 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 		// in band when that is a compound command's pipe into a nib reader, which every command inside it shares.
 		if i < len(list)-1 {
 			switch {
-			case stageOut == toBand && verdicts[i] == own:
+			case stageOut == toBand && verdicts[i] == own && !all[i]:
 				stageOut = toNib
-			case stageOut == toBand && verdicts[i] != later:
+			case stageOut == toBand && verdicts[i] != own && verdicts[i] != later:
 				stageOut = toOther
 			}
 		}
@@ -267,7 +283,7 @@ func (c *classifier) pipeline(cmd *syntax.BinaryCmd, out destination) {
 			continue
 		}
 		mode := fromBytes
-		if i > 0 && !all[i-1] && !redirectsInput(s) {
+		if i > 0 && !redirectsInput(s) {
 			switch outs[i-1] {
 			case toNib:
 				mode = fromLink
@@ -384,7 +400,7 @@ func (c *classifier) rowWriter(s *syntax.Stmt) string {
 		case *syntax.CallExpr:
 			if len(n.Args) > 0 {
 				if name, ok := wordLiteral(n.Args[0]); ok && commands[name].rows {
-					if v := c.check(n, toTerminal); v == own || v == later {
+					if v := c.check(n, toTerminal); (v == own || v == later) && printsRows(n) {
 						found = name
 					}
 				}
@@ -399,8 +415,23 @@ func (c *classifier) rowWriter(s *syntax.Stmt) string {
 // readsBytes says whether s is a nib command that counts its input's bytes, which must then come as a program wrote them, not as rows.
 func readsBytes(s *syntax.Stmt) bool {
 	call, ok := s.Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Args) == 0 {
+	if !ok {
 		return false
+	}
+	r, isReader := wordsPlan(call).(interface{ readsBytes() bool })
+	return isReader && r.readsBytes()
+}
+
+// printsRows says whether a call of a row command prints lines as rows, not only names or counts, as grep -l and -c do.
+func printsRows(call *syntax.CallExpr) bool {
+	p, isPrinter := wordsPlan(call).(interface{ printsRows() bool })
+	return !isPrinter || p.printsRows()
+}
+
+// wordsPlan is the plan of a nib command for call's words, an expansion standing in for each word only running it gives; nil when it has none.
+func wordsPlan(call *syntax.CallExpr) plan {
+	if len(call.Args) == 0 {
+		return nil
 	}
 	words := make([]string, len(call.Args))
 	for i, word := range call.Args {
@@ -412,11 +443,13 @@ func readsBytes(s *syntax.Stmt) bool {
 	}
 	cmd, found := commands[words[0]]
 	if !found {
-		return false
+		return nil
 	}
 	p, err := cmd.prepare(words[0], words[1:])
-	r, isReader := p.(interface{ readsBytes() bool })
-	return err == nil && isReader && r.readsBytes()
+	if err != nil {
+		return nil
+	}
+	return p
 }
 
 func redirectsInput(s *syntax.Stmt) bool {

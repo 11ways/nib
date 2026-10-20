@@ -159,6 +159,38 @@ func TestGrepFollowsGnuFormsBetweenNibCommands(t *testing.T) {
 	expect(t, f.run("grep -F 'e(' a.txt"), "[exit 1]")
 }
 
+func TestRgListsAndCountsFromItsOwnEvents(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("rg is not installed")
+	}
+	f := newFixture(t, map[string]string{"a.txt": numbers, "sub/b.txt": "needle b\n", "c.txt": "none\n"})
+	// Paths and counts are no rows, so a real program after them loses no line numbers.
+	expect(t, f.run("grep -l needle a.txt | sort"), "a.txt")
+	// Given -l or -c, ripgrep prints plain paths or counts, not the JSON events nib reads them from.
+	expect(t, f.run("rg -l needle a.txt sub/b.txt c.txt | sort"), "a.txt\nsub/b.txt")
+	expect(t, f.run("rg -l needle sub | head -5"), "sub/b.txt")
+	expect(t, f.run("rg -c needle a.txt"), "2")
+	expect(t, f.run("rg -c needle a.txt sub/b.txt | sort"), "a.txt:2\nsub/b.txt:1")
+	expect(t, f.run("rg -l needle c.txt; echo $?"), "1")
+}
+
+func TestStandardErrorMergedIntoAPipeReachesTheNextNibCommand(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": numbers})
+	// A link carries records, not bytes, so a stage whose standard error goes into the pipe writes its rows in band instead.
+	expect(t, f.run("grep x missing.txt 2>&1 | head -3"), "grep: missing.txt: No such file or directory")
+	expect(t, f.run("cat missing.txt |& wc -l"), "1")
+	out := f.run("cat a.txt missing.txt 2>&1 | head -3")
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n1:one\n2:two needle\n3:three", tagOf(t, out)))
+	out = f.run("cat missing.txt a.txt 2>&1 | head -2")
+	expect(t, out, fmt.Sprintf("cat: missing.txt: No such file or directory\n[a.txt#%s]\n1:one", tagOf(t, out)))
+	if _, err := exec.LookPath("rg"); err == nil {
+		out = f.run("rg needle missing 2>&1 | head -3")
+		if !strings.HasPrefix(out, "rg: missing: ") || !strings.Contains(out, "No such file or directory") {
+			t.Fatalf("got:\n%s", out)
+		}
+	}
+}
+
 func TestRecurringBlockMarkersAreExplainedOnce(t *testing.T) {
 	f := newFixture(t, nil)
 	command := `for i in 1 2 3 4 5 6; do echo "step $i"; done; for r in 1 2 3; do printf 'ERROR connection closed by peer\n  at take (queue.go:42)\n  at run (worker.go:17)\nretry %s\n' $r; done; for i in 7 8 9 10 11 12; do echo "step $i"; done`
@@ -433,7 +465,10 @@ func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 		"{ echo x; cat a; } | tail -c5": {"B:tail"},
 		"sed -n 1,5p a":                 {"B:sed"},
 		"sed -i s/a/b/ a":               {"S:sed"},
-		"cat a |& head":                 {"B:head"},
+		"cat a |& head":                 {"B+:cat", "W:head"},
+		"cat a 2>&1 | head":             {"B+:cat", "W:head"},
+		"cat a 2>&1 | tr a b":           nil,
+		"cat a 2>/dev/null | head":      {"B:cat", "L:head"},
 		"cat a | head < b":              {"B:head"},
 		"tr a b < f | head -2":          {"B:head"},
 		"cut -c1-5 a":                   {"B:cut"},

@@ -200,7 +200,8 @@ channel and writes no bytes. The link is keyed by the pipe's `(dev, ino)`, which
   cannot hold (too big, binary, still changing) gives plain records.
 
 **Rows in band:** where the writer side of a nib reader's pipe is a compound command, or a command decided as it runs,
-several commands may write to the pipe: `echo`, real programs and nib commands alike. A link cannot keep their order, so
+several commands may write to the pipe: `echo`, real programs and nib commands alike. So may a nib writer's own standard
+error, sent into the pipe by `2>&1` or `|&`, which a link would lose. A link cannot keep their order, so
 the reader reads the pipe's bytes, and each nib writer there puts each record in the call's registry and writes one
 line naming it, `ESC nib-row:TOKEN:ID`, with a random token per call; the reader turns such a line back into the record
 and every other line into a plain record. No program can name a row, since only the call knows the token. A reader of

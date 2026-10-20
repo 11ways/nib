@@ -729,6 +729,8 @@ type grepPlan struct {
 	matcher                               *matcher
 }
 
+func (p *grepPlan) printsRows() bool { return !p.list && !p.listMissing && !p.count && !p.quiet }
+
 var grepSpec = optionSpec{
 	flags:  "nrREFGviwxlLchHsqo",
 	values: "mABCe",
@@ -1127,6 +1129,8 @@ type rgPlan struct {
 	pattern  string
 }
 
+func (p *rgPlan) printsRows() bool { return !p.list && !p.count }
+
 var rgSpec = optionSpec{
 	flags:  "niSFwlcvuN",
 	values: "gtTABCme",
@@ -1154,9 +1158,12 @@ func prepareRg(name string, args []string) (plan, error) {
 		case "N":
 			p.number = false
 		case "l":
+			// List and count come from ripgrep's JSON events: given -l or -c, ripgrep prints plain paths or counts instead.
 			p.list = true
+			continue
 		case "c":
 			p.count = true
+			continue
 		case "A", "B", "C":
 			p.context = true
 		case "e":
