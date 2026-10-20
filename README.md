@@ -387,6 +387,13 @@ control bytes count as binary, and images name their type. `glob` narrows by nam
 (default), `size` (largest first) or `modified` (newest first). Pages hold 200 files; continue with `skip`. Nothing is
 recorded as seen.
 
+A listing of more files than a page holds, asked for without `skip`, shows the shape of its folders instead of its
+first 200 files: from the folder they share, the folders with the most files are opened while the listing stays
+within 30 rows, a chain of folders holding only one folder opening as one, and each folder left closed is one row with
+its count and what the sort is by (`plugins/ (495 files, newest 1h ago)`, `largest 2.6 MiB`, or their total size),
+in the listing's order among the files. It ends with
+`[a folder of many files shows as one row with their count; find it for its files, or skip 0 lists every file]`.
+
 A listing names each folder once. When every path on the page lies in one folder, the head names it
 (`28 files under /home/me/x/`, absolute and `~name/` paths included) and the rows continue it. All of a folder's files
 on the page, its subfolders' included, become one row `FOLDER/`, with ` (N)` from 10 files on, followed by the rest of

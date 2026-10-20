@@ -168,65 +168,52 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		}
 	}
 	total := len(names)
-	var page []listedFile
 	if whole {
 		total = len(matching)
-		page = matching[min(skip, len(matching)):min(skip+findFiles, len(matching))]
-	} else {
-		page, err = describe(names[min(skip, len(names)):min(skip+findFiles, len(names))])
-		if err != nil {
-			return Result{}, err
-		}
 	}
-	if len(page) == 0 {
-		if total > 0 {
-			return Result{Text: fmt.Sprintf("No more results (%d files; skip %d is past the end)", total, skip)}, nil
-		}
-		return Result{Text: fmt.Sprintf("No files found (none of the %d listed pass the filters)", len(names))}, nil
-	}
-	previewed := make([]string, len(page))
-	for i, item := range page {
-		previewed[i] = item.name
-	}
-	ctx.preview(previewed)
-	rows := make([]listedRow, len(page))
-	for i, item := range page {
-		rows[i].path = ctx.relativeDisplay(item.name)
-		age := formatAge(item.modified)
-		if item.size == 0 {
-			rows[i].after = fmt.Sprintf(" (empty, %s)", age)
-			continue
-		}
-		facts := formatSize(item.size) + ", " + age
-		var data []byte
-		if item.size <= TextLimit {
-			data, _ = os.ReadFile(item.name)
-		}
-		if data == nil {
-			rows[i].after = fmt.Sprintf(" (%s)", facts)
-			continue
-		}
-		// Like git, a file counts as binary by its start; reading every byte of every listed file would cost more than the listing is worth.
-		attachment := mime(data)
-		start := data[:min(len(data), findSniff)]
-		binary := slices.ContainsFunc(start, func(b byte) bool { return b < 9 || (b > 13 && b < 32 && b != 27) || b == 127 })
-		if attachment != "" || binary {
-			if attachment == "" {
-				attachment = "binary"
+	// More files than a page holds, with no page asked for, show as the shape of their folders, which an explicit skip pages through; files
+	// too many in one folder for that are paged.
+	var rows []listedRow
+	rolled := false
+	if args.Skip == nil && total > findFiles {
+		files := matching
+		if !whole {
+			files = make([]listedFile, len(names))
+			for i, name := range names {
+				files[i] = listedFile{name: name}
 			}
-			rows[i].after = fmt.Sprintf(" (%s, %s)", attachment, facts)
-			continue
 		}
-		lines := 1
-		if data[len(data)-1] == '\n' {
-			lines = 0
+		var shownFiles []string
+		rows, shownFiles = rollup(ctx, files, sortBy, whole)
+		if rolled = rows != nil; rolled {
+			ctx.preview(shownFiles)
 		}
-		lines += bytes.Count(data, []byte{'\n'})
-		word := "lines"
-		if lines == 1 {
-			word = "line"
+	}
+	if !rolled {
+		var page []listedFile
+		if whole {
+			page = matching[min(skip, len(matching)):min(skip+findFiles, len(matching))]
+		} else {
+			page, err = describe(names[min(skip, len(names)):min(skip+findFiles, len(names))])
+			if err != nil {
+				return Result{}, err
+			}
 		}
-		rows[i].after = fmt.Sprintf(" (%d %s, %s)", lines, word, facts)
+		if len(page) == 0 {
+			if total > 0 {
+				return Result{Text: fmt.Sprintf("No more results (%d files; skip %d is past the end)", total, skip)}, nil
+			}
+			return Result{Text: fmt.Sprintf("No files found (none of the %d listed pass the filters)", len(names))}, nil
+		}
+		previewed := make([]string, len(page))
+		for i, item := range page {
+			previewed[i] = item.name
+		}
+		ctx.preview(previewed)
+		rows = make([]listedRow, len(page))
+		for i, item := range page {
+			rows[i] = listedRow{path: ctx.relativeDisplay(item.name), after: fileFacts(item)}
+		}
 	}
 	var conditions []string
 	if minSize != nil {
@@ -267,10 +254,49 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		head += " under " + under
 	}
 	parts := []string{head, strings.Join(lines, "\n")}
-	if skip+shown < total {
+	switch {
+	case rolled:
+		parts = append(parts, "[a folder of many files shows as one row with their count; find it for its files, or skip 0 lists every file]")
+	case skip+shown < total:
 		parts = append(parts, more(shown))
 	}
 	return Result{Text: strings.Join(append(parts, out.notes...), "\n\n")}, nil
+}
+
+// fileFacts is what a listing says of a file after its path: its line count for text, its type for an image or binary file, size and age.
+func fileFacts(item listedFile) string {
+	age := formatAge(item.modified)
+	if item.size == 0 {
+		return fmt.Sprintf(" (empty, %s)", age)
+	}
+	facts := formatSize(item.size) + ", " + age
+	var data []byte
+	if item.size <= TextLimit {
+		data, _ = os.ReadFile(item.name)
+	}
+	if data == nil {
+		return fmt.Sprintf(" (%s)", facts)
+	}
+	// Like git, a file counts as binary by its start; reading every byte of every listed file would cost more than the listing is worth.
+	attachment := mime(data)
+	start := data[:min(len(data), findSniff)]
+	binary := slices.ContainsFunc(start, func(b byte) bool { return b < 9 || (b > 13 && b < 32 && b != 27) || b == 127 })
+	if attachment != "" || binary {
+		if attachment == "" {
+			attachment = "binary"
+		}
+		return fmt.Sprintf(" (%s, %s)", attachment, facts)
+	}
+	lines := 1
+	if data[len(data)-1] == '\n' {
+		lines = 0
+	}
+	lines += bytes.Count(data, []byte{'\n'})
+	word := "lines"
+	if lines == 1 {
+		word = "line"
+	}
+	return fmt.Sprintf(" (%d %s, %s)", lines, word, facts)
 }
 
 func statExists(path string) bool {
