@@ -69,6 +69,10 @@ const (
 // logLimit caps a log, so a runaway program cannot fill the disk; a variable so a test can reach it.
 var logLimit = 64 * 1024 * 1024
 
+// A summarizer reads a deduplicated output whole when it holds no more than excerptLines entries, or takes no more than wholeBytes as it
+// reads them: some 24k tokens, which a skim of a few dozen short files fits; a variable so a test can reach the excerpt with short lines.
+var wholeBytes = 96 * 1024
+
 // sink is the terminal: what reaches the model. It takes records from nib commands and bytes from everything else, in the order they come;
 // once detached, what comes goes on to a job's log instead.
 type sink struct {
@@ -721,17 +725,18 @@ func (l *logDirectory) holds(path string) bool {
 
 // saved is a log as written: its path ("" when it could not be written), the lines of the whole output, and how many of them it holds. A
 // file read with skim is its own log, whose notes name skim and number its lines from base on: the log's line N is the file's base+N. The
-// files of a skim shaped together are joined in a log of their own, whose notes name skim too.
+// files of a skim shaped together are joined in a log of their own, whose notes name skim too; files counts them, 0 for any other log.
 type saved struct {
 	path         string
 	lines, holds int
-	file, joined bool
+	file         bool
+	files        int
 	base         int
 }
 
 // note is a row of nib's own about the log.
 func (l saved) note(text string) string {
-	if l.file || l.joined {
+	if l.file || l.files > 0 {
 		return "[" + engine.Skim + ": " + text + "]"
 	}
 	return "[nibash: " + text + "]"
@@ -742,10 +747,18 @@ func (l saved) whole() string {
 	switch {
 	case l.file:
 		return "whole file"
-	case l.joined:
+	case l.files > 0:
 		return "joined files"
 	}
 	return "whole output"
+}
+
+// passages is the rows and bytes a summary's passages share: what one output's get for each file a joined skim's log holds, within two
+// thirds of budgetBytes, the rest left to the summary of each file, and within as many rows as leave each half of passageColumns.
+func (l saved) passages() (rows, bytes int) {
+	files := max(1, l.files)
+	bytes = min(budgetBytes*2/3, passageBytes*files)
+	return min(summaryRows*files, bytes*2/passageColumns), bytes
 }
 
 // span names log lines first to last as notes number them.

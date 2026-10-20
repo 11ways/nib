@@ -444,5 +444,95 @@
         13396
       ]
     }
+  },
+  {
+    "name": "skim-changelog",
+    "about": "skim of 14 zenit changelog entries of about 60 lines each, every one with its own migration: the call that dumped 54 KB whole",
+    "files": [
+      "skim-changelog/2026-10-20-index-fed-registries-are-their-own-class.md.gz",
+      "skim-changelog/2026-10-20-cold-start-world-moves-to-protoblast-test-support.md.gz",
+      "skim-changelog/2026-10-20-soft-badges-are-the-floor.md.gz",
+      "skim-changelog/2026-10-20-declaration-bodies-end-at-their-last-content.md.gz",
+      "skim-changelog/2026-10-20-form-unsaved-changes.md.gz",
+      "skim-changelog/2026-10-20-partial-controls-keep-forms-unsaved.md.gz",
+      "skim-changelog/2026-10-20-model-resolve-display-titles.md.gz",
+      "skim-changelog/2026-10-20-narration-related-titles-for-their-viewer.md.gz",
+      "skim-changelog/2026-10-20-settings-section-order-nav-shape-icon-mark.md.gz",
+      "skim-changelog/2026-10-20-placement-surface-accepts-record-handles.md.gz",
+      "skim-changelog/2026-10-20-browser-failure-capture.md.gz",
+      "skim-changelog/2026-10-20-mcp-tools-name-records-by-handle.md.gz",
+      "skim-changelog/2026-10-19-jvm-templates-never-run-the-autoload-index.md.gz",
+      "skim-changelog/2026-10-19-fixed-backend-classes-follow-the-datasource-tier.md.gz"
+    ],
+    "expect": "For each entry: exactly what a consuming app (Arcana) must change: renamed/removed APIs, new required overrides, test rules, baseline changes, and the migration recipe",
+    "any": true,
+    "needs": [
+      "IndexFedClassKeyedRegistry<Handler>",
+      "Blast\\.withoutIndexWait\\(work\\); \\} catch \\(IndexWaitRefused",
+      "import be\\.elevenways\\.protoblast\\.testsupport\\.coldstart\\.ColdStartWorld;",
+      "tone=\"count\">\\{\\{ count \\}\\}",
+      "Update the baseline to the trimmed output",
+      "NavigationProtection\\.Guard. becomes .NavigationGuard",
+      "PlumageField\\.announceEdit\\(this\\)",
+      "Move a related read into .resolveDisplayTitles.",
+      "change\\.action\\(\\), change\\.viewer\\(\\)",
+      "HistoryDetailPlace\\.LIST_ROW\\);",
+      "Add .AMBIGUOUS. to exhaustive",
+      "closeAfterTest\\(browser\\.newContext\\(\\)\\)",
+      "UuidField\\.builder\\(\"id\"\\)\\.withHandle\\(\\)\\.build\\(\\)",
+      "WidgetAccess\\.SEAM\\.install",
+      "Nothing to change in test code"
+    ],
+    "loses": {
+      "summary": [
+        239,
+        697,
+        882
+      ]
+    }
+  },
+  {
+    "name": "skim-test-logs",
+    "about": "skim of four test logs from other captures at once, each with its own failures",
+    "files": [
+      "failing-test.out.gz",
+      "pytest-two-fail.out.gz",
+      "session-go-test-break.out.gz",
+      "session-bun-grep-fails.out.gz"
+    ],
+    "expect": "all pass; if not, which tests failed in each log and why",
+    "needs": [
+      "^Received: ",
+      "^Expected substring",
+      "✗ large reads",
+      "^E   AssertionError: assert None == 'kotlin'",
+      "^E   AssertionError: shape hash depends on statement order",
+      "^--- FAIL: ",
+      "^\\(fail\\) ",
+      "^error: "
+    ]
+  },
+  {
+    "name": "skim-design-docs",
+    "about": "skim of nib's three design docs, 120 KB together: past what a summarizer reads whole, so it reads each file's share of an excerpt",
+    "files": [
+      "skim-docs/design-decider.md.gz",
+      "skim-docs/design-nibash.md.gz",
+      "skim-docs/design-providers.md.gz"
+    ],
+    "expect": "every NIB_ environment variable each doc names, with its default and what it does",
+    "any": true,
+    "needs": [
+      "\\| .NIB_DECIDER_TIMEOUT. \\| .30000.",
+      "\\| .NIB_DECIDER_CACHE. \\| unset",
+      "no network unless .NIB_SANDBOX_NETWORK=1.",
+      "NIB_SANDBOX_BIND. bound read-only",
+      "providers are off unless .NIB_PROVIDERS_SANDBOX=1."
+    ],
+    "loses": {
+      "keywords": [
+        1368
+      ]
+    }
   }
 ]

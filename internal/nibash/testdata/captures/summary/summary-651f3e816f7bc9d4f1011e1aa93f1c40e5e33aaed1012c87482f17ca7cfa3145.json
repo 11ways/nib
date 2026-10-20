@@ -1,0 +1,1 @@
+"{\"summary\": \"The output lists installed packages with versions: go is installed as 2:1.27.1-1 (line 122) and ripgrep as 15.2.0-1 (line 547). No errors appear.\", \"ranges\": [[122, 122], [547, 547]]}"

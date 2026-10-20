@@ -117,8 +117,8 @@ func (t *tailed) check(ctx context.Context, d decision) {
 	var clauses []string
 	if count > tailAdded && d.summarizer != nil {
 		chosen := entries
-		if len(entries) > excerptLines {
-			chosen = excerpt(rows, choice, entries)
+		if !wholeFits(entries, legend) {
+			chosen = excerpt(rows, choice, entries, nil)
 		}
 		var excerpted []int
 		for _, e := range chosen {

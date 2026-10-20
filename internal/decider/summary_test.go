@@ -319,3 +319,45 @@ func TestAnExpectationLeadsThePromptAndTheQuestion(t *testing.T) {
 }
 
 func questionFor(in Input) string { return question(in, "w0").Instructions }
+
+// A log joining files asks for a summary of each file that bears on the purpose and keeps each file's ranges within its share of them, so
+// files late in the log keep theirs however many an earlier one points at; one output's prompt and limit stay as they were, so the answers
+// recorded for it still serve.
+func TestALogJoiningFilesAsksAboutEachFileAndKeepsRangesInEach(t *testing.T) {
+	log := make([]string, 200)
+	shown := make([]int, 200)
+	for i := range log {
+		log[i], shown[i] = fmt.Sprint("line ", i+1), i+1
+	}
+	one := SummaryInput{Command: "cat a.md", Purpose: "what changed", Log: log, Excerpt: shown}
+	p := summaryPrompt(one, false)
+	if !strings.Contains(p, "Output: 200 lines, numbered below.\n") || !strings.Contains(p, "summary: at most 3 sentences. State only") ||
+		!strings.Contains(p, "most important first, up to 5 ranges of at most 10 lines each: the line of each error") || strings.Contains(p, "each file") {
+		t.Fatalf("one output's prompt:\n%s", p)
+	}
+	joined := one
+	joined.Command, joined.Heads = "cat a.md b.md c.md d.md e.md f.md g.md", []int{1, 30, 60, 90, 120, 150, 180}
+	p = summaryPrompt(joined, false)
+	if !strings.Contains(p, "Output: 200 lines joining 7 files, each from its line \"[PATH] ...\", numbered below.\n") ||
+		!strings.Contains(p, "summary: at most 3 sentences for each file that bears on the description, each naming its file;") ||
+		!strings.Contains(p, "up to 30 ranges in all of at most 10 lines each, spread over the files the summary covers: the line of each error") {
+		t.Fatalf("joined prompt:\n%s", p)
+	}
+	// The first file points at 28 lines, each other file at one: they keep theirs, and the first keeps the rest of the 30.
+	var ranges []string
+	for n := 2; n <= 29; n++ {
+		ranges = append(ranges, fmt.Sprintf("[%d,%d]", n, n))
+	}
+	for _, head := range joined.Heads[1:] {
+		ranges = append(ranges, fmt.Sprintf("[%d,%d]", head+1, head+1))
+	}
+	reply := `{"summary": "Each file renames something.", "ranges": [` + strings.Join(ranges, ",") + `]}`
+	got, failure := check(reply, log, shown, 0, joined.Heads)
+	if failure != "" || len(got.Ranges) != 30 || got.Dropped != 4 || got.Ranges[23] != [2]int{25, 25} || got.Ranges[24] != [2]int{31, 31} ||
+		got.Ranges[29] != [2]int{181, 181} {
+		t.Fatalf("joined: %+v %s", got, failure)
+	}
+	if got, failure := check(reply, log, shown, 0, nil); failure != "" || len(got.Ranges) != 5 || got.Dropped != 29 {
+		t.Fatalf("one output: %+v %s", got, failure)
+	}
+}

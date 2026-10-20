@@ -35,6 +35,8 @@ type capture struct {
 	Loses  map[string][]int `json:"loses"`
 	// Any makes each need one fact that any line it matches shows: it counts as kept, under its first matching log line, when one is shown.
 	Any bool `json:"any"`
+	// Files, when set, are files a skim reads with Expect in one call, in place of File's program output.
+	Files []string `json:"files"`
 }
 
 // watched remembers the last choice of the decider it wraps.
@@ -130,7 +132,10 @@ type arm struct {
 // check scores one capture with every arm and returns what the models' requests cost.
 func check(t *testing.T, c capture, arms []arm) float64 {
 	cost := 0.0
-	raw := readCapture(t, c.File)
+	raw := []byte(nil)
+	if len(c.Files) == 0 {
+		raw = readCapture(t, c.File)
+	}
 	results := map[string]scored{}
 	for _, arm := range arms {
 		var d decider.Decider
@@ -237,14 +242,22 @@ func readCapture(t *testing.T, name string) []byte {
 	return data
 }
 
-// score renders raw as a program's output would be, with d choosing, and counts the needed log lines some shown row stands for.
+// score renders raw as a program's output would be, or the capture's files as a skim joins them, with d choosing, and counts the needed log
+// lines some shown row stands for.
 func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize decider.Summarizer) scored {
-	s := &sink{}
-	s.Write(raw)
-	rows, text, _, _ := s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
-	logs := &logDirectory{path: t.TempDir()}
-	shown, _ := fit(context.Background(), rows, text, decision{decider: d, summarizer: summarize, command: c.Command,
-		purpose: c.Purpose, expect: expectation(c), exit: c.Exit}, func() saved { return logs.save(text) })
+	var shown []row
+	var text string
+	if len(c.Files) > 0 {
+		shown, text = skimmed(t, c, d, summarize)
+	} else {
+		s := &sink{}
+		s.Write(raw)
+		var rows []row
+		rows, text, _, _ = s.collect(engine.New(), &engine.Context{Ctx: context.Background(), Session: "s"})
+		logs := &logDirectory{path: t.TempDir()}
+		shown, _ = fit(context.Background(), rows, text, decision{decider: d, summarizer: summarize, command: c.Command,
+			purpose: c.Purpose, expect: expectation(c), exit: c.Exit}, func() saved { return logs.save(text) })
+	}
 	// NIB_CAPTURES_SHOW=NAME prints what the summary arm shows of that capture.
 	if summarize != nil && os.Getenv("NIB_CAPTURES_SHOW") == c.Name {
 		var texts []string
@@ -308,6 +321,31 @@ func score(t *testing.T, c capture, raw []byte, d decider.Decider, summarize dec
 		}
 	}
 	return r
+}
+
+// skimmed is the capture's files skimmed in one call with its expect, shaped as one output as a skim past the limits shapes them, and the
+// joined log's text.
+func skimmed(t *testing.T, c capture, d decider.Decider, summarize decider.Summarizer) ([]row, string) {
+	files := map[string]string{}
+	var paths []string
+	for _, name := range c.Files {
+		path := strings.TrimSuffix(filepath.Base(name), ".gz")
+		files[path] = string(readCapture(t, name))
+		paths = append(paths, path)
+	}
+	f := newFixture(t, files)
+	sess := f.shell.session("session")
+	var blocks []*logBlock
+	for _, path := range paths {
+		b, err := f.shell.readLog(sess, path, question(c.Expect), f.tools())
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks = append(blocks, b)
+	}
+	j := join(blocks)
+	shown, _ := j.fit(context.Background(), decision{decider: d, summarizer: summarize, purpose: purpose(c.Expect), read: true}, &logDirectory{path: t.TempDir()})
+	return shown, j.raw()
 }
 
 // expectation is the capture's expectation when NIB_CAPTURES_EXPECT=1 asks for it.

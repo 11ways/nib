@@ -25,11 +25,13 @@ const (
 	DefaultSummaryTimeout = 30 * time.Second
 	// openCodeAgent is the one agent an OpenCode run is given: the summary prompt, every permission denied, so it has no tools.
 	openCodeAgent = "nib-summary"
-	// summaryRowChars cuts each numbered row a summarizer reads.
-	summaryRowChars = 300
-	// maxRanges and maxRangeLines bound what an answer may point at; longer ranges are dropped, not shortened.
-	maxRanges     = 5
-	maxRangeLines = 60
+	// SummaryRowChars cuts each numbered row a summarizer reads.
+	SummaryRowChars = 300
+	// maxRanges and maxRangeLines bound what an answer may point at; longer ranges are dropped, not shortened. An answer about a log joining
+	// files may point at maxRanges for each file, at most maxJoinedRanges in all, each file keeping its share (Shares) of them.
+	maxRanges       = 5
+	maxJoinedRanges = 30
+	maxRangeLines   = 60
 	// summaryVersion changes with the prompt, so cached answers to another prompt are not reused.
 	summaryVersion = 4
 )
@@ -139,6 +141,8 @@ type SummaryInput struct {
 	// Base is how many lines of a file come before the log, a file read from its line Base+1 on: the model reads, and answers in, the
 	// file's own numbers, while Excerpt, Entries and the ranges of the Summary count from the log's start.
 	Base int
+	// Heads are the log lines a skim's joined files start at, each the file's head line "[PATH] ..."; none for one output or file.
+	Heads []int
 }
 
 // Summary is a summarizer's checked answer: its prose, the ranges that lie in the lines it read, and how many ranges did not.
@@ -232,7 +236,7 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 			return Summary{Usage: usage}, failure
 		}
 	}
-	got, failure := check(reply, in.Log, in.Excerpt, in.Base)
+	got, failure := check(reply, in.Log, in.Excerpt, in.Base, in.Heads)
 	got.Usage = usage
 	if failure != "" {
 		return got, failure
@@ -248,8 +252,8 @@ func render(in SummaryInput) string {
 	var b strings.Builder
 	cut := func(text string) string {
 		row := []rune(text)
-		if len(row) > summaryRowChars {
-			row = row[:summaryRowChars]
+		if len(row) > SummaryRowChars {
+			row = row[:SummaryRowChars]
 		}
 		return string(row)
 	}
@@ -308,12 +312,22 @@ func summaryPrompt(in SummaryInput, excerpt bool) string {
 	text += "Command: " + in.Command + "\n" +
 		"Exit status (from the shell, always true): " + status + "\n" +
 		output(in) +
-		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n" +
-		"summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
-		"lines or entries; the agent gets exact counts from the shell.\n" +
-		"ranges: only the lines the agent must read as printed, most important first, up to 5 ranges of at most 10 lines each: the line of " +
-		"each error, failure or cause the summary names, and a line whose exact text the agent needs, such as a path, a stack frame or a " +
-		"value the summary cites. Point at no line only for context; when the summary answers the description on its own, ranges is []."
+		`Answer with JSON only: {"summary": "...", "ranges": [[first, last], ...]}` + "\n"
+	if len(in.Heads) > 1 {
+		text += "summary: at most 3 sentences for each file that bears on the description, each naming its file; leave out the files that do " +
+			"not. State only what the numbered lines show; never guess causes the output does not show. Do not count lines or entries; the " +
+			"agent gets exact counts from the shell.\n" +
+			"ranges: only the lines the agent must read as printed, never prose the summary already tells, most important first, up to " +
+			strconv.Itoa(joinedRanges(len(in.Heads))) + " ranges in all of at most 10 lines each, spread over the files the summary covers: the " +
+			"line of each error or failure the summary names, and the lines whose exact text the agent must copy, such as a path, a value, a new " +
+			"signature or the code before and after a change. When the summary answers the description on its own, ranges is []."
+	} else {
+		text += "summary: at most 3 sentences. State only what the numbered lines show; never guess causes the output does not show. Do not count " +
+			"lines or entries; the agent gets exact counts from the shell.\n" +
+			"ranges: only the lines the agent must read as printed, most important first, up to 5 ranges of at most 10 lines each: the line of " +
+			"each error, failure or cause the summary names, and a line whose exact text the agent needs, such as a path, a stack frame or a " +
+			"value the summary cites. Point at no line only for context; when the summary answers the description on its own, ranges is []."
+	}
 	if in.Expect != "" {
 		text += "\nLead with what contradicts the expectation; if the output meets it, one short sentence saying so is the whole summary."
 	}
@@ -338,17 +352,25 @@ func summaryKey(e SummaryEntry, url, prompt, text string) string {
 
 // output is the prompt's line about the lines it numbers: their count, or for a file read from a later line on, their numbers.
 func output(in SummaryInput) string {
-	if in.Base > 0 {
+	switch {
+	case in.Base > 0:
 		return fmt.Sprintf("Output: lines %d-%d of a file, numbered below.\n\n", in.Base+1, in.Base+len(in.Log))
+	case len(in.Heads) > 1:
+		return fmt.Sprintf("Output: %d lines joining %d files, each from its line \"[PATH] ...\", numbered below.\n\n", len(in.Log), len(in.Heads))
 	}
 	return fmt.Sprintf("Output: %d lines, numbered below.\n\n", len(in.Log))
 }
 
+// joinedRanges is how many ranges an answer about a log joining files may point at.
+func joinedRanges(files int) int { return min(maxRanges*files, maxJoinedRanges) }
+
 var fence = regexp.MustCompile("^```(?:json)?\\s*|\\s*```$")
 
 // check reads a reply, whose ranges count from base+1, and keeps the ranges inside the log that touch a line the entry read, counted from
-// the log's start; an answer with no summary fails, and so does one whose ranges were all unusable, but an empty list is an answer.
-func check(reply string, log []string, shown []int, base int) (Summary, string) {
+// the log's start: the first maxRanges of them, or of a log joining files at heads the first of each file's within its share of
+// joinedRanges, a range being in the file its first line is in. An answer with no summary fails, and so does one whose ranges were all
+// unusable, but an empty list is an answer.
+func check(reply string, log []string, shown []int, base int, heads []int) (Summary, string) {
 	var a answer
 	if json.Unmarshal([]byte(fence.ReplaceAllString(strings.TrimSpace(reply), "")), &a) != nil {
 		return Summary{}, "its answer is not JSON"
@@ -357,6 +379,7 @@ func check(reply string, log []string, shown []int, base int) (Summary, string) 
 	if got.Text == "" {
 		return got, "its answer has no summary"
 	}
+	joined := len(heads) > 1
 	for i, r := range a.Ranges {
 		first, ok1 := 0, false
 		last, ok2 := 0, false
@@ -366,16 +389,55 @@ func check(reply string, log []string, shown []int, base int) (Summary, string) 
 			first, last = first-base, last-base
 		}
 		touches := ok1 && ok2 && slices.ContainsFunc(shown, func(n int) bool { return n >= first && n <= last })
-		if i >= maxRanges || !touches || first < 1 || last < first || last > len(log) || last-first+1 > maxRangeLines {
+		if !joined && i >= maxRanges || !touches || first < 1 || last < first || last > len(log) || last-first+1 > maxRangeLines {
 			got.Dropped++
 			continue
 		}
 		got.Ranges = append(got.Ranges, [2]int{first, last})
 	}
+	if joined {
+		file := func(r [2]int) int {
+			at, _ := slices.BinarySearch(heads, r[0]+1)
+			return at
+		}
+		counts := make([]int, len(heads)+1)
+		for _, r := range got.Ranges {
+			counts[file(r)]++
+		}
+		shares := Shares(counts, joinedRanges(len(heads)), 0)
+		kept := got.Ranges[:0]
+		for _, r := range got.Ranges {
+			if f := file(r); shares[f] > 0 {
+				shares[f]--
+				kept = append(kept, r)
+				continue
+			}
+			got.Dropped++
+		}
+		got.Ranges = kept
+	}
 	if len(got.Ranges) == 0 && got.Dropped > 0 {
 		return got, "none of its ranges lies in the lines it read"
 	}
 	return got, ""
+}
+
+// Shares splits budget among parts that want the given sizes: one that fits an even split of what is left gets all it wants, and the rest
+// share what remains, each at least least.
+func Shares(sizes []int, budget, least int) []int {
+	order := make([]int, len(sizes))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return sizes[a] - sizes[b] })
+	shares := make([]int, len(sizes))
+	left := max(0, budget)
+	for k, i := range order {
+		even := max(least, left/(len(order)-k))
+		shares[i] = min(sizes[i], even)
+		left = max(0, left-shares[i])
+	}
+	return shares
 }
 
 func integer(v any) (int, bool) {

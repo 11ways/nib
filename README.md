@@ -202,7 +202,10 @@ Several files are read in one call, a missing one noted in its place; at most 64
 limits hold for the call, not for each file: files that are short apiece but past them together are shaped as one
 output, one decider or summary serving them all, each file's head row a line of it that a row shown without it gets
 first, and their rows numbered as lines of a log joining them (`N| is a row's line in the joined files: read LOG:A-B
-plain:true for others`).
+plain:true for others`). That output is cut file by file: every head row stays, and each file gets a fair share of the
+budget for the decider's picks, or without them for its first lines, so one file cannot crowd out the others. Its
+summary gives up to 3 sentences for each file that bears on `expect`, and the lines it points at, up to 5 ranges for
+each file and 30 in all, share what one output's would get for each file.
 `expect` is required. `read` itself never takes it, so a read always gives rows to edit from.
 
 #### Changes since a tag
@@ -880,11 +883,12 @@ refused, since a run that refreshed it could spend the user's refresh token, and
 is (keys in the environment). The program is `opencode` on `PATH`, or `NIB_DECIDER_OPENCODE`; one that is missing or
 not OpenCode 2 fails its entry when it runs, so the next one answers. An OpenRouter entry takes one option,
 `@reasoning=off|default|minimal|low|medium|high` (`off` is the default, `default` leaves it to the model). What the
-model reads is numbered by log line, each row cut to 300 characters: an output of at most 600 lines goes whole, and no
-decider is asked unless the summary fails; a longer one goes after the decider has chosen, as the excerpt of its picks:
-the first 30 and last 100 deduplicated entries and the decider's picks rated 0.3 or more, best first (a pick mostly like
-what is already in waits for the rest, so a failure repeated for every test class cannot fill it), each widened by 10
-lines, up to 600 entries. It answers with a summary of at most 3 sentences and up to 5 ranges of the log lines the agent
+model reads is numbered by log line, each row cut to 300 characters: an output of at most 600 lines, or one that takes
+at most 96 KiB as the model reads it, goes whole, and no decider is asked unless the summary fails; a longer one goes
+after the decider has chosen, as the excerpt of its picks: the first 30 and last 100 deduplicated entries and the
+decider's picks rated 0.3 or more, best first (a pick mostly like what is already in waits for the rest, so a failure
+repeated for every test class cannot fill it), each widened by 10 lines, up to 600 entries. It answers with a summary of
+at most 3 sentences and up to 5 ranges of the log lines the agent
 must read as printed (an error, a stack frame, a value the summary cites), or none when the summary answers the
 description on its own; nib keeps the ranges inside the log, of at most 60 lines, that touch a line the model read; an
 answer whose ranges all miss, not JSON, or failed falls to the next entry, and when every entry fails the decider's cut

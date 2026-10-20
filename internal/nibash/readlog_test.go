@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -237,12 +238,14 @@ func TestManyShortFilesPastTheBudgetTogetherAreShapedAsOneOutput(t *testing.T) {
 	if len(out) > budgetBytes {
 		t.Fatalf("%d bytes, past the budget of %d:\n%s", len(out), budgetBytes, out)
 	}
-	// Each file is its head row and its 61 lines, so e09.md's head is line 497 of the joined log and its line 30 is line 527.
-	if !strings.HasPrefix(out, "1|[e01.md] 61 lines, plain\n2|e01.md line 1: ") ||
-		!strings.Contains(out, "\n497|[e09.md] 61 lines, plain\n524|e09.md line 27: ") || !strings.Contains(out, "\n527|RENAMED: RegistryFeed is gone\n") {
+	// Each file is its head row and its 61 lines, so e09.md's head is line 497 of the joined log and its line 30 is line 527. Every head row
+	// shows, and of the files' lines only the passage the model chose.
+	if !strings.HasPrefix(out, "1|[e01.md] 61 lines, plain\n63|[e02.md] 61 lines, plain\n") ||
+		!strings.Contains(out, "\n497|[e09.md] 61 lines, plain\n524|e09.md line 27: ") || !strings.Contains(out, "\n527|RENAMED: RegistryFeed is gone\n") ||
+		!strings.Contains(out, "\n530|e09.md line 33: a sentence of the changelog, long enough to count toward a budget\n559|[e10.md] 61 lines, plain\n") {
 		t.Fatalf("read:\n%s", out)
 	}
-	closing := regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 868 log lines; m and keywords chose the middle for what you expect; N\| is a row's line in the joined files: read (\S+):A-B plain:true for others\]$`).FindStringSubmatch(out)
+	closing := regexp.MustCompile(`\n\[` + engine.Skim + `: 21 rows shown of 868 log lines; m and keywords chose for what you expect, each file within its share of the budget; N\| is a row's line in the joined files: read (\S+):A-B plain:true for others\]$`).FindStringSubmatch(out)
 	if closing == nil {
 		t.Fatalf("closing note:\n%s", out)
 	}
@@ -276,12 +279,99 @@ func TestShortFilesPastTheSummaryLimitsTogetherGetOneSummary(t *testing.T) {
 	f := newFixture(t, files)
 	f.shell.Deciding(model).Summarizing(summary)
 	out := f.readLog("what was removed", paths...)
-	if len(summary.asked) != 1 || len(summary.asked[0].Log) != 246 || summary.asked[0].Log[133] != "REMOVED: Models.withoutIndexWait" || len(model.asked) != 0 {
+	if len(summary.asked) != 1 || len(summary.asked[0].Log) != 246 || summary.asked[0].Log[133] != "REMOVED: Models.withoutIndexWait" || len(model.asked) != 0 ||
+		!slices.Equal(summary.asked[0].Heads, []int{1, 42, 83, 124, 165, 206}) {
 		t.Fatalf("asked %+v, decider %+v", summary.asked, model.asked)
 	}
 	// d.md's head is line 124 of the joined log, as each file is its head row and its 40 lines.
 	if !strings.HasPrefix(out, "<summary>d.md removes Models.withoutIndexWait.</summary>\n124|[d.md] 40 lines, plain\n133|d.md line 9: ") ||
 		!strings.Contains(out, "\n134|REMOVED: Models.withoutIndexWait\n135|d.md line 11: ") || !strings.Contains(out, "N| is a row's line in the joined files: read ") {
 		t.Fatalf("read:\n%s", out)
+	}
+}
+
+// keywordHits is a decider that picks every row holding want, the way keyword hits come in: one row at a time, in order.
+func keywordHits(want string) *fakeDecider {
+	return &fakeDecider{kind: decider.Keywords, choose: func(in decider.Input) decider.Choice {
+		choice := decider.Choice{Who: "keywords"}
+		for i, row := range in.Rows {
+			if strings.Contains(row, want) {
+				choice.Picks = append(choice.Picks, decider.Pick{Range: decider.Range{Start: i, End: i + 1}, Score: 1})
+			}
+		}
+		return choice
+	}}
+}
+
+// A file whose every line is a hit cannot crowd out another file's one hit: each file's picks get a fair share of the budget.
+func TestEveryJoinedFileGetsAFairShareOfTheCut(t *testing.T) {
+	var big strings.Builder
+	for i := 1; i <= 600; i++ {
+		fmt.Fprintf(&big, "error: step %d of the long run failed again, as the steps before it did\n", i)
+	}
+	f := newFixture(t, map[string]string{"big.log": big.String(), "small.log": prose("small.log", 60, 30, "error: the one that matters")})
+	f.shell.Deciding(keywordHits("error:"))
+	out := f.readLog("what failed", "big.log", "small.log")
+	// big.log's head and 600 lines come first, so small.log's head is line 602 of the joined log and its line 30 is line 632.
+	if !strings.Contains(out, "\n602|[small.log] 60 lines, plain\n629|small.log line 27: ") || !strings.Contains(out, "\n632|error: the one that matters\n") ||
+		!strings.Contains(out, "keywords chose, each file within its share of the budget; ") || !strings.Contains(out, " it chose did not fit (log lines ") {
+		t.Fatalf("read:\n%s", out)
+	}
+	if len(out) > budgetBytes {
+		t.Fatalf("%d bytes, past the budget", len(out))
+	}
+}
+
+// Without a decider, files past the budget together each show from their start, as far as an even share of it goes.
+func TestJoinedFilesWithoutADeciderEachShowTheirStart(t *testing.T) {
+	files := map[string]string{}
+	for _, name := range []string{"a.md", "b.md", "c.md"} {
+		files[name] = prose(name, 200, 0, "")
+	}
+	f := newFixture(t, files)
+	out := f.readLog("anything", "a.md", "b.md", "c.md")
+	for _, want := range []string{"1|[a.md] 200 lines, plain\n2|a.md line 1: ", "\n202|[b.md] 200 lines, plain\n203|b.md line 1: ", "\n403|[c.md] 200 lines, plain\n404|c.md line 1: "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("%q missing:\n%s", want, out)
+		}
+	}
+	closing := regexp.MustCompile(`\n\[` + engine.Skim + `: \d+ rows shown of 603 log lines; each file shown from its start as far as its share of the budget goes; N\| is a row's line in the joined files: read \S+:A-B plain:true for others\]$`)
+	if strings.Contains(out, "line 200:") || len(out) > budgetBytes || !closing.MatchString(out) {
+		t.Fatalf("read:\n%s", out)
+	}
+}
+
+// A summary of joined files points at a passage in each, past what one output's passages share, each under its file's head row.
+func TestASummaryOfJoinedFilesShowsAPassageOfEach(t *testing.T) {
+	files := map[string]string{}
+	var paths []string
+	var ranges [][2]int
+	for i := 1; i <= 12; i++ {
+		name := fmt.Sprintf("f%02d.md", i)
+		files[name] = prose(name, 30, 0, "")
+		paths = append(paths, name)
+		// Each file is its head row and its 30 lines; the summary points at its lines 10 to 14.
+		start := (i-1)*31 + 1 + 10
+		ranges = append(ranges, [2]int{start, start + 4})
+	}
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Every file says something.", Ranges: ranges}
+	}}
+	f := newFixture(t, files)
+	f.shell.Deciding(pickText("nothing")).Summarizing(summary)
+	out := f.readLog("what does each say", paths...)
+	if len(summary.asked) != 1 || len(summary.asked[0].Heads) != 12 {
+		t.Fatalf("asked %+v", summary.asked)
+	}
+	for i := 1; i <= 12; i++ {
+		name := fmt.Sprintf("f%02d.md", i)
+		head := (i-1)*31 + 1
+		want := fmt.Sprintf("\n%d|[%s] 30 lines, plain\n%d|%s line 9: ", head, name, head+9, name)
+		if !strings.Contains(out, want) || !strings.Contains(out, fmt.Sprintf("\n%d|%s line 15: ", head+15, name)) {
+			t.Fatalf("%s's passage missing:\n%s", name, out)
+		}
+	}
+	if !strings.Contains(out, "[skim: 84 rows shown of 372 log lines; ") {
+		t.Fatalf("closing:\n%s", out)
 	}
 }

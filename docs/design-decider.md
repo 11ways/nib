@@ -366,8 +366,9 @@ number matched the log. Counts they gave were wrong, so the prompt leaves counts
 where the decider judged that every line counts.
 
 `decider.Summarizer` reads only what nib hands it (the user's design: the decider picks, the summary model condenses the
-picks). In `shape`, outside the gates above, an output of at most 600 log lines (`excerptLines`) goes to `Summarize`
-whole and the decider is asked only when the summary fails; a longer one is decided first, and its excerpt (the first 30
+picks). In `shape`, outside the gates above, an output of at most 600 deduplicated entries (`excerptLines`), or one
+whose entries take at most 96 KiB as the model reads them (`wholeBytes`, by `wholeFits`), goes to `Summarize` whole and
+the decider is asked only when the summary fails; a longer one is decided first, and its excerpt (the first 30
 and last 100 entries and the decider's picks rated 0.3 or more, widened by 10 lines, in `novelFirst` order, up to 600
 entries) goes to `Summarize`, numbered by log line, each row cut to 300 characters. The answer is a summary and up to 5
 ranges of line numbers, nothing quoted: the research's quoted lines all matched the log, so copying them only cost
@@ -376,11 +377,17 @@ cites), and none when the summary answers the description on its own. `check` ke
 most 60 lines, that touch a line the entry read; an answer whose ranges all miss fails (an empty list does not), and the
 next entry is asked within the same deadline. A checked summary replaces the decider's cut with a `<summary>` element
 (its text on one line, the model's name left out, summary tags in the text removed), the real rows of every range (1
-line around each; the ranges share `summaryRows`, 30: by `shared`, one that fits an even split of what is left shows
-whole and the longer ones split the rest, at least 3 rows each, dropping their surrounding lines first and then showing
-their start and a note naming the rest), every row numbered with its log line, and a closing note with nib's own counts
-and the read of the other lines; the agent sees fewer rows than any decider shows, and nothing in it is the model's but
-the `<summary>` element. When every entry fails, the decider's cut stands with `no summary` in its note.
+line around each; the ranges share `summaryRows`, 30: by `decider.Shares`, one that fits an even split of what is left
+shows whole and the longer ones split the rest, at least 3 rows each, dropping their surrounding lines first and then
+showing their start and a note naming the rest), every row numbered with its log line, and a closing note with nib's own
+counts and the read of the other lines; the agent sees fewer rows than any decider shows, and nothing in it is the
+model's but the `<summary>` element. When every entry fails, the decider's cut stands with `no summary` in its note.
+
+The 96 KiB is for outputs of many short lines, a skim of a few dozen short files above all: the 600-entry cap alone
+sent the changelog capture's 918 lines (59 KB as read) to an excerpt that left out the files in its middle. Of the
+recorded program outputs it turned three from an excerpt to a whole read, each keeping every needed line:
+bun-install-missing (2,185 entries, 46,512 tokens, $0.0033), git-diff-big (973, 14,510 tokens) and pacman-query (671,
+9,965 tokens).
 
 Picks enter the excerpt best first, so the cap, not the 0.3 score, decides what a long log loses: at 400 lines the
 captures lost go-build-x's error (its block ranked past the cap) and git-log-stat's commit (a 0.49 block ranked 14th),
@@ -538,14 +545,36 @@ is the recorded one. The decision gives the models `cat PATH` as the command, `e
 so the prompts stay those the answers were recorded with; notes say `for what you expect`.
 
 The limits hold for the whole call, not for each window: many short files can add up to far more than one long one,
-and each would print whole on its own. So `shapeBlocks` first lays out every file's window, and when a call has
-several windows whose rows together are due for `shape` (`shapeDue`: past the budget, or due a summary), `joined`
-makes them one output: each file's head row and notes are lines of it, under which the file's lines follow, and it
-goes to `fit` once, with `cat` of every path as the command, so one decider call and one summary serve the whole
-call. Its log is a nib log of its own (`saved.joined`: notes say `skim`, the whole is `joined files`), cut rows are
-numbered with its lines, and a row shown without its file's head row gets that row first (`gapped`, as `fixedCut`
-repeats a file header), so every row stays under the file it came from. The lines shown still count as shown in
-their own files. Within the limits, each window is shaped alone and numbered as its file numbers its lines.
+and each would print whole on its own (14 changelog entries of about 60 lines came to 54 KB, each under every limit).
+So `shapeBlocks` first lays out every file's window, and when a call has several windows whose rows together are due
+for `shape` (`shapeDue`: past the budget, or due a summary), `joined` makes them one output: each file's head row and
+notes are lines of it (rows of nib's own, `header` -1), under which the file's lines follow, and it goes to `fit` once,
+with `cat` of every path as the command, so one decider call and one summary serve the whole call. Its log is a nib log
+of its own (`saved.files` counts the files: notes say `skim`, the whole is `joined files`), cut rows are numbered with
+its lines, and a row shown without its file's head row gets that row first (`gapped`, as `fixedCut` repeats a file
+header), so every row stays under the file it came from. The lines shown still count as shown in their own files.
+Within the limits, each window is shaped alone and numbered as its file numbers its lines.
+
+A joined output is cut file by file, never as one log's start and end. Every row of nib's own is kept, the decider
+chooses among all the rest, and each file's picks get a fair share of the budget (`fairPieces`, by `decider.Shares`: a
+file wanting less than an even split of what is left gets all it wants, the others split the rest), a row costing at
+least `budgetBytes/(headRows+tailRows)` so the bytes bound the rows too. A pick wider than what its file has left keeps
+its middle, and its context stops at its own file. Without a decider's picks (`fairFixed`) each file shows from its
+start as far as its share goes; an excerpt for the summarizer is shared the same way. The summarizer is told where the
+files start (`SummaryInput.Heads`): its prompt asks for at most 3 sentences for each file that bears on the purpose and
+up to 5 ranges for each file, at most 30 in all, of the lines the agent must read as printed and never prose, and
+`check` keeps each file's first ranges within its share of them, so a file that points at many cannot take a later
+file's. The passages share what one output's get for each file, within two thirds of `budgetBytes` and as many rows as
+leave each 120 characters. One output's prompt and limits are unchanged, so the answers recorded for it still serve.
+
+On the captures `skim-changelog` (the 14 entries), `skim-test-logs` (four test logs) and `skim-design-docs` (120 KB,
+past `wholeBytes`, so an excerpt), the summary kept 12 of 15, 20 of 20 and 5 of 5 needed lines in 14.1, 8.4 and
+3.8 KB; the three the changelog lost are prose lines its summary states. Three earlier prompts did worse, in changelog,
+test-log and design-doc lines kept: one output's wording with the first 28 ranges kept, 5 of 15, 12 of 20 and 1 of 5
+(it pointed at the first files' prose); 2 ranges per file of at most 6 lines of code to copy, 6 of 15, 9 of 20 and 3
+of 5; ranges spread over the files with errors and failures named first, 2 of 15 (prose again), 20 of 20 and 5 of 5.
+Putting "never prose" first kept what the last one gained. The decision model's cut kept 3 of 15, 20 of 20 and 3 of 5
+within the 30 KB budget: a cut, unlike a summary, cannot hold 14 files' fixes.
 
 Each agent's shell session remembers, per file read whole, its size, its first 4 KiB, the whole lines read and the
 offset after them, and how much of a last line without its line break was shown. The next whole read starts at that

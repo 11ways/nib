@@ -349,78 +349,93 @@ func (s *Shell) shapeBlocks(ctx context.Context, blocks []*logBlock, d decision,
 	return strings.Join(texts, "\n\n")
 }
 
-// joined shapes the windows of blocks as one output when together they are due for it, and says whether they were. The rows of nib's own
-// about each file are lines of that output too, which a nib log holds, and every row stands under its file's head row, which a cut repeats.
+// joined shapes the windows of blocks as one output when together they are due for it, and says whether they were.
 func (s *Shell) joined(ctx context.Context, blocks []*logBlock, d decision, tools *engine.Context) (string, bool) {
-	var rows []row
-	var lines, displays []string
-	head := -1
-	own := func(text string) {
-		lines = append(lines, text)
-		r := plainRow(text, len(lines), len(lines), nil)
-		r.header = head
-		rows = append(rows, r)
-	}
-	type placed struct {
-		block  *logBlock
-		window *logWindow
-		offset int
-	}
-	var at []placed
-	echoed := false
-	for _, b := range blocks {
-		head = -1
-		for _, text := range b.head {
-			own(text)
-			if head < 0 {
-				head = len(rows) - 1
-			}
-		}
-		for _, w := range b.windows {
-			for _, note := range w.notes {
-				own(note)
-			}
-			offset := len(lines)
-			lines = append(lines, w.lines...)
-			for _, r := range w.rows(offset, offset) {
-				r.header = head
-				rows = append(rows, r)
-			}
-			at = append(at, placed{b, w, offset})
-		}
-		for _, text := range b.tail {
-			own(text)
-		}
-		if len(b.windows) > 0 {
-			displays = append(displays, b.display)
-		}
-		echoed = echoed || b.echoed
-	}
-	raw := strings.Join(lines, "\n")
-	if !shapeDue(rows, raw, d) {
+	j := join(blocks)
+	if !shapeDue(j.rows, j.raw(), d) {
 		return "", false
 	}
-	d.command = "cat " + strings.Join(displays, " ")
-	var log *saved
-	rows, footer := fit(ctx, rows, raw, d, func() saved {
-		if log == nil {
-			written := s.logs.save(raw + "\n")
-			written.joined = true
-			log = &written
-		}
-		return *log
-	})
-	for _, p := range at {
+	rows, footer := j.fit(ctx, d, s.logs)
+	for _, p := range j.at {
 		p.block.shown(p.window, rows, p.offset)
 	}
 	for _, b := range blocks {
 		b.finish()
 	}
 	out := append(rowTexts(rows), footer...)
-	if echoed {
+	if j.echoed {
 		out = append(out, s.engine.EchoNote(tools)...)
 	}
 	return strings.Join(out, "\n"), true
+}
+
+// joining is blocks laid out as one output, whose log a nib log holds: rows where each file's head row and every other row of nib's own
+// (header -1) are lines of the log too, every row of a file's lines standing under its head row; the log's lines; the files with lines
+// to show; and where each window's lines start in the log.
+type joining struct {
+	rows   []row
+	lines  []string
+	files  []string
+	at     []placed
+	echoed bool
+}
+
+// placed is a window of a block whose lines are the joined log's from offset on.
+type placed struct {
+	block  *logBlock
+	window *logWindow
+	offset int
+}
+
+func join(blocks []*logBlock) joining {
+	var j joining
+	own := func(text string) {
+		j.lines = append(j.lines, text)
+		j.rows = append(j.rows, plainRow(text, len(j.lines), len(j.lines), nil))
+	}
+	for _, b := range blocks {
+		head := len(j.rows)
+		for _, text := range b.head {
+			own(text)
+		}
+		for _, w := range b.windows {
+			for _, note := range w.notes {
+				own(note)
+			}
+			offset := len(j.lines)
+			j.lines = append(j.lines, w.lines...)
+			for _, r := range w.rows(offset, offset) {
+				r.header = head
+				j.rows = append(j.rows, r)
+			}
+			j.at = append(j.at, placed{b, w, offset})
+		}
+		for _, text := range b.tail {
+			own(text)
+		}
+		if len(b.windows) > 0 {
+			j.files = append(j.files, b.display)
+		}
+		j.echoed = j.echoed || b.echoed
+	}
+	return j
+}
+
+func (j joining) raw() string { return strings.Join(j.lines, "\n") }
+
+// fit shapes the joined output as one, with cat of its files as the command, its log written to logs when shape needs it.
+func (j joining) fit(ctx context.Context, d decision, logs *logDirectory) ([]row, []string) {
+	raw := j.raw()
+	d.command = "cat " + strings.Join(j.files, " ")
+	var log *saved
+	return fit(ctx, j.rows, raw, d, func() saved {
+		if log == nil {
+			written := logs.save(raw + "\n")
+			written.files = max(1, len(j.files))
+			log = &written
+		}
+		return *log
+	})
 }
 
 // selector is the set as a read's line selector, like 1-100,207-403.

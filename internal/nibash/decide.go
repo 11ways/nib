@@ -26,9 +26,10 @@ func purpose(description string) string {
 // shape cuts over-budget rows, or with a summarizer condenses plain output past summaryLines or summaryBytes: the configured decider
 // chooses the middle of plain output, and the fixed cut serves the rest, file rows included, since what nib's own commands show is file
 // content the model asked for and counts as seen for edits. With a summarizer, a checked summary and the lines it points at take the place of
-// the decider's cut; raw is the log's text. An output whose deduplicated entries fit excerptLines goes to the summarizer whole, with no
+// the decider's cut; raw is the log's text. An output whose deduplicated entries fit (wholeFits) goes to the summarizer whole, with no
 // decider asked unless the summary fails; a longer one goes as the excerpt of the decider's picks. Without a summary, output within the
-// budget stays whole. A decision model and a summarizer read the output deduplicated (dedupe); the agent still gets its real rows.
+// budget stays whole. A decision model and a summarizer read the output deduplicated (dedupe); the agent still gets its real rows. Joined
+// skim output is cut file by file (assemble, fairFixed).
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
 	over := overBudget(rows)
 	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })
@@ -40,15 +41,20 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		lines = plainLines([]byte(raw))
 		entries, legend = dedupe(lines)
 	}
+	from, to := chosenSpan(rows, log)
+	files := joinedFiles(rows, log)
 	decide := func() decider.Choice {
-		return choose(ctx, rows[decidedHead:len(rows)-decidedTail], entries, legend, d, model)
+		return choose(ctx, rows[from:to], entries, legend, d, model)
 	}
 	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
 	cut := func(choice *decider.Choice, notes ...string) []row {
 		if !over {
 			return rows
 		}
-		if len(rows) <= headRows+tailRows || d.decider == nil || !plain {
+		if from == to || d.decider == nil || !plain {
+			if log.files > 0 {
+				return fairFixed(rows, log, strings.Join(notes, "; "))
+			}
 			return fixedCut(rows, log, "")
 		}
 		if choice == nil {
@@ -69,7 +75,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 			}
 		}
 		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
-			Excerpt: shown, Entries: chosen, Legend: legend, Base: log.base}
+			Excerpt: shown, Entries: chosen, Legend: legend, Base: log.base, Heads: files.heads(rows)}
 		s := d.summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}
@@ -77,7 +83,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	if !over && problemList(lines) {
 		return rows
 	}
-	if len(entries) <= excerptLines {
+	if wholeFits(entries, legend) {
 		if s, ok := ask(entries); ok {
 			return summarized(rows, s, log, lines)
 		}
@@ -85,24 +91,44 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	}
 	// Collapsed repeats can leave a long log too few rows for a decider; its excerpt is then the start and end alone.
 	var choice decider.Choice
-	if len(rows) > headRows+tailRows {
+	if to > from {
 		choice = decide()
 	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
 		return cut(&choice)
 	}
-	if s, ok := ask(excerpt(middleOf(rows), choice, entries)); ok {
+	if s, ok := ask(excerpt(rows[from:to], choice, entries, files)); ok {
 		return summarized(rows, s, log, lines)
 	}
 	return cut(&choice, "no summary")
 }
 
-// middleOf is the rows a decider chooses among, between the start and end kept anyway; none when output is too short to have been decided.
-func middleOf(rows []row) []row {
-	if len(rows) <= headRows+tailRows {
-		return nil
+// wholeFits says whether a summarizer reads all of a deduplicated output rather than an excerpt: within excerptLines entries, or within
+// wholeBytes as it reads them, which many short files a skim joins can take while past excerptLines.
+func wholeFits(entries []decider.Entry, legend decider.Legend) bool {
+	if len(entries) <= excerptLines {
+		return true
 	}
-	return rows[decidedHead : len(rows)-decidedTail]
+	size := 0
+	for _, e := range entries {
+		size += len(e.Label()) + len(": ") + min(len(e.Text), decider.SummaryRowChars) + 1
+	}
+	for _, text := range legend {
+		size += len(text) + 1
+	}
+	return size <= wholeBytes
+}
+
+// chosenSpan is the rows a decider chooses among: those between the kept start and end, none when output is too short to have been
+// decided, and all of joined skim output, whose files' rows of nib's own are kept instead.
+func chosenSpan(rows []row, log saved) (from, to int) {
+	switch {
+	case log.files > 0:
+		return 0, len(rows)
+	case len(rows) <= headRows+tailRows:
+		return 0, 0
+	}
+	return decidedHead, len(rows) - decidedTail
 }
 
 // choose asks the decider which of middle, rows of plain output, the call needs; a decision model reads them as entries, the deduplicated
@@ -160,8 +186,9 @@ func onRows(choice decider.Choice, entries []decider.Entry, middle []row) decide
 }
 
 // excerpt is the entries a summarizer reads: the first excerptHead and last excerptTail entries, and those of the passages a decider
-// picked among middle, widened by excerptContext lines, in novelFirst order while they fit excerptLines entries.
-func excerpt(middle []row, choice decider.Choice, entries []decider.Entry) []decider.Entry {
+// picked among middle, widened by excerptContext lines, in novelFirst order while they fit excerptLines entries. Of joined skim output (files
+// set, middle all its rows) it holds the lines of nib's own rows instead of a start and end, and each file gets a fair share of the rest.
+func excerpt(middle []row, choice decider.Choice, entries []decider.Entry, files *fileGroups) []decider.Entry {
 	lines := 0
 	if len(entries) > 0 {
 		lines = entries[len(entries)-1].Last
@@ -172,12 +199,26 @@ func excerpt(middle []row, choice decider.Choice, entries []decider.Entry) []dec
 			entryOf[n] = i
 		}
 	}
-	keep := map[int]bool{}
+	keep := make([]bool, len(entries))
+	held := 0
 	seen := map[string]bool{}
-	for i := range entries {
-		if i < excerptHead || i >= len(entries)-excerptTail {
-			keep[i] = true
+	hold := func(i int) {
+		if !keep[i] {
+			keep[i], held = true, held+1
 			seen[likeness(entries[i].Text)] = true
+		}
+	}
+	if files == nil {
+		for i := range entries {
+			if i < excerptHead || i >= len(entries)-excerptTail {
+				hold(i)
+			}
+		}
+	} else {
+		for _, r := range middle {
+			for n := r.first; r.header < 0 && n > 0 && n <= min(r.last, lines); n++ {
+				hold(entryOf[n])
+			}
 		}
 	}
 	// widened is the entries a pick stands for with excerptContext lines around it; none for a pick outside the log.
@@ -207,25 +248,184 @@ func excerpt(middle []row, choice decider.Choice, entries []decider.Entry) []dec
 		}
 		return texts
 	})
-	for _, p := range picks {
-		var more []int
-		for _, i := range widened(p) {
-			if !keep[i] {
-				more = append(more, i)
+	if files == nil {
+		for _, p := range picks {
+			var more []int
+			for _, i := range widened(p) {
+				if !keep[i] {
+					more = append(more, i)
+				}
+			}
+			if held+len(more) > excerptLines {
+				continue
+			}
+			for _, i := range more {
+				hold(i)
 			}
 		}
-		if len(keep)+len(more) > excerptLines {
-			continue
+	} else {
+		fileOf := files.ofLines(middle, lines)
+		var pieces []piece
+		for _, p := range picks {
+			pieces = append(pieces, split(widened(p), func(i int) int { return fileOf[entries[i].First] })...)
 		}
-		for _, i := range more {
-			keep[i] = true
-		}
+		fairPieces(pieces, files.count, keep, func(int) int { return 1 }, excerptLines-held)
 	}
 	var out []decider.Entry
 	for i, e := range entries {
 		if keep[i] {
 			out = append(out, e)
 		}
+	}
+	return out
+}
+
+// fileGroups is joined skim output by file: the file each row belongs to, counted from 0, and how many there are. A row of nib's own
+// (header -1) belongs with the file whose head row comes last before it.
+type fileGroups struct {
+	of    []int
+	count int
+}
+
+// joinedFiles is rows by file when they are joined skim output, else nil.
+func joinedFiles(rows []row, log saved) *fileGroups {
+	if log.files == 0 {
+		return nil
+	}
+	heads := map[int]bool{}
+	for _, r := range rows {
+		if r.header >= 0 {
+			heads[r.header] = true
+		}
+	}
+	g := &fileGroups{of: make([]int, len(rows))}
+	current := -1
+	for i := range rows {
+		if heads[i] || current < 0 {
+			current++
+		}
+		g.of[i] = current
+	}
+	g.count = current + 1
+	return g
+}
+
+// heads are the log lines the files start at, the first of each file's first row; none for output that is not joined.
+func (g *fileGroups) heads(rows []row) []int {
+	if g == nil {
+		return nil
+	}
+	var heads []int
+	for i, r := range rows {
+		if (i == 0 || g.of[i] != g.of[i-1]) && r.first > 0 {
+			heads = append(heads, r.first)
+		}
+	}
+	return heads
+}
+
+// ofLines is the file of each log line from 1 to lines, rows being all the output's rows; a line no row stands for, one the agent was
+// shown before, goes with the line before it.
+func (g *fileGroups) ofLines(rows []row, lines int) []int {
+	of := make([]int, lines+1)
+	at := make([]bool, lines+1)
+	for i, r := range rows {
+		for n := max(1, r.first); r.first > 0 && n <= min(r.last, lines); n++ {
+			of[n], at[n] = g.of[i], true
+		}
+	}
+	for n := 2; n <= lines; n++ {
+		if !at[n] {
+			of[n] = of[n-1]
+		}
+	}
+	return of
+}
+
+// split is rows units [lo, hi) as pieces, one for each run of them in the same file.
+func (g *fileGroups) split(lo, hi int) []piece {
+	units := make([]int, 0, hi-lo)
+	for i := lo; i < hi; i++ {
+		units = append(units, i)
+	}
+	return split(units, func(i int) int { return g.of[i] })
+}
+
+// piece is what one pick adds to one file: units are rows or entries, as the caller counts them.
+type piece struct {
+	group int
+	units []int
+}
+
+// split is units as pieces, one for each run of them in the same group.
+func split(units []int, group func(int) int) []piece {
+	var pieces []piece
+	for _, u := range units {
+		if k := len(pieces) - 1; k >= 0 && pieces[k].group == group(u) {
+			pieces[k].units = append(pieces[k].units, u)
+			continue
+		}
+		pieces = append(pieces, piece{group: group(u), units: []int{u}})
+	}
+	return pieces
+}
+
+// fairPieces takes pieces in order while each group stays within its share of budget, the shares split as decider.Shares splits what the groups
+// want, so no file's picks crowd out another's; kept marks the units held already and gets those taken, and cost prices one unit. A piece
+// past what its group has left gives up units from both ends until the rest fits, since a pick's middle is likeliest to hold what it was
+// picked for. left are the runs of units the pieces could not add, and took says whether any piece was taken whole or in part.
+func fairPieces(pieces []piece, groups int, kept []bool, cost func(unit int) int, budget int) (left [][]int, took bool) {
+	want := make([]int, groups)
+	wanted := slices.Clone(kept)
+	for _, p := range pieces {
+		for _, u := range p.units {
+			if !wanted[u] {
+				wanted[u] = true
+				want[p.group] += cost(u)
+			}
+		}
+	}
+	shares := decider.Shares(want, budget, 0)
+	used := make([]int, groups)
+	for _, p := range pieces {
+		var add []int
+		size := 0
+		for _, u := range p.units {
+			if !kept[u] {
+				add = append(add, u)
+				size += cost(u)
+			}
+		}
+		lo, hi := 0, len(add)
+		for size > shares[p.group]-used[p.group] && lo < hi {
+			if (hi-lo)%2 == 0 {
+				size -= cost(add[lo])
+				lo++
+			} else {
+				hi--
+				size -= cost(add[hi])
+			}
+		}
+		for _, u := range add[lo:hi] {
+			kept[u] = true
+		}
+		used[p.group] += size
+		took = took || hi > lo || len(add) == 0
+		left = append(left, runs(add[:lo])...)
+		left = append(left, runs(add[hi:])...)
+	}
+	return left, took
+}
+
+// runs splits ascending units into runs of consecutive ones.
+func runs(units []int) [][]int {
+	var out [][]int
+	for _, u := range units {
+		if k := len(out) - 1; k >= 0 && out[k][len(out[k])-1] == u-1 {
+			out[k] = append(out[k], u)
+			continue
+		}
+		out = append(out, []int{u})
 	}
 	return out
 }
@@ -342,8 +542,8 @@ func briefLine(label int, line string, width int) (text string, cut bool) {
 }
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
-// a share of summaryRows; a passage longer than its share drops its context lines first, then shows the start of the lines pointed at, with a
-// note on the rest. shown counts the passages' rows.
+// a share of the rows log.passages gives; a passage longer than its share drops its context lines first, then shows the start of the lines
+// pointed at, with a note on the rest. shown counts the passages' rows.
 func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
@@ -361,7 +561,12 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 			pointed = append(pointed, r)
 		}
 	}
-	shares := shared(passages, summaryRows, summaryShare)
+	sizes := make([]int, len(passages))
+	for k, p := range passages {
+		sizes[k] = len(p)
+	}
+	budgetRows, budget := log.passages()
+	shares := decider.Shares(sizes, budgetRows, summaryShare)
 	keep := make([]bool, len(rows))
 	notes := map[int]string{}
 	for k, add := range passages {
@@ -389,8 +594,8 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 			notes[add[share]] = log.note("log " + log.span(first, last) + " left out, the rest of this passage")
 		}
 	}
-	// The passages share passageBytes, each row as wide as its share; a longer line shows briefly, and the log holds it whole.
-	width := min(passageColumns, max(passageLeast, passageBytes/max(1, shown)))
+	// The passages share the budget, each row as wide as its share; a longer line shows briefly, and the log holds it whole.
+	width := min(passageColumns, max(passageLeast, budget/max(1, shown)))
 	brief := slices.Clone(rows)
 	for i, r := range brief {
 		if keep[i] && r.plain && r.first > 0 && r.first == r.last && r.first <= len(lines) {
@@ -399,24 +604,6 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 	}
 	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(brief, keep, notes, log)...)
 	return out, shown
-}
-
-// shared splits budget rows among passages of the given sizes: one that fits an even split of what is left keeps all its rows, and the rest
-// share what remains, each at least least rows.
-func shared(passages [][]int, budget, least int) []int {
-	order := make([]int, len(passages))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int { return len(passages[a]) - len(passages[b]) })
-	shares := make([]int, len(passages))
-	left := budget
-	for k, i := range order {
-		even := max(least, left/(len(order)-k))
-		shares[i] = min(len(passages[i]), even)
-		left = max(0, left-shares[i])
-	}
-	return shares
 }
 
 // rowsAt is the rows at the given indexes.
@@ -484,7 +671,8 @@ func numberedSize(rows []row, log saved) int {
 }
 
 // assemble keeps the start and end and adds the picks that reach the threshold, best first and widened, while they fit the budget; every row
-// is numbered with its log lines, so the numbers show each gap, and a closing note says who chose, with notes added to it.
+// is numbered with its log lines, so the numbers show each gap, and a closing note says who chose, with notes added to it. Of joined skim
+// output it keeps the rows of nib's own instead of a start and end, and each file's picks get a fair share of the budget.
 func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ...string) []row {
 	who := choice.Who
 	if choice.Failure != "" {
@@ -497,67 +685,123 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 			purpose = " for " + d.asked()
 		}
 	}
+	files := joinedFiles(rows, log)
+	fixed := func(because string) []row {
+		because = strings.Join(append([]string{because}, notes...), "; ")
+		if files != nil {
+			return fairFixed(rows, log, because)
+		}
+		return fixedCut(rows, log, because)
+	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
-		return fixedCut(rows, log, strings.Join(append([]string{who + " judged that " + d.asked() + " needs every line, so filter or count the " + log.whole() + " instead"}, notes...), "; "))
+		return fixed(who + " judged that " + d.asked() + " needs every line, so filter or count the " + log.whole() + " instead")
 	}
-	n := len(rows)
-	end := n - decidedTail
-	keep := make([]bool, n)
-	for i := range keep {
-		keep[i] = i < decidedHead || i >= end
+	from, to := chosenSpan(rows, log)
+	keep := make([]bool, len(rows))
+	seen := map[string]bool{}
+	for i, r := range rows {
+		if keep[i] = i < from || i >= to || files != nil && r.header < 0; keep[i] {
+			seen[likeness(r.text)] = true
+		}
 	}
-	shown := decidedHead + decidedTail
-	used := numberedSize(rows[:decidedHead], log) + numberedSize(rows[end:], log)
 	var picks []decider.Pick
 	for _, p := range choice.Picks {
 		if p.Score >= decider.PickThreshold {
 			picks = append(picks, p)
 		}
 	}
-	seen := map[string]bool{}
-	for _, r := range append(slices.Clone(rows[:decidedHead]), rows[end:]...) {
-		seen[likeness(r.text)] = true
-	}
 	picks = novelFirst(picks, seen, func(p decider.Pick) []string {
 		var texts []string
-		for _, r := range rows[decidedHead+p.Start : min(end, decidedHead+p.End)] {
+		for _, r := range rows[from+p.Start : min(to, from+p.End)] {
 			texts = append(texts, r.text)
 		}
 		return texts
 	})
+	// widen is a pick with pickContext rows on each side, which in joined skim output stop at the pick's own files.
+	widen := func(p decider.Pick) (int, int) {
+		lo, hi := max(from, from+p.Start-pickContext), min(to, from+p.End+pickContext)
+		for files != nil && lo < from+p.Start && files.of[lo] != files.of[from+p.Start] {
+			lo++
+		}
+		for files != nil && hi > from+p.End && files.of[hi-1] != files.of[from+p.End-1] {
+			hi--
+		}
+		return lo, hi
+	}
 	chose := false
 	var missed [][2]int
-	for _, p := range picks {
-		from, to := max(decidedHead, decidedHead+p.Start-pickContext), min(end, decidedHead+p.End+pickContext)
-		add, addBytes := 0, 0
-		for i := from; i < to; i++ {
-			if !keep[i] {
-				add++
-				addBytes += numberedSize(rows[i:i+1], log)
+	if files == nil {
+		shown := from + len(rows) - to
+		used := numberedSize(rows[:from], log) + numberedSize(rows[to:], log)
+		for _, p := range picks {
+			lo, hi := widen(p)
+			add, addBytes := 0, 0
+			for i := lo; i < hi; i++ {
+				if !keep[i] {
+					add++
+					addBytes += numberedSize(rows[i:i+1], log)
+				}
+			}
+			if add == 0 {
+				chose = chose || lo < hi
+				continue
+			}
+			if shown+add > headRows+tailRows || used+addBytes > budgetBytes {
+				if first, last := logLines(rows[lo:hi]); first > 0 {
+					missed = append(missed, [2]int{first, last})
+				}
+				continue
+			}
+			for i := lo; i < hi; i++ {
+				keep[i] = true
+			}
+			shown += add
+			used += addBytes
+			chose = true
+		}
+	} else {
+		var pieces []piece
+		for _, p := range picks {
+			pieces = append(pieces, files.split(widen(p))...)
+		}
+		cost := rowCost(rows, log)
+		budget := budgetBytes
+		for i, k := range keep {
+			if k {
+				budget -= cost(i)
 			}
 		}
-		if add == 0 {
-			chose = chose || from < to
-			continue
+		var left [][]int
+		left, chose = fairPieces(pieces, files.count, keep, cost, budget)
+		var still []int
+		for _, run := range left {
+			for _, u := range run {
+				if !keep[u] {
+					still = append(still, u)
+				}
+			}
 		}
-		if shown+add > headRows+tailRows || used+addBytes > budgetBytes {
-			if first, last := logLines(rows[from:to]); first > 0 {
+		slices.Sort(still)
+		for _, run := range runs(slices.Compact(still)) {
+			if first, last := logLines(rowsAt(rows, run)); first > 0 {
 				missed = append(missed, [2]int{first, last})
 			}
-			continue
 		}
-		for i := from; i < to; i++ {
-			keep[i] = true
-		}
-		shown += add
-		used += addBytes
-		chose = true
 	}
 	if !chose && len(missed) == 0 {
-		return fixedCut(rows, log, strings.Join(append([]string{who + " found nothing in them" + purpose}, notes...), "; "))
+		return fixed(who + " found nothing in them" + purpose)
+	}
+	shown := 0
+	for _, k := range keep {
+		if k {
+			shown++
+		}
 	}
 	out := gapped(rows, keep, nil, log)
 	clauses := []string{who + " chose the middle" + purpose}
+	if files != nil {
+		clauses[0] = who + " chose" + purpose + ", each file within its share of the budget"
+	}
 	if len(missed) > 0 {
 		passages := "passages"
 		if len(missed) == 1 {
@@ -568,7 +812,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	var reasons []string
 	byReason := map[string][][2]int{}
 	for _, u := range choice.Unjudged {
-		first, last := logLines(rows[decidedHead+u.Start : decidedHead+u.End])
+		first, last := logLines(rows[from+u.Start : from+u.End])
 		if first == 0 {
 			continue
 		}
@@ -581,6 +825,52 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", log.spans(byReason[reason]), reason))
 	}
 	return append(out, row{text: closing(shown, log, true, append(clauses, notes...)), header: -1})
+}
+
+// rowCost prices row i of rows as a cut of joined skim output counts it: its bytes once numbered, but at least what keeps a cut within
+// the bytes of budgetBytes also within headRows+tailRows rows.
+func rowCost(rows []row, log saved) func(i int) int {
+	return func(i int) int { return max(numberedSize(rows[i:i+1], log), budgetBytes/(headRows+tailRows)) }
+}
+
+// fairFixed is joined skim output past the budget without a decider's picks: the rows of nib's own, and each file from its start for as long
+// as its fair share of the budget goes; because, when set, says why no decider chose.
+func fairFixed(rows []row, log saved, because string) []row {
+	files := joinedFiles(rows, log)
+	cost := rowCost(rows, log)
+	keep := make([]bool, len(rows))
+	want := make([]int, files.count)
+	budget := budgetBytes
+	for i, r := range rows {
+		if r.header < 0 {
+			keep[i] = true
+			budget -= cost(i)
+		} else {
+			want[files.of[i]] += cost(i)
+		}
+	}
+	shares := decider.Shares(want, budget, 0)
+	used := make([]int, files.count)
+	full := make([]bool, files.count)
+	shown := 0
+	for i, r := range rows {
+		g := files.of[i]
+		switch {
+		case r.header < 0:
+		case full[g] || used[g]+cost(i) > shares[g]:
+			full[g] = true
+			continue
+		default:
+			keep[i] = true
+			used[g] += cost(i)
+		}
+		shown++
+	}
+	clauses := []string{"each file shown from its start as far as its share of the budget goes"}
+	if because != "" {
+		clauses = append(clauses, because)
+	}
+	return append(gapped(rows, keep, nil, log), row{text: closing(shown, log, true, clauses), header: -1})
 }
 
 // logLines are the first and last log lines rows stand for; 0 when none stands for any, as for file headers.
