@@ -1728,7 +1728,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 func (e *Engine) heldRows(ctx *Context, canonical string, view snapshots.View, rows []blockRow) []blockRow {
 	return HeldGroups(rows, e.HeldLines(ctx, canonical, view), func(r blockRow) int { return r.line }, func(run []blockRow, r HeldRun) []blockRow {
 		if !r.Mapped() {
-			return []blockRow{{text: r.Marker(), at: run[0].at, covers: r.Lines()}}
+			return []blockRow{{text: e.MarkerFor(ctx, canonical, view, r), at: run[0].at, covers: r.Lines()}}
 		}
 		mapped := make([]blockRow, len(run))
 		for i, row := range run {

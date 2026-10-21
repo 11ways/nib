@@ -1332,7 +1332,7 @@ func (e *Engine) grepBlock(ctx *Context, f *grepFile, left *int, cut bool) (grep
 			return g.line
 		}, func(run []group, r HeldRun) []group {
 			if !r.Mapped() {
-				return []group{{line: run[0].line, rows: []string{r.Marker()}, covers: r.Lines()}}
+				return []group{{line: run[0].line, rows: []string{e.MarkerFor(ctx, t.canonical, *f.anchored, r)}, covers: r.Lines()}}
 			}
 			rows := make([]string, 0, len(run))
 			for line := r.First; line <= r.Last; line++ {

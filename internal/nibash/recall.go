@@ -3,6 +3,7 @@ package nibash
 import (
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +17,8 @@ const (
 	recallRows = 2000
 	// foldMin is the fewest rows a block repeated from an earlier call needs before it folds; the marker must cost less than them too.
 	foldMin = 5
-	// foldCommand caps how much of the earlier call's command the marker names.
-	foldCommand = 60
+	// foldNamed caps how much of the block's first row the marker names it by.
+	foldNamed = 40
 )
 
 // recall is what each agent was shown of program output in its latest calls, as hashes of the rows in order, so a block shown again folds
@@ -30,9 +31,8 @@ type recall struct {
 // shownCall is one call's plain rows as the agent saw them, a zero hash standing for any row that was not one (a note, a file's row or a
 // fold), which no block runs across.
 type shownCall struct {
-	at      time.Time
-	command string
-	rows    []uint64
+	at   time.Time
+	rows []uint64
 }
 
 func newRecall() *recall { return &recall{agents: map[string][]shownCall{}} }
@@ -51,7 +51,7 @@ func foldable(r row) bool { return r.plain && !r.capped && r.listed == nil && r.
 
 // fold puts each block of rows the agent was shown, identical and in the same order, by one of its earlier calls since its context was last
 // dropped (cleared) as one marker naming that call and the block's lines in the log save writes, then remembers what this call shows.
-func (rc *recall) fold(agent string, cleared time.Time, command string, rows []row, save func() saved) []row {
+func (rc *recall) fold(agent string, cleared time.Time, rows []row, save func() saved) []row {
 	if rc == nil || agent == "" {
 		return rows
 	}
@@ -99,7 +99,7 @@ func (rc *recall) fold(agent string, cleared time.Time, command string, rows []r
 				saved := save()
 				log = &saved
 			}
-			if marker, ok := foldMarker(*log, calls[best.call].command, rows[i:i+length]); ok {
+			if marker, ok := foldMarker(*log, len(calls)-best.call, rows[i:i+length]); ok {
 				out = append(out, row{text: marker, header: -1, first: rows[i].first, last: rows[i+length-1].last})
 				i += length
 				continue
@@ -120,7 +120,7 @@ func (rc *recall) fold(agent string, cleared time.Time, command string, rows []r
 			shown = append(shown, 0)
 		}
 	}
-	calls = append(calls, shownCall{at: time.Now(), command: command, rows: shown})
+	calls = append(calls, shownCall{at: time.Now(), rows: shown})
 	if len(calls) > recallCalls {
 		calls = calls[len(calls)-recallCalls:]
 	}
@@ -128,16 +128,21 @@ func (rc *recall) fold(agent string, cleared time.Time, command string, rows []r
 	return out
 }
 
-// foldMarker is the row that stands for block, shown before by the call that ran command; ok is false when it would not cost less than
-// the block, or the log that must hold the lines could not be written.
-func foldMarker(log saved, command string, block []row) (string, bool) {
+// foldMarker is the row that stands for block, shown before by the agent's call ago calls back, named by the block's first row; ok is
+// false when it would not cost less than the block, or the log that must hold the lines could not be written.
+func foldMarker(log saved, ago int, block []row) (string, bool) {
 	if log.path == "" {
 		return "", false
 	}
-	if js.Len(command) > foldCommand {
-		command = string([]rune(command)[:foldCommand]) + "..."
+	first := strings.ReplaceAll(block[0].text, "`", "'")
+	if js.Len(first) > foldNamed {
+		first = string([]rune(first)[:foldNamed]) + "..."
 	}
-	marker := log.note(fmt.Sprintf("the same %d rows your call `%s` showed; log %s in %s", len(block), command,
+	call := "previous call"
+	if ago > 1 {
+		call = fmt.Sprintf("call %d calls ago", ago)
+	}
+	marker := log.note(fmt.Sprintf("the same %d rows from `%s` your %s showed; log %s in %s", len(block), first, call,
 		log.span(block[0].first, block[len(block)-1].last), log.path))
 	cost := 0
 	for _, r := range block {

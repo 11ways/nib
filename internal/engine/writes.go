@@ -33,3 +33,12 @@ func (e *Engine) WroteSince(canonical string, since time.Time) bool {
 	at, ok := e.writes[canonical]
 	return ok && !at.Before(since)
 }
+
+// lastWrite is when nib's edit or write tools last wrote canonical, in any session of this server; ok is false when they did not, or not
+// within what the engine remembers.
+func (e *Engine) lastWrite(canonical string) (at time.Time, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	at, ok = e.writes[canonical]
+	return at, ok
+}

@@ -345,7 +345,7 @@ When the command finishes or its time runs out, the sink is rendered once:
   - A plain row longer than 2,000 characters is cut in `read`'s bracketed form, numbered with its log line
     (`[line 2, chars 1-2000 of 20157]|...`), and the log is kept so it can be read whole.
   - A block of at least `foldMin` (5) plain rows that one of the agent's last `recallCalls` (50) calls showed, row for
-    row, prints as ``[nibash: the same 15 rows your call `CMD` showed; log lines 40-54 in LOG]`` where that is
+    row, prints as ``[nibash: the same 15 rows from `FIRST ROW` your previous call showed; log lines 40-54 in LOG]`` where that is
     shorter (`recall.go`). The shell keeps, per agent (the engine session), only hashes of the rows each call showed, a
     folded row as a break; calls from before the agent's last compaction or clear (`Store.Cleared`) never fold, and a
     restart forgets them. Rows cut at the line limit, listed paths and nib's own rows never fold.
@@ -714,7 +714,10 @@ Where the implementation departed from the text above, deliberately:
   OpenCode 2 appends a `compaction` message when one ends, so nib reads its latest per call. Markers
   (`[lines A-B unchanged since you saw them]`, or row-map rows `N~TEXT` for a run of up to 30, and for any run of lines known by content
   only, as a plain read shows them) replace runs of 3 or more rows held whole and unchanged since, found
-  through the line map to every version the agent still holds; the lines a marker stands for are recorded seen in the
+  through the line map to every version the agent still holds; a marker says when its lines were seen before the last edit of
+  the file by nib's own tools (`MarkerFor`, from the store's seen moments and the engine's write moments), since an agent reading
+  after an edit would take it for the edit's result;
+  the lines a marker stands for are recorded seen in the
   version shown, so anchoring is unchanged. Grep's match rows always print, since they are the answer and carry the
   match; edit responses show one kept row on each side of a change, which never makes a run, and the agent checks its
   range against them. An immediate repeat of the same call is how an agent asks for the rows again, besides `full: true`

@@ -234,6 +234,27 @@ func TestHeldMapsLinesKnownByContentOnlyToZeroAfterSeenOnes(t *testing.T) {
 	}
 }
 
+func TestSeenMomentsAreThoseOfTheVersionHeld(t *testing.T) {
+	store := NewStore()
+	now := int64(0)
+	store.Now = func() time.Time { now++; return time.Unix(0, now) }
+	v := lines("a", "b", "c")
+	store.Record("s", "/f", v, []int{1, 2}, nil)
+	store.Record("s", "/f", v, []int{3}, nil)
+	if got, ok := store.SeenMoments("s", "/f", v, []int{1, 2, 3}); !ok || !reflect.DeepEqual(got, map[int]int64{1: 1, 2: 1, 3: 2}) {
+		t.Fatalf("lines 1-3: %v %v", got, ok)
+	}
+	if _, ok := store.SeenMoments("s", "/f", v, []int{1, 4}); ok {
+		t.Fatal("a line never seen has a moment")
+	}
+	if _, ok := store.SeenMoments("s", "/f", lines("a", "b", "x"), []int{1}); ok {
+		t.Fatal("a version not held has moments")
+	}
+	if _, ok := store.SeenMoments("s", "/f", v, nil); ok {
+		t.Fatal("no lines have a moment")
+	}
+}
+
 func TestForgetDropsWhatWasSeenBeforeItsMomentOnce(t *testing.T) {
 	clock := time.Unix(100, 0)
 	store := NewStore()

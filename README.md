@@ -169,7 +169,7 @@ between selected ranges, and when it hid other numbers the block ends with a not
 
 nibash folds output across calls too: a block of at least 5 rows of program output that one of the agent's last 50 calls
 showed, row for row, prints as one row naming that call and where the lines are,
-``[nibash: the same 15 rows your call `go test ./internal/names` showed; log lines 40-54 in LOG]``, where it is shorter
+``[nibash: the same 15 rows from `--- FAIL: TestNames (0.01s)` your previous call showed; log lines 40-54 in LOG]``, where it is shorter
 than the rows. Each agent folds only against its own calls, never against calls from before its context was compacted
 or cleared, and never across a restart of the server; a row that changed prints, so only identical runs fold.
 
@@ -1186,7 +1186,12 @@ line shown, and `path#TAG` reads record it like an edit response.
   of up to 30 lines in `read`, in `grep`'s context rows and in nibash's own file rows prints as row-map rows under the
   lines' current numbers, each line's indentation and start: `41~    return row`. A longer run prints as one
   row: `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit
-  moved them. Lines the agent knows only the content of, shown by a plain read or seen before an edit moved them, print
+  moved them. When nib's own edit or write tools last wrote the file after the lines were seen, the marker says so,
+  `[lines 40-120 unchanged since you saw them, before the last edit of this file]`, or names the lines that were
+  (`..., 42-120 of them before the last edit of this file]`): an agent reading after an edit it expected there would
+  otherwise take the marker for the edit's result. A marker or an `N~` row means the line is as when it was last seen
+  whole, so an edit expected there did not happen, as the lesson says.
+  Lines the agent knows only the content of, shown by a plain read or seen before an edit moved them, print
   as row-map rows whatever the run's length, since it never had their numbers (the import fold still wins over them,
   being shorter). A grep match row always prints, since it is what the search is for. The lines a marker or a row-map row
   stands for stay seen at their current numbers, so an edit anchors on them with no read. The first marker an agent gets

@@ -39,8 +39,8 @@ func TestGitLogPrintsEachCommitHeaderAsOneLine(t *testing.T) {
 		hashes[0], hashes[1], hashes[2])
 	// The first header left without its author's email says once what that means.
 	expect(t, f.run("git log"), want+"\n"+gitform.OwnAuthorLesson)
-	// Shown again, it folds into a note naming the call that showed it, without the lesson.
-	if out := f.run("git log"); strings.Contains(out, gitform.OwnAuthorLesson) || !strings.HasPrefix(out, "[nibash: the same 10 rows your call `git log` showed; ") {
+	// Shown again, the lesson is not; the block is too short for a fold marker, which names the block's first row, to cost less.
+	if out := f.run("git log"); out != want {
 		t.Fatalf("got %s", out)
 	}
 	// The repository's user.email is the one git runs in, as -C and -c give it.

@@ -378,6 +378,32 @@ func (s *Store) Held(session, path string, current View) map[int]int {
 	return held
 }
 
+// SeenMoments is when session saw each of lines whole in the version current is, in Unix nanoseconds, from the moments that version keeps
+// for its own and carried lines; ok is false when it holds no such version or a line has no moment there.
+func (s *Store) SeenMoments(session, path string, current View, lines []int) (moments map[int]int64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	element, found := s.histories[id(session, path)]
+	if !found || len(lines) == 0 {
+		return nil, false
+	}
+	for _, v := range element.Value.(*history).versions {
+		if v.Key != current.Key {
+			continue
+		}
+		moments = make(map[int]int64, len(lines))
+		for _, line := range lines {
+			at, ok := v.seenAt[line]
+			if !ok {
+				return nil, false
+			}
+			moments[line] = at
+		}
+		return moments, true
+	}
+	return nil, false
+}
+
 // stamp adds lines to set, noting now for each line new to it.
 func stamp(set map[int]bool, at map[int]int64, lines []int, now int64) (map[int]bool, map[int]int64) {
 	if set == nil {

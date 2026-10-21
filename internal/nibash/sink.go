@@ -254,7 +254,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		return *log
 	}
 	rows, footer := fit(ctx.Ctx, rows, raw, d, save)
-	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), d.command, rows, save)
+	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), rows, save)
 	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
 	rows = groupListings(rows)
 	// Only rows that are shown count as seen.
@@ -614,7 +614,7 @@ func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
 			return r.line
 		}, func(run []row, h engine.HeldRun) []row {
 			if !h.Mapped() {
-				return []row{{text: h.Marker(), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}}
+				return []row{{text: e.MarkerFor(ctx, source.Canonical, *source.View, h), header: run[0].header, source: source, covers: h.Lines(), first: run[0].first, last: run[len(run)-1].last}}
 			}
 			mapped := make([]row, len(run))
 			for i, r := range run {

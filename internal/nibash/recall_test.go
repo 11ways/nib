@@ -24,7 +24,7 @@ func failure(n, changed int) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-var foldMarkerRow = regexp.MustCompile(`^\[nibash: the same (\d+) rows your call ` + "`" + `([^` + "`" + `]*)` + "`" + ` showed; log lines (\d+)-(\d+) in (\S+)\]$`)
+var foldMarkerRow = regexp.MustCompile(`^\[nibash: the same (\d+) rows from ` + "`" + `([^` + "`" + `]*)` + "`" + ` your (previous call|call \d+ calls ago) showed; log lines (\d+)-(\d+) in (\S+)\]$`)
 
 func TestABlockAnEarlierCallShowedFoldsIntoOneMarker(t *testing.T) {
 	f := newFixture(t, map[string]string{"fail.txt": failure(15, 0), "changed.txt": failure(15, 8), "short.txt": failure(4, 0)})
@@ -38,11 +38,11 @@ func TestABlockAnEarlierCallShowedFoldsIntoOneMarker(t *testing.T) {
 		t.Fatalf("got %s", second)
 	}
 	m := foldMarkerRow.FindStringSubmatch(rows[1])
-	if m == nil || m[1] != "15" || m[2] != "awk 1 fail.txt; echo first" || m[3] != "2" || m[4] != "16" {
+	if m == nil || m[1] != "15" || !strings.HasPrefix(m[2], "    names_test.go:61:") || m[3] != "previous call" || m[4] != "2" || m[5] != "16" {
 		t.Fatalf("got %s", second)
 	}
 	// The log holds the lines the marker names.
-	data, err := os.ReadFile(m[5])
+	data, err := os.ReadFile(m[6])
 	if log := string(data); err != nil || strings.Join(strings.Split(log, "\n")[1:16], "\n")+"\n" != failure(15, 0) {
 		t.Fatalf("log %q", log)
 	}
@@ -74,7 +74,7 @@ func TestAFoldNeedsTheSameAgentAndItsContextSinceTheEarlierCall(t *testing.T) {
 		t.Fatalf("after a drop: %s", out)
 	}
 	// The call after that one folds again, against it.
-	if out := f.run("awk 1 fail.txt"); !strings.HasPrefix(out, "[nibash: the same 15 rows your call `awk 1 fail.txt` showed; ") {
+	if out := f.run("awk 1 fail.txt"); !strings.HasPrefix(out, "[nibash: the same 15 rows from `    names_test.go:61:") || !strings.Contains(out, "` your previous call showed; ") {
 		t.Fatalf("got %s", out)
 	}
 }
