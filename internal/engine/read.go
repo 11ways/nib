@@ -1463,6 +1463,7 @@ func (e *Engine) plainBlock(ctx *Context, t *target, file *os.File, sel selectio
 		blockRows[i] = blockRow{text: r.Text, at: r.At}
 	}
 	return &block{head: head, rows: blockRows, finish: func(shown int) []string {
+		e.recordPlain(ctx, t, blockRows[:shown])
 		var notes []string
 		if similar {
 			notes = []string{"[repeats were matched with their numbers ignored; read with collapse: false to see every line]"}
@@ -1486,6 +1487,32 @@ func (e *Engine) plainBlock(ctx *Context, t *target, file *os.File, sel selectio
 		}
 		return notes
 	}}, nil
+}
+
+// recordPlain records the lines a plain read showed whole, as a numbered read's rows would, as content the agent knows, so a later numbered
+// read prints them as N~ map rows instead of again in full; a revision, a file over the text limit or one changed meanwhile records nothing.
+func (e *Engine) recordPlain(ctx *Context, t *target, rows []blockRow) {
+	if t.rev != "" || len(rows) == 0 {
+		return
+	}
+	data, err := os.ReadFile(t.canonical)
+	if err != nil || len(data) > TextLimit {
+		return
+	}
+	source, err := decodeText(data)
+	if err != nil {
+		return
+	}
+	view := viewOf(source)
+	var known []int
+	for _, r := range rows {
+		if r.at >= 1 && r.at <= len(view.Lines) && r.text == view.Lines[r.at-1] {
+			known = append(known, r.at)
+		}
+	}
+	if len(known) > 0 {
+		e.Store.Record(ctx.Session, t.canonical, view, nil, known)
+	}
 }
 
 // textBlock reads a file as numbered rows; explicit is whether the agent chose maxLineLength, since without it a minified file is cut at minifiedColumns.

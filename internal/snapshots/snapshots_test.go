@@ -218,6 +218,22 @@ func TestHeldFollowsSeenLinesAcrossVersionsUnchanged(t *testing.T) {
 	}
 }
 
+func TestHeldMapsLinesKnownByContentOnlyToZeroAfterSeenOnes(t *testing.T) {
+	store := NewStore()
+	old := lines("a", "b", "c", "d")
+	// A plain read showed b, c and d whole; a numbered one showed a and b.
+	store.Record("s", "/f", old, nil, []int{2, 3, 4})
+	store.Record("s", "/f", old, []int{1, 2}, nil)
+	if got := store.Held("s", "/f", old); !reflect.DeepEqual(got, map[int]int{1: 1, 2: 2, 3: 0, 4: 0}) {
+		t.Fatalf("same version: %v", got)
+	}
+	// After a line is put above, what was seen with numbers still maps to those, and what was known by content stays known.
+	current := lines("new", "a", "b", "c", "D")
+	if got := store.Held("s", "/f", current); !reflect.DeepEqual(got, map[int]int{2: 1, 3: 2, 4: 0}) {
+		t.Fatalf("after the edit: %v", got)
+	}
+}
+
 func TestForgetDropsWhatWasSeenBeforeItsMomentOnce(t *testing.T) {
 	clock := time.Unix(100, 0)
 	store := NewStore()

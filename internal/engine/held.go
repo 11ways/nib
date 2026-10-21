@@ -19,11 +19,13 @@ const heldLessonKey = "held"
 
 const heldLesson = "[a [lines A-B unchanged since you saw them] row stands for lines you were shown whole before and that have not changed, and [lines A-B = your earlier C-D, unchanged] for such lines an edit moved; their numbers stay valid for edits. To print them, send the same call again at once, or read with full: true]"
 
-// HeldRun is a run of rows, Start to End exclusive, that stands for lines First to Last, which the agent saw whole as From onwards.
+// HeldRun is a run of rows, Start to End exclusive, that stands for lines First to Last, which the agent saw whole as From onwards; From is
+// 0 for lines it knows only the content of, shown by a plain read without numbers, which print as map rows however long the run.
 type HeldRun struct{ Start, End, First, Last, From int }
 
-// HeldLines maps each line of view the calling agent already holds, seen whole and unchanged since, to its number when it saw it; nil when
-// markers are off for the call. The caller holds the path's lock, as for any read of the store's versions.
+// HeldLines maps each line of view the calling agent already holds, seen whole and unchanged since, to its number when it saw it, or to 0
+// when it knows only the content; nil when markers are off for the call. The caller holds the path's lock, as for any read of the store's
+// versions.
 func (e *Engine) HeldLines(ctx *Context, canonical string, view snapshots.View) map[int]int {
 	if !ctx.Markers {
 		return nil
@@ -31,8 +33,8 @@ func (e *Engine) HeldLines(ctx *Context, canonical string, view snapshots.View) 
 	return e.Store.Held(ctx.Session, canonical, view)
 }
 
-// HeldRuns are the runs of at least heldRun rows whose lines follow each other and are held at one offset; line gives a row's line, 0 for
-// a row that may not join one.
+// HeldRuns are the runs of at least heldRun rows whose lines follow each other and are held at one offset, or all known by content only;
+// line gives a row's line, 0 for a row that may not join one.
 func HeldRuns(count int, line func(row int) int, held map[int]int) []HeldRun {
 	var runs []HeldRun
 	for i := 0; i < count; {
@@ -45,7 +47,7 @@ func HeldRuns(count int, line func(row int) int, held map[int]int) []HeldRun {
 		j := i + 1
 		for ; j < count; j++ {
 			next, ok := held[line(j)]
-			if line(j) != first+j-i || !ok || next != from+j-i {
+			if line(j) != first+j-i || !ok || (from == 0) != (next == 0) || from > 0 && next != from+j-i {
 				break
 			}
 		}
@@ -65,8 +67,9 @@ func (r HeldRun) Marker() string {
 	return fmt.Sprintf("[lines %d-%d = your earlier %d-%d, unchanged]", r.First, r.Last, r.From, r.From+r.Last-r.First)
 }
 
-// Mapped reports whether the run prints as one MapRow per line, under its current numbers, rather than as its Marker.
-func (r HeldRun) Mapped() bool { return r.Last-r.First+1 <= heldMapped }
+// Mapped reports whether the run prints as one MapRow per line, under its current numbers, rather than as its Marker: a short run, or one
+// the agent never had numbers for.
+func (r HeldRun) Mapped() bool { return r.From == 0 || r.Last-r.First+1 <= heldMapped }
 
 // MapRow is the N~ row of line, whose content the agent saw whole: its indentation and start.
 func MapRow(line int, content string) string { return fmt.Sprintf("%d~%s", line, clip(content)) }

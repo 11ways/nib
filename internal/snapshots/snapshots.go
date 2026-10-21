@@ -323,45 +323,57 @@ func (s *Store) Forget(session string, moment time.Time) bool {
 }
 
 // Held maps each line of current that session saw in full in a version it still holds, and that has not changed since, to its number in
-// that version, the newest such version first; a version whose diff to current times out adds none. The seen lines are copied under the
-// store's lock and diffed outside it, so it is safe beside concurrent records.
+// that version, the newest such version first, and each line it knows only the content of (shown by a plain read, or seen before it moved)
+// to 0; a version whose diff to current times out adds none. The lines are copied under the store's lock and diffed outside it, so it is
+// safe beside concurrent records.
 func (s *Store) Held(session, path string, current View) map[int]int {
-	type seenVersion struct {
-		key   string
-		lines []string
-		seen  []int
+	type heldVersion struct {
+		key         string
+		lines       []string
+		seen, known []int
 	}
-	var versions []seenVersion
+	var versions []heldVersion
 	s.mu.Lock()
 	if element, ok := s.histories[id(session, path)]; ok {
 		for _, v := range element.Value.(*history).versions {
-			if len(v.Seen) > 0 {
-				versions = append(versions, seenVersion{v.Key, v.Lines, sortedKeys(v.Seen)})
+			if len(v.Seen) > 0 || len(v.Known) > 0 {
+				versions = append(versions, heldVersion{v.Key, v.Lines, sortedKeys(v.Seen), sortedKeys(v.Known)})
 			}
 		}
 	}
 	s.mu.Unlock()
 	held := map[int]int{}
-	for _, v := range versions {
+	mappings := map[string]map[int]int{}
+	place := func(v heldVersion, lines []int, from func(old int) int) {
 		if v.key == current.Key {
-			for _, line := range v.seen {
+			for _, line := range lines {
 				if _, ok := held[line]; !ok && line >= 1 && line <= len(current.Lines) {
-					held[line] = line
+					held[line] = from(line)
 				}
 			}
-			continue
+			return
 		}
-		mapping, ok := LineMap(v.lines, current.Lines)
-		if !ok {
-			continue
+		mapping, cached := mappings[v.key]
+		if !cached {
+			if m, ok := LineMap(v.lines, current.Lines); ok {
+				mapping = m
+			}
+			mappings[v.key] = mapping
 		}
-		for _, old := range v.seen {
+		for _, old := range lines {
 			if now, ok := mapping[old]; ok {
 				if _, taken := held[now]; !taken {
-					held[now] = old
+					held[now] = from(old)
 				}
 			}
 		}
+	}
+	// Lines seen with their numbers go first, whatever version saw them, so a line known only by content never hides where it was seen.
+	for _, v := range versions {
+		place(v, v.seen, func(old int) int { return old })
+	}
+	for _, v := range versions {
+		place(v, v.known, func(int) int { return 0 })
 	}
 	return held
 }

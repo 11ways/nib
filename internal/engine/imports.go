@@ -64,8 +64,8 @@ func foldImports(canonical string, lines []string, rows []blockRow, holds map[in
 		whole, held := true, true
 		for k := at; k < end; k++ {
 			whole = whole && rows[k].at == first+k-at
-			_, ok := holds[first+k-at]
-			held = held && ok
+			// A run the agent knows only the content of, from a plain read, prints as map rows, which the tree is shorter than.
+			held = held && holds[first+k-at] > 0
 		}
 		if !whole || held {
 			continue

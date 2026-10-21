@@ -146,8 +146,11 @@ to 2 MiB (plain reads excepted), images to 5 MiB.
 2026-10-14 12:00:09 retrying in 5s with a much lo...
 ```
 
-Rows carry no line numbers and the header no tag, so nothing a plain read prints is an edit anchor, and nothing is
-recorded. Terminal escape codes and other control characters are stripped, lines longer than `maxLineLength` end in
+Rows carry no line numbers and the header no tag, so nothing a plain read prints is an edit anchor. The lines it showed
+whole (a file within the 2 MiB text limit, not a revision) are recorded as content the agent knows, so a later numbered
+read prints them as `N~TEXT` row-map rows, however many, instead of in full again: the option is for files no one will
+edit, and a plain read of one that then needs an edit costs a third of a second read rather than a whole one. Terminal
+escape codes and other control characters are stripped, lines longer than `maxLineLength` end in
 `...`, repetition is collapsed (see below), and gaps between selected ranges print as `[lines X-Y skipped]`. The file is
 streamed up to the size it had when opened, without the 2 MiB text limit and without the consistency check that refuses
 a file changing during a normal read, so huge logs and logs still being written read fine. Selectors work as usual (a
@@ -1180,7 +1183,9 @@ line shown, and `path#TAG` reads record it like an edit response.
   of up to 30 lines in `read`, in `grep`'s context rows and in nibash's own file rows prints as row-map rows under the
   lines' current numbers, each line's indentation and start: `41~    return row`. A longer run prints as one
   row: `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit
-  moved them. A grep match row always prints, since it is what the search is for. The lines a marker or a row-map row
+  moved them. Lines the agent knows only the content of, shown by a plain read or seen before an edit moved them, print
+  as row-map rows whatever the run's length, since it never had their numbers (the import fold still wins over them,
+  being shorter). A grep match row always prints, since it is what the search is for. The lines a marker or a row-map row
   stands for stay seen at their current numbers, so an edit anchors on them with no read. The first marker an agent gets
   ends with a line saying what it means; the same call sent again straight away, or a read with `full: true`, prints the
   rows. Edit responses are unchanged: their kept rows are one on each side of a change, never a run of 3, and the agent's
