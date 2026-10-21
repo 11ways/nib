@@ -41,18 +41,26 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		lines = plainLines([]byte(raw))
 		entries, legend = dedupe(lines)
 	}
-	from, to := chosenSpan(rows, log)
-	files := joinedFiles(rows, log)
+	files := grouped(rows, log)
+	from, to := chosenSpan(rows, files)
 	decide := func() decider.Choice {
 		return choose(ctx, rows[from:to], entries, legend, d, model)
 	}
-	// cut is what the output gets without a summary, choice the decider's answer when it was already asked.
+	// fileCut is output under file headers cut file by file, with why no decision model chose.
+	fileCut := func(notes []string) []row {
+		return fairFixed(rows, log, strings.Join(append(notes, expectAdvice(d, model)...), "; "))
+	}
+	// cut is what the output gets without a summary, choice the decider's answer when it was already asked. A decision model judges rows under
+	// file headers only for a purpose, since keywords in code mean nothing; joined skim output is plain and judged as any output.
 	cut := func(choice *decider.Choice, notes ...string) []row {
 		if !over {
 			return rows
 		}
-		if from == to || d.decider == nil || !plain {
-			if log.files > 0 {
+		if from == to || d.decider == nil || !plain && (files == nil || files.joined || !model || d.purpose == "" && d.expect == "") {
+			switch {
+			case files != nil && !files.joined:
+				return fileCut(notes)
+			case files != nil:
 				return fairFixed(rows, log, strings.Join(notes, "; "))
 			}
 			return fixedCut(rows, log, "")
@@ -60,6 +68,9 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		if choice == nil {
 			c := decide()
 			choice = &c
+		}
+		if !plain && !choice.Model {
+			return fileCut(append(notes, "the decision model failed ("+choice.Failure+")"))
 		}
 		return assemble(rows, *choice, log, d, notes...)
 	}
@@ -120,10 +131,10 @@ func wholeFits(entries []decider.Entry, legend decider.Legend) bool {
 }
 
 // chosenSpan is the rows a decider chooses among: those between the kept start and end, none when output is too short to have been
-// decided, and all of joined skim output, whose files' rows of nib's own are kept instead.
-func chosenSpan(rows []row, log saved) (from, to int) {
+// decided, and all of output by file, whose rows of nib's own are kept instead.
+func chosenSpan(rows []row, files *fileGroups) (from, to int) {
 	switch {
-	case log.files > 0:
+	case files != nil:
 		return 0, len(rows)
 	case len(rows) <= headRows+tailRows:
 		return 0, 0
@@ -132,11 +143,12 @@ func chosenSpan(rows []row, log saved) (from, to int) {
 }
 
 // choose asks the decider which of middle, rows of plain output, the call needs; a decision model reads them as entries, the deduplicated
-// log lines they stand for, and its answer is turned back into ranges of middle.
+// log lines they stand for, and its answer is turned back into ranges of middle. Rows under file headers, which have no entries, it reads
+// as they are.
 func choose(ctx context.Context, middle []row, entries []decider.Entry, legend decider.Legend, d decision, model bool) decider.Choice {
 	in := decider.Input{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut}
 	first, last := logLines(middle)
-	if !model || first == 0 {
+	if !model || first == 0 || len(entries) == 0 {
 		for _, r := range middle {
 			in.Rows = append(in.Rows, r.text)
 		}
@@ -280,25 +292,29 @@ func excerpt(middle []row, choice decider.Choice, entries []decider.Entry, files
 	return out
 }
 
-// fileGroups is joined skim output by file: the file each row belongs to, counted from 0, and how many there are. A row of nib's own
-// (header -1) belongs with the file whose head row comes last before it.
+// fileGroups is output by file: the file each row belongs to, counted from 0, and how many there are. Joined skim output's files are its
+// files; any other output under file headers (a diff, grep's rows) is grouped by them. A row of nib's own (header -1) belongs with the file
+// whose head row comes last before it.
 type fileGroups struct {
 	of    []int
 	count int
+	// joined says the output is a skim's joined files, cut by their lines; otherwise the files' rows are nib's own file rows, a diff's
+	// cut by hunk.
+	joined bool
 }
 
-// joinedFiles is rows by file when they are joined skim output, else nil.
-func joinedFiles(rows []row, log saved) *fileGroups {
-	if log.files == 0 {
-		return nil
-	}
+// grouped is rows by file when they are joined skim output or sit under file headers, else nil.
+func grouped(rows []row, log saved) *fileGroups {
 	heads := map[int]bool{}
 	for _, r := range rows {
 		if r.header >= 0 {
 			heads[r.header] = true
 		}
 	}
-	g := &fileGroups{of: make([]int, len(rows))}
+	if log.files == 0 && len(heads) == 0 {
+		return nil
+	}
+	g := &fileGroups{of: make([]int, len(rows)), joined: log.files > 0}
 	current := -1
 	for i := range rows {
 		if heads[i] || current < 0 {
@@ -308,6 +324,97 @@ func joinedFiles(rows []row, log saved) *fileGroups {
 	}
 	g.count = current + 1
 	return g
+}
+
+// hunkStart says whether a row under a file's header is a diff hunk's header, which starts the hunk's rows.
+func hunkStart(r row) bool { return r.header >= 0 && strings.HasPrefix(r.text, "@@ ") }
+
+// hunkName is what git names a hunk by after its header's second @@, the enclosing function or declaration; "" when it names nothing.
+func hunkName(text string) string {
+	if i := strings.Index(text[3:], "@@"); i >= 0 {
+		return strings.TrimSpace(text[3+i+2:])
+	}
+	return ""
+}
+
+// hunkSpans is where each hunk ends, by the row its header is: at the next hunk's header or the next row of nib's own.
+func hunkSpans(rows []row) map[int]int {
+	spans := map[int]int{}
+	next := len(rows)
+	for i := len(rows) - 1; i >= 0; i-- {
+		switch {
+		case rows[i].header < 0:
+			next = i
+		case hunkStart(rows[i]):
+			spans[i], next = next, i
+		}
+	}
+	return spans
+}
+
+// notes name what each gap in output under file headers leaves out, by the gap's first row: its hunks, counted with their added and removed
+// lines and named as git names them, or its rows. None for joined skim output, whose gaps are log lines.
+func (g *fileGroups) notes(rows []row, keep []bool, log saved) map[int]string {
+	if g == nil || g.joined {
+		return nil
+	}
+	notes := map[int]string{}
+	for i := 0; i < len(rows); {
+		if keep[i] {
+			i++
+			continue
+		}
+		j := i
+		for j < len(rows) && !keep[j] {
+			j++
+		}
+		notes[i] = log.note(leftOutRows(rows[i:j]))
+		i = j
+	}
+	return notes
+}
+
+// leftOutRows names rows of one file a gap leaves out: "3 hunks left out, +40 -3: send, sendMany, init", "the rest of this hunk and 2
+// more left out, ...", or "12 rows left out" where they are no diff.
+func leftOutRows(rows []row) string {
+	hunks, added, removed := 0, 0, 0
+	var names []string
+	for _, r := range rows {
+		switch {
+		case hunkStart(r):
+			hunks++
+			if name := hunkName(r.text); name != "" && len(names) < 3 {
+				names = append(names, name)
+			}
+		case strings.HasPrefix(r.text, "+"):
+			added++
+		case strings.HasPrefix(r.text, "-|"):
+			removed++
+		}
+	}
+	if hunks == 0 && added == 0 && removed == 0 {
+		return fmt.Sprintf("%s rows left out", thousands(len(rows)))
+	}
+	text := ""
+	switch {
+	case hunks > 0 && hunkStart(rows[0]):
+		text = fmt.Sprintf("%d hunks", hunks)
+		if hunks == 1 {
+			text = "1 hunk"
+		}
+	case hunks > 0:
+		text = fmt.Sprintf("the rest of this hunk and %d more", hunks)
+	default:
+		text = "the rest of this hunk"
+	}
+	text += fmt.Sprintf(" left out, +%d -%d", added, removed)
+	if len(names) > 0 {
+		if len(names) < hunks {
+			names = append(names, "...")
+		}
+		text += ": " + strings.Join(names, ", ")
+	}
+	return text
 }
 
 // heads are the log lines the files start at, the first of each file's first row; none for output that is not joined.
@@ -488,7 +595,7 @@ func cmpScore(a, b float64) int {
 // summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note. lines are the log's lines.
 func summarized(rows []row, s decider.Summary, log saved, lines []string) []row {
 	out, shown := summaryPassages(rows, s, log, lines)
-	return append(out, row{text: closing(shown, log, shown > 0, nil), header: -1})
+	return append(out, row{text: closing(shown, log, endingOf(nil, shown > 0), nil), header: -1})
 }
 
 // encodedRun is a stretch of a line that may be encoded data, base64 or hex, which no agent reads; encodedRuns keeps the ones that are.
@@ -602,7 +709,7 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 			brief[i] = briefRow(r, lines[r.first-1], log.base+r.first, width)
 		}
 	}
-	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(brief, keep, notes, log)...)
+	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(brief, keep, notes, log, true)...)
 	return out, shown
 }
 
@@ -623,10 +730,16 @@ func summaryText(text string) string {
 	return strings.Join(strings.Fields(summaryTag.ReplaceAllString(text, " ")), " ")
 }
 
-// gapped is the rows keep marks, each numbered with the log lines it stands for, so the numbers show every gap; a gap that starts at a note
-// gets the note, and one whose rows stand for no log line a row counting them. A kept row under a header row (a file's head in joined skim
-// output) that is not the last one shown gets it first.
-func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
+// gapped is the rows keep marks, each numbered with the log lines it stands for when numbered, so the numbers show every gap; a gap that
+// starts at a note gets the note, and one whose rows stand for no log line a row counting them. A kept row under a header row (a file's
+// head in joined skim output) that is not the last one shown gets it first.
+func gapped(rows []row, keep []bool, notes map[int]string, log saved, numbered bool) []row {
+	number := func(r row) row {
+		if numbered {
+			return log.numbered(r)
+		}
+		return r
+	}
 	heads := map[int]bool{}
 	for _, r := range rows {
 		if r.header >= 0 {
@@ -640,10 +753,10 @@ func gapped(rows []row, keep []bool, notes map[int]string, log saved) []row {
 			if h := rows[i].header; heads[i] {
 				under = i
 			} else if h >= 0 && h != under {
-				out = append(out, log.numbered(rows[h]))
+				out = append(out, number(rows[h]))
 				under = h
 			}
-			out = append(out, log.numbered(rows[i]))
+			out = append(out, number(rows[i]))
 			i++
 			continue
 		}
@@ -681,22 +794,29 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	purpose := ""
 	if choice.Model {
 		purpose = " for the failure"
-		if d.purpose != "" {
+		if d.purpose != "" || d.expect != "" {
 			purpose = " for " + d.asked()
 		}
 	}
-	files := joinedFiles(rows, log)
+	files := grouped(rows, log)
 	fixed := func(because string) []row {
-		because = strings.Join(append([]string{because}, notes...), "; ")
+		clauses := append([]string{because}, notes...)
+		if files != nil && !files.joined {
+			clauses = append(clauses, expectAdvice(d, choice.Model)...)
+		}
+		because = strings.Join(clauses, "; ")
 		if files != nil {
 			return fairFixed(rows, log, because)
 		}
 		return fixedCut(rows, log, because)
 	}
 	if choice.Judged && choice.Whole >= decider.WholeThreshold {
+		if files != nil && !files.joined {
+			return fixed(who + " judged that " + d.asked() + " needs every line")
+		}
 		return fixed(who + " judged that " + d.asked() + " needs every line, so filter or count the " + log.whole() + " instead")
 	}
-	from, to := chosenSpan(rows, log)
+	from, to := chosenSpan(rows, files)
 	keep := make([]bool, len(rows))
 	seen := map[string]bool{}
 	for i, r := range rows {
@@ -761,8 +881,19 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 		}
 	} else {
 		var pieces []piece
+		spans := hunkSpans(rows)
 		for _, p := range picks {
-			pieces = append(pieces, files.split(widen(p))...)
+			lo, hi := widen(p)
+			// A diff's pick brings its hunk's header, the one row that says where in the file it is.
+			for h := from + p.Start; !files.joined && h >= 0 && rows[h].header >= 0; h-- {
+				if _, ok := spans[h]; ok {
+					if h < lo {
+						pieces = append(pieces, piece{group: files.of[h], units: []int{h}})
+					}
+					break
+				}
+			}
+			pieces = append(pieces, files.split(lo, hi)...)
 		}
 		cost := rowCost(rows, log)
 		budget := budgetBytes
@@ -797,7 +928,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 			shown++
 		}
 	}
-	out := gapped(rows, keep, nil, log)
+	out := gapped(rows, keep, files.notes(rows, keep, log), log, files == nil || files.joined)
 	clauses := []string{who + " chose the middle" + purpose}
 	if files != nil {
 		clauses[0] = who + " chose" + purpose + ", each file within its share of the budget"
@@ -824,7 +955,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 	for _, reason := range reasons {
 		clauses = append(clauses, fmt.Sprintf("log %s were not judged (%s)", log.spans(byReason[reason]), reason))
 	}
-	return append(out, row{text: closing(shown, log, true, append(clauses, notes...)), header: -1})
+	return append(out, row{text: closing(shown, log, endingOf(files, true), append(clauses, notes...)), header: -1})
 }
 
 // rowCost prices row i of rows as a cut of joined skim output counts it: its bytes once numbered, but at least what keeps a cut within
@@ -833,10 +964,10 @@ func rowCost(rows []row, log saved) func(i int) int {
 	return func(i int) int { return max(numberedSize(rows[i:i+1], log), budgetBytes/(headRows+tailRows)) }
 }
 
-// fairFixed is joined skim output past the budget without a decider's picks: the rows of nib's own, and each file from its start for as long
-// as its fair share of the budget goes; because, when set, says why no decider chose.
+// fairFixed is output by file past the budget without a decider's picks: the rows of nib's own, and each file from its start for as long
+// as its fair share of the budget goes, a diff's by whole hunks once its first is shown; because, when set, says why no decider chose.
 func fairFixed(rows []row, log saved, because string) []row {
-	files := joinedFiles(rows, log)
+	files := grouped(rows, log)
 	cost := rowCost(rows, log)
 	keep := make([]bool, len(rows))
 	want := make([]int, files.count)
@@ -849,28 +980,47 @@ func fairFixed(rows []row, log saved, because string) []row {
 			want[files.of[i]] += cost(i)
 		}
 	}
+	if budget < 0 {
+		// What is always kept is past the budget by itself, as a diff of deleted files, which print as plain rows, can be.
+		return fixedCut(rows, log, because)
+	}
+	spans := hunkSpans(rows)
+	hunkCost := func(i int) int {
+		n := 0
+		for k := i; k < spans[i]; k++ {
+			n += cost(k)
+		}
+		return n
+	}
 	shares := decider.Shares(want, budget, 0)
 	used := make([]int, files.count)
 	full := make([]bool, files.count)
+	begun := make([]bool, files.count)
 	shown := 0
 	for i, r := range rows {
 		g := files.of[i]
 		switch {
 		case r.header < 0:
-		case full[g] || used[g]+cost(i) > shares[g]:
+		case full[g]:
+			continue
+		case hunkStart(r) && begun[g] && hunkCost(i) > shares[g]-used[g], used[g]+cost(i) > shares[g]:
 			full[g] = true
 			continue
 		default:
 			keep[i] = true
 			used[g] += cost(i)
+			begun[g] = begun[g] || hunkStart(r)
 		}
 		shown++
 	}
 	clauses := []string{"each file shown from its start as far as its share of the budget goes"}
+	if len(spans) > 0 {
+		clauses[0] = "each file's hunks shown from its start, whole after the first, as far as its share of the budget goes"
+	}
 	if because != "" {
 		clauses = append(clauses, because)
 	}
-	return append(gapped(rows, keep, nil, log), row{text: closing(shown, log, true, clauses), header: -1})
+	return append(gapped(rows, keep, files.notes(rows, keep, log), log, files.joined), row{text: closing(shown, log, endingOf(files, true), clauses), header: -1})
 }
 
 // logLines are the first and last log lines rows stand for; 0 when none stands for any, as for file headers.
@@ -926,15 +1076,33 @@ func (l saved) spans(ranges [][2]int) string {
 	return "lines " + strings.Join(parts, ", ")
 }
 
-// closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is; numbered says
-// the rows shown carry their log lines, and how to read the others.
-func closing(shown int, log saved, numbered bool, clauses []string) string {
+// How a closing note ends: with where the whole output is; with that and how to read the lines N| numbers; or, for output under file
+// headers, whose log is git's or a program's plain text and not rows, with how to get a file left out.
+const (
+	logEnding = iota
+	numberedEnding
+	fileEnding
+)
+
+// endingOf is the ending for output by file, or numberedEnding when numbered says the rows carry their log lines, else logEnding.
+func endingOf(files *fileGroups, numbered bool) int {
+	switch {
+	case files != nil && !files.joined:
+		return fileEnding
+	case numbered:
+		return numberedEnding
+	}
+	return logEnding
+}
+
+// closing is the note that ends a cut: how much is shown, the clauses about what was chosen, and where the whole output is, as ending says.
+func closing(shown int, log saved, ending int, clauses []string) string {
 	text := fmt.Sprintf("%s rows shown of %s log lines; ", thousands(shown), thousands(log.lines))
 	for _, clause := range clauses {
 		text += clause + "; "
 	}
 	if log.path == "" {
-		if numbered {
+		if ending == numberedEnding {
 			text += "N| is a row's log line; "
 		}
 		return log.note(text + "the whole output could not be saved")
@@ -946,8 +1114,20 @@ func closing(shown int, log saved, numbered bool, clauses []string) string {
 		}
 		text += fmt.Sprintf("the log stops at its %s limit, in log line %s; ", limit, thousands(log.holds))
 	}
-	if numbered {
+	switch ending {
+	case numberedEnding:
 		return log.note(text + "N| is a row's line in the " + log.whole() + ": read " + log.path + ":A-B plain:true for others")
+	case fileEnding:
+		return log.note(text + "for a file left out, run the command for its path; " + log.path + " holds the whole output as plain text, not rows")
 	}
 	return log.note(text + log.whole() + ": " + log.path)
+}
+
+// expectAdvice is the clause telling the agent that an expect lets a decision model choose rows under file headers: given when one is
+// configured (model) and the call gave none.
+func expectAdvice(d decision, model bool) []string {
+	if !model || d.expect != "" {
+		return nil
+	}
+	return []string{"an expect naming what matters lets the decision model choose the rows"}
 }

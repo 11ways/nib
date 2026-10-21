@@ -842,8 +842,17 @@ its log line, as `1180|error: boom` (a row standing for several, such as a colla
 show every gap; the number is never an edit anchor. The fixed cut names its one gap in its closing note, counted in the
 log rather than in rows, so `sed -n 101,4800p LOG` shows exactly what is missing. The closing note says how many rows
 are shown of how many log lines, who chose and where the log is (`N| is a row's line in the whole output: read
-LOG:A-B plain:true for others`). Rows from nib's own `cat`, `grep` and friends are file content the model asked for,
-so output holding any is always cut the fixed way and never sent anywhere.
+LOG:A-B plain:true for others`).
+
+Output under file headers, the rows of nib's own `cat`, `grep` and `git diff`, is cut file by file instead: every file's
+header stays, each file shows its rows from its start as far as its fair share of the budget goes, and a diff's hunks go
+in whole once a file's first is shown. What a file leaves out is named under its header, by hunk where it is a diff
+(`[nibash: 3 hunks left out, +40 -3: fn flush, fn dueInMs, fn tick]`, named as git names them) and by count otherwise,
+and the closing note says to run the command for the path of a file left out, since the log holds git's or the program's
+plain text, not rows. Keywords never judge such rows (code names errors all the time); a decision model does, when the
+call gives a `description` or an `expect`, and its picks keep their hunk's header and a fair share of each file. Without
+an `expect`, the note says that one would let the model choose; a model that judges the purpose needs every line leaves
+the cut by file.
 
 - **`keywords`** (the default): the first 30 and last 100 rows, plus the rows between that name a problem (`error`,
   `failed`, `panic`, `Traceback`, `TypeError`, pytest's `E`, `FAIL`, `not ok`, `Expected`/`Received`, Bun's cross; not

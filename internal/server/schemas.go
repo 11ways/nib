@@ -39,7 +39,7 @@ const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"co
 func nibashSchema(expect bool) string {
 	arg := ""
 	if expect {
-		arg = `"expect":{"description":"For long output: what you expect or want to learn, like all pass; if not, which and why","type":"string"},`
+		arg = `"expect":{"description":"For long output: what you expect or want to learn, like all pass; if not, which and why; of a diff, what matters in it","type":"string"},`
 	}
 	return `{"type":"object","properties":{"command":{"type":"string"},"description":{"description":"What it is for, in 5 to 12 words","type":"string"},` + arg +
 		`"timeout":{"description":"Milliseconds before it goes on as a job; default 120000, at most 600000","type":"integer"},"background":{"description":"Run as a job; returns its id and log at once","type":"boolean"}},"required":["command"]}`

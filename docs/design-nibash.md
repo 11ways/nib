@@ -334,7 +334,8 @@ When the command finishes or its time runs out, the sink is rendered once:
     number may differ in what matters (`seq 1 1000` must not become one line).
 - **Budget:** output past 400 rows or 30 KiB is cut; which rows stay is the decider's choice (`docs/design-decider.md`):
   the fixed cut keeps the first 100 and last 200 rows, keywords and the OpenRouter decision model keep the first 30 and
-  last 100 and choose the middle.
+  last 100 and choose the middle; output under file headers (a diff, grep's rows) is cut file by file, a diff by whole
+  hunks, with what each file leaves out named under its header.
   - The whole output goes to a log in `$XDG_RUNTIME_DIR/nib/` (falling back to a folder of the user's own under
     `os.TempDir()`). The directory is `0700`, and a log is capped at 64 MiB [m5].
   - The fixed cut names its one gap with the log lines it leaves out (`[nibash: ...; log lines 101-4612 left out; ...]`),

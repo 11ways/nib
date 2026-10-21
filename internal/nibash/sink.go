@@ -226,9 +226,9 @@ type decision struct {
 	teach func(lesson string) bool
 }
 
-// asked names the purpose in notes: the call's description, or what skim expects.
+// asked names the purpose in notes: the call's description, or what the agent expects when it gave only that or read with skim.
 func (d decision) asked() string {
-	if d.read {
+	if d.read || d.purpose == "" && d.expect != "" {
 		return "what you expect"
 	}
 	return "your description"
@@ -542,7 +542,7 @@ func (s *sink) layout(e *engine.Engine, ctx *engine.Context, items []item) []row
 		source := it.source
 		if current != source {
 			current = source
-			rows = append(rows, row{text: header(e, ctx, source), header: -1})
+			rows = append(rows, row{text: header(e, ctx, source), header: -1, source: source})
 			headerAt = len(rows) - 1
 		}
 		if it.display {
@@ -680,7 +680,7 @@ func fixedCut(rows []row, log saved, because string) []row {
 	if because != "" {
 		clauses = append(clauses, because)
 	}
-	kept = append(kept, row{text: closing(shown, log, false, clauses), header: -1})
+	kept = append(kept, row{text: closing(shown, log, logEnding, clauses), header: -1})
 	kept = append(kept, header...)
 	return append(kept, rows[start:]...)
 }

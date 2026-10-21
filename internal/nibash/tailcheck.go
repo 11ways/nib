@@ -169,7 +169,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 	for _, clause := range clauses {
 		header += "; " + clause
 	}
-	t.added = append([]string{header + "; N| is a row's log line:]"}, t.texts(gapped(rows, keep, nil, t.log))...)
+	t.added = append([]string{header + "; N| is a row's log line:]"}, t.texts(gapped(rows, keep, nil, t.log, true))...)
 }
 
 // texts are the rows' texts, with the footer that explains cut rows when one is.

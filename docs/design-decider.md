@@ -86,9 +86,15 @@ Conclusions:
 `sink.render` lays out rows (`collect`), then `fit` cuts when over budget: with a decider and only plain rows, `shape`
 asks the decider about the rows between the first 30 and the last 100 and `assemble` builds the result; otherwise
 `fixedCut`. The decider runs under the MCP call's context (not the command's, which may have expired) with its own
-deadline. Rows from nib's own commands (`[PATH#TAG]` runs) are never sent and never chosen (user decision 7): they are
-file content the model asked for, what is shown of them counts as seen for `edit`, and keeping them out limits the
-privacy question to program output. Output mixing both is cut the fixed way.
+deadline. Rows from nib's own commands (`[PATH#TAG]` runs) were never sent and never chosen (user decision 7, since
+reversed: the user does not gate what leaves the machine). Output under file headers, a diff's or grep's, is grouped by
+file as a joined skim's is (`grouped`) and cut by `fairFixed`: the headers kept, each file from its start within its
+share, a diff by whole hunks after its first (`hunkSpans`), and each gap named by its hunks with their `+N -M` and git's
+names for them or by its rows (`fileGroups.notes`); its closing note (`fileEnding`) says to run the command for a file's
+path rather than read the log, whose lines are not rows. Keywords never judge such rows; a decision model does when the
+call gives a description or an expect, reading the rows as printed (`choose` without entries), and its picks go through
+`assemble`'s per-file share with each pick's hunk header added; a model's failure or a `Whole` verdict leaves the cut by
+file, and without an expect the note advises one (`expectAdvice`).
 
 ## 5. Log lines and long rows (both bugs found while measuring)
 

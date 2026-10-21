@@ -219,20 +219,6 @@ func TestDecidedCutNotes(t *testing.T) {
 	}
 }
 
-func TestFileRowsNeverReachTheDecider(t *testing.T) {
-	var content strings.Builder
-	for i := 1; i <= 1000; i++ {
-		fmt.Fprintf(&content, "line %d\n", i)
-	}
-	f := newFixture(t, map[string]string{"big.txt": content.String()})
-	fake := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "fake"} }}
-	f.shell.Deciding(fake)
-	out := f.run("cat big.txt")
-	if len(fake.asked) != 0 || !strings.Contains(out, "; log lines 100-800 left out; whole output: ") {
-		t.Fatalf("asked %d times:\n%s", len(fake.asked), out[:200])
-	}
-}
-
 func TestKeywordsChooseTheErrorInALongRun(t *testing.T) {
 	f := newFixture(t, nil)
 	f.shell.Deciding(decider.Config{Kind: decider.Keywords}.New())

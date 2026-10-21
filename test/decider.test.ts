@@ -89,8 +89,9 @@ describe("deciders", () => {
       const description = tools.find((tool) => tool.name === "nibash")!.description!
       expect(description).toContain("a decision model on OpenRouter judges your description needs")
       expect(description.length).toBeLessThanOrEqual(2048)
+      // File rows without a purpose are cut file by file, and nothing is sent; an expect lets the model judge them.
       const file = await nibash("cat big.txt")
-      expect(file).toContain("; log lines 100-800 left out; whole output: ")
+      expect(file).toContain("\n[nibash: 700 rows left out]\n[nibash: 301 rows shown of 1,000 log lines; each file shown from its start as far as its share of the budget goes; an expect naming what matters lets the decision model choose the rows; for a file left out, run the command for its path; ")
       expect(requests).toHaveLength(0)
       const out = await nibash(LONG_RUN, "find why payments fail")
       expect(requests.length).toBeGreaterThan(0)
