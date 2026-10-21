@@ -152,3 +152,14 @@ func TestFileRowsReachOnlyADecisionModelGivenAPurpose(t *testing.T) {
 		t.Fatalf("asked %d times with a purpose:\n%s", len(model.asked), out[len(out)-600:])
 	}
 }
+
+func TestAGapNoteClipsAndDedupesHunkNamesAndCountsOneRow(t *testing.T) {
+	long := "@@ -1,3 +1,3 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ...string) []row {"
+	rows := []row{{text: long, header: 0}, {text: "+2:a", header: 0}, {text: long, header: 0}, {text: "-|b", header: 0}, {text: "@@ -9,1 +9,1 @@ func b() {", header: 0}}
+	if got := leftOutRows(rows); got != "3 hunks left out, +1 -1: func assemble(rows []row, choice decider..., func b() {, ..." {
+		t.Errorf("got %q", got)
+	}
+	if got := leftOutRows([]row{{text: "3:x", header: 0}}); got != "1 row left out" {
+		t.Errorf("got %q", got)
+	}
+}

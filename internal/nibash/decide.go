@@ -374,8 +374,11 @@ func (g *fileGroups) notes(rows []row, keep []bool, log saved) map[int]string {
 	return notes
 }
 
+// hunkNamed caps how much of a hunk's name a note shows: git names a Go hunk by its whole function signature.
+const hunkNamed = 40
+
 // leftOutRows names rows of one file a gap leaves out: "3 hunks left out, +40 -3: send, sendMany, init", "the rest of this hunk and 2
-// more left out, ...", or "12 rows left out" where they are no diff.
+// more left out, ...", or "12 rows left out" where they are no diff; up to three distinct names, each clipped at hunkNamed.
 func leftOutRows(rows []row) string {
 	hunks, added, removed := 0, 0, 0
 	var names []string
@@ -383,7 +386,11 @@ func leftOutRows(rows []row) string {
 		switch {
 		case hunkStart(r):
 			hunks++
-			if name := hunkName(r.text); name != "" && len(names) < 3 {
+			name := hunkName(r.text)
+			if js.Len(name) > hunkNamed {
+				name = string([]rune(name)[:hunkNamed]) + "..."
+			}
+			if name != "" && len(names) < 3 && !slices.Contains(names, name) {
 				names = append(names, name)
 			}
 		case strings.HasPrefix(r.text, "+"):
@@ -393,6 +400,9 @@ func leftOutRows(rows []row) string {
 		}
 	}
 	if hunks == 0 && added == 0 && removed == 0 {
+		if len(rows) == 1 {
+			return "1 row left out"
+		}
 		return fmt.Sprintf("%s rows left out", thousands(len(rows)))
 	}
 	text := ""
