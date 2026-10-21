@@ -1196,7 +1196,7 @@ const numbered = (count: number, prefix = "line") => Array.from({ length: count 
 const refusal = (attempt: Promise<unknown>) => attempt.then(() => { throw new Error("expected a refusal") }, (error: Error) => error.message)
 const tokenOf = (message: string) => /REAPPLY ([a-z0-9]{6})\b/.exec(message)?.[1]
 // A token for a patch that needs more than reads: it applies with corrected sections in place of the refused ones.
-const fixable = /REAPPLY [a-z0-9]{6}( on the first line, then those \[PATH#TAG\] sections|, then corrected sections)/
+const fixable = /REAPPLY [a-z0-9]{6}( on the first line, then that \[PATH#TAG\] section whole|, then corrected sections, each whole)/
 
 describe("refusals and reapply tokens", () => {
   const setup = async () => {
@@ -1298,7 +1298,7 @@ describe("refusals and reapply tokens", () => {
     ]
     for (const message of messages) expect(message).toMatch(fixable)
     expect(messages[0]).toContain("Edits overlap")
-    expect(messages[0]).toContain("To resend only corrected sections, call edit with input: REAPPLY ")
+    expect(messages[0]).toContain("To resend a file's section corrected, call edit with input: REAPPLY ")
     expect(messages[1]).toContain("line 1 does not start with \"nope\"")
     expect(messages[1]).not.toContain("To resend only")
     expect(messages[2]).toContain("SUB 1: \"nope\" does not occur on line 1")
@@ -1326,11 +1326,20 @@ describe("refusals and reapply tokens", () => {
     const token = tokenOf(await refusal(f.patch(`[b.txt#${wrong}]\nPUT 1.=1:\n+y\n[file.txt#${r.tag}]\nPUT 2.=2:\n+TWO`)))!
     // A correction that does not parse is refused before the token is spent.
     expect(await refusal(f.patch(`REAPPLY ${token}\n[b.txt#${b.tag}]\nPUT 1-1:\n+y`))).toContain("Patch line 3:")
-    await f.patch(`REAPPLY ${token}\n[./b.txt#${b.tag}]\nPUT 1.=1:\n+bee\n*** Add File: c.txt\n+sea`)
+    const applied = await f.patch(`REAPPLY ${token}\n[./b.txt#${b.tag}]\nPUT 1.=1:\n+bee\n*** Add File: c.txt\n+sea`)
+    expect(applied.text).not.toContain("[REAPPLY:")
     expect(await readFile(path.join(f.directory, "b.txt"), "utf8")).toBe("bee\n")
     expect((await readFile(f.filePath, "utf8")).split("\n")[1]).toBe("TWO")
     expect(await readFile(path.join(f.directory, "c.txt"), "utf8")).toBe("sea\n")
     expect(await refusal(f.patch(`REAPPLY ${token}`))).toContain("unknown, already used or expired")
+    // A section resent with fewer hunks than the stored one stands in for it whole, and the response says what that dropped.
+    const again = await f.read()
+    const dropping = tokenOf(await refusal(f.patch(`[file.txt#${again.tag}]\nPUT 3.=3:\n+THREE\nPUT 5.=5:\n+FIVE\nPUT 99.=99:\n+x`)))!
+    const partial = await f.patch(`REAPPLY ${dropping}\n[file.txt#${again.tag}]\nPUT 5.=5:\n+FIVE`)
+    expect(partial.text).toContain("[REAPPLY: the section you resent for file.txt stood in for the stored one whole: its 1 hunk applied, not the stored 3]")
+    const lines = (await readFile(f.filePath, "utf8")).split("\n")
+    expect(lines[2]).toBe("line 3")
+    expect(lines[4]).toBe("FIVE")
   })
 
   test("an unseen line too long to display gets a token that applies the patch unchanged once the line was read whole", async () => {

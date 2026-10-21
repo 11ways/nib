@@ -2139,8 +2139,9 @@ func (e *Engine) Patch(ctx *Context, input string) (result Result, err error) {
 		return Result{}, fmt.Errorf("Reapply token %s is unknown, already used or expired; send the full patch again", reapply[1])
 	}
 	sections, preview := stored.sections, stored.preview
+	var replaced []replacement
 	if len(fixes) > 0 {
-		sections, preview = corrected(ctx, stored, fixes)
+		sections, preview, replaced = corrected(ctx, stored, fixes)
 	}
 	result, err = e.apply(ctx, sections, preview)
 	var paused *Paused
@@ -2154,6 +2155,13 @@ func (e *Engine) Patch(ctx *Context, input string) (result Result, err error) {
 	}
 	if err != nil {
 		return result, err
+	}
+	// A resent section stands in for the stored one of its path whole, so one sent with fewer hunks dropped some: said, since a model
+	// resending one corrected hunk takes the others as applied.
+	for _, r := range replaced {
+		if r.sent < r.stored {
+			result.Text += fmt.Sprintf("\n\n[REAPPLY: the section you resent for %s stood in for the stored one whole: its %s applied, not the stored %d]", r.path, hunks(r.sent), r.stored)
+		}
 	}
 	// Said here too, since after applying a token a model takes the job as done.
 	left := 0
@@ -2171,9 +2179,23 @@ func (e *Engine) Patch(ctx *Context, input string) (result Result, err error) {
 	return result, nil
 }
 
+// replacement is a stored section a resent one stood in for: its path and the hunks each had.
+type replacement struct {
+	path         string
+	stored, sent int
+}
+
+// hunks counts n as "1 hunk" or "N hunks".
+func hunks(n int) string {
+	if n == 1 {
+		return "1 hunk"
+	}
+	return fmt.Sprintf("%d hunks", n)
+}
+
 // corrected is a stored patch with fixes in place of its sections for the same paths, in their place, and the other fixes after them; a
-// grep replace's preview no longer vouches for a path whose sections were replaced.
-func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*patch.Section, *replacePreview) {
+// grep replace's preview no longer vouches for a path whose sections were replaced. replaced lists each path's stored and resent hunks.
+func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*patch.Section, *replacePreview, []replacement) {
 	paths := func(section *patch.Section) []string {
 		resolved := ctx.resolve(section.Path)
 		if real, err := filepath.EvalSymlinks(resolved); err == nil && real != resolved {
@@ -2193,6 +2215,8 @@ func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*pat
 	used := map[string]bool{}
 	var sections []*patch.Section
 	replaced := map[string]bool{}
+	var replacements []replacement
+	at := map[string]int{}
 	for _, section := range stored.sections {
 		keys := paths(section)
 		key := keys[0]
@@ -2206,7 +2230,14 @@ func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*pat
 		if !used[key] {
 			sections = append(sections, byPath[key]...)
 			used[key] = true
+			sent := 0
+			for _, fix := range byPath[key] {
+				sent += len(fix.Edits)
+			}
+			at[key] = len(replacements)
+			replacements = append(replacements, replacement{path: section.Path, sent: sent})
 		}
+		replacements[at[key]].stored += len(section.Edits)
 	}
 	for _, key := range order {
 		if !used[key] {
@@ -2223,7 +2254,7 @@ func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*pat
 		}
 		preview = &replacePreview{shown: shown, left: preview.left}
 	}
-	return sections, preview
+	return sections, preview, replacements
 }
 
 type indexedFailure struct {
@@ -2313,9 +2344,9 @@ func (e *Engine) refusal(session string, sections []*patch.Section, failures []i
 	case retry:
 		parts = append(parts, "REAPPLY "+token)
 	case e.Store.Teach(session, "reapply-fix"):
-		parts = append(parts, "To resend only corrected sections, call edit with input: REAPPLY "+token+" on the first line, then those [PATH#TAG] sections; the rest applies as sent.")
+		parts = append(parts, "To resend a file's section corrected, call edit with input: REAPPLY "+token+" on the first line, then that [PATH#TAG] section whole, since it stands in for the stored one; the other files' sections apply as sent.")
 	default:
-		parts = append(parts, "REAPPLY "+token+", then corrected sections")
+		parts = append(parts, "REAPPLY "+token+", then corrected sections, each whole")
 	}
 	return errors.New(strings.Join(parts, "\n\n"))
 }

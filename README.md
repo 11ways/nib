@@ -512,10 +512,13 @@ REM
   `To apply this patch unchanged after reading the lines above, call edit with input: REAPPLY t0k3n5`, or after an
   agent's first such refusal with just `REAPPLY t0k3n5`. Unseen lines the refusal could not display whole (lines cut
   past its width, more than 40 lines) must be read first, and it says so; a token sent before that is refused again,
-  with a new token. Any other refusal ends with `To resend only corrected sections, call edit with input: REAPPLY
-  t0k3n5 on the first line, then those [PATH#TAG] sections; ...`, later just `REAPPLY t0k3n5, then corrected
-  sections`: sections under the `REAPPLY` line replace every stored section for their path, in its place, sections for
-  other paths join the patch, and the patch stays all or nothing. A line with color codes can never be read whole, so
+  with a new token. Any other refusal ends with `To resend a file's section corrected, call edit with input: REAPPLY
+  t0k3n5 on the first line, then that [PATH#TAG] section whole, since it stands in for the stored one; ...`, later just
+  `REAPPLY t0k3n5, then corrected sections, each whole`: sections under the `REAPPLY` line replace every stored section
+  for their path, in its place, sections for other paths join the patch, and the patch stays all or nothing. A resent
+  section with fewer hunks than the stored one drops the rest, and the response says so (`[REAPPLY: the section you
+  resent for a.go stood in for the stored one whole: its 1 hunk applied, not the stored 3]`), since a model resending
+  one corrected hunk takes the others as applied. A line with color codes can never be read whole, so
   an unseen one gets that kind of token too. Either way the stored patch goes through the full normal validation, as a
   resend would; the patch's own tags still guard against files that changed meanwhile. A token belongs to its session,
   works once, and only the latest 64 are kept; corrections that do not parse are refused before the token is spent.
