@@ -752,6 +752,22 @@ describe("multi-file patches", () => {
     expect(await refusal(f.patch(`[file.txt#${r.tag}]\nCP other.txt`))).toContain("is stale")
     await expect(stat(path.join(f.directory, "other.txt"))).rejects.toThrow()
   })
+
+  test("lines seen under another path holding the same text anchor an edit, while the texts match", async () => {
+    const f = await fixture(numbered(30))
+    const content = await readFile(f.filePath, "utf8")
+    await mkdir(path.join(f.directory, "lane"))
+    await writeFile(path.join(f.directory, "lane/file.txt"), content)
+    const r = await f.read(":10-14")
+    await f.engine.read(f.ctx, { paths: ["lane/file.txt:1-2"] })
+    // A line seen of neither copy is still refused.
+    expect(await refusal(f.patch(`[lane/file.txt#${r.tag}]\nPUT 20:\n+x`))).toContain("never displayed in full")
+    await f.patch(`[lane/file.txt#${r.tag}]\nPUT 11:\n+eleven`)
+    // Once the lane's text differs, lines seen of the other copy no longer count.
+    const lane = await readFile(path.join(f.directory, "lane/file.txt"), "utf8")
+    expect(lane.split("\n")[10]).toBe("eleven")
+    expect(await refusal(f.patch(`[lane/file.txt#${fileTag(lane)}]\nPUT 14:\n+x`))).toContain("never displayed in full")
+  })
 })
 
 describe("write", () => {

@@ -1713,6 +1713,11 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 					remaining = append(remaining, line)
 				}
 			}
+			// Lines seen under another path holding the same text, as a worktree's copy of the file, are the same lines.
+			if len(remaining) > 0 {
+				elsewhere := store.SeenAs(ctx.Session, live.Key, t.canonical)
+				remaining = slices.DeleteFunc(remaining, func(line int) bool { return elsewhere[line] })
+			}
 			if len(remaining) > 0 {
 				var known map[int]bool
 				if prior != nil {

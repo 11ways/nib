@@ -49,6 +49,23 @@ func TestStoreDeduplicatesUnionsAndEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
+func TestSeenAsUnionsTheLinesSeenOfTheSameTextUnderOtherPaths(t *testing.T) {
+	store := NewStore()
+	text := NewView("a\nb\nc\nd", []string{"a", "b", "c", "d"})
+	store.Record("s", "main", text, []int{1}, nil)
+	store.Record("s", "lane", text, []int{2}, nil)
+	store.Record("s", "other", NewView("x\ny\nz\nw", []string{"x", "y", "z", "w"}), []int{3}, nil)
+	store.Record("fork", "copy", text, []int{4}, nil)
+	if got := store.SeenAs("s", text.Key, "lane"); !reflect.DeepEqual(got, map[int]bool{1: true}) {
+		t.Fatalf("seen = %v", got)
+	}
+	// A version that lets edits anchor anywhere counts all its lines.
+	store.Record("s", "open", text, nil, nil)
+	if got := store.SeenAs("s", text.Key, "lane"); len(got) != 4 {
+		t.Fatalf("seen = %v", got)
+	}
+}
+
 func TestATextManyAgentsHoldCountsOnce(t *testing.T) {
 	store := NewStoreWith(Limits{Paths: 8, Versions: 2, Units: 1 << 30})
 	text := "the same file\n"

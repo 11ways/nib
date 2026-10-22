@@ -595,6 +595,36 @@ func (s *Store) Origins(session, tagValue, except string) []string {
 	return found
 }
 
+// SeenAs are the lines this session saw of the text key under paths other than except, as when a worktree or a copy holds the same file;
+// the text being the same, those lines are the ones it shows.
+func (s *Store) SeenAs(session, key, except string) map[int]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := session + "\x00"
+	seen := map[int]bool{}
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		h := element.Value.(*history)
+		if !strings.HasPrefix(h.id, prefix) || h.id == prefix+except {
+			continue
+		}
+		for _, v := range h.versions {
+			if v.Key != key {
+				continue
+			}
+			// A version with no Seen set lets edits anchor anywhere, so all its lines count.
+			if v.Seen == nil {
+				for line := 1; line <= len(v.Lines); line++ {
+					seen[line] = true
+				}
+			}
+			for line := range v.Seen {
+				seen[line] = true
+			}
+		}
+	}
+	return seen
+}
+
 // Cleared is the moment session's harness last compacted or cleared its context, as Forget was told it; zero when never.
 func (s *Store) Cleared(session string) time.Time {
 	s.mu.Lock()
