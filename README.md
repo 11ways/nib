@@ -786,8 +786,9 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   over 20 lines collapses exact repeats, and a plain row over 2,000 characters is cut in `read`'s bracketed form with
   its log line (`[line 2, chars 1-2000 of 20157]|...`), so it never looks like an anchor; the footer that explains this
   is whole the first time, then `[cut rows: read LOG:N whole]`. A plain row holding encoded data (a run of 100 or more
-  base64 or hex characters that mixes letters and digits over 16 distinct ones, such as a token or a signature) shows
-  in that form without it (`[line 1, chars 1-6, 145-157 of 157]|token= ...  expires=3600`). Output over 400 rows or 30 KiB
+  base64 or hex characters that mixes letters and digits over 16 distinct ones and holds at most one `+`, `/`, `-` or `_`
+  in 16 characters, such as a token or a signature, never a path or a UUID) shows in that form without it
+  (`[line 1, chars 1-6, 145-157 of 157]|token= ...  expires=3600`). Output over 400 rows or 30 KiB
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
@@ -914,7 +915,7 @@ longer one drops its surrounding lines first, then shows its start and
 `[nibash: log lines A-B left out, the rest of this passage]`), each row numbered as above, and a closing note. The
 rows share 4 KiB as well: each is at most its share wide (80 to 240
 characters), and a longer line, or one holding encoded data (a run of 100 or more base64 or hex characters mixing
-letters and digits), shows as a cut row naming the stretches it keeps, without the encoded runs, as
+letters and digits, with few separators), shows as a cut row naming the stretches it keeps, without the encoded runs, as
 `[line 12, chars 1-60, 1061-1240 of 1300]|{"type":"thinking","signature":" ... "},...`; the log holds it whole.
 Summaries are not asked for when the decider judged that the description
 needs every line, nor for a successful run without a description. The prompt tells the model to state only what the

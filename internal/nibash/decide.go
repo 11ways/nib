@@ -612,7 +612,8 @@ func summarized(rows []row, s decider.Summary, log saved, lines []string) []row 
 var encodedRun = regexp.MustCompile(`[A-Za-z0-9+/_-]{100,}={0,2}`)
 
 // encodedRuns are the byte ranges of line's encoded data: runs of encodedRun that mix letters and digits over at least 16 distinct characters,
-// as hex and base64 do and a long word, a separator or a run of one character never does.
+// as hex and base64 do and a long word, a separator or a run of one character never does, and that hold at most one separator ("+", "/",
+// "-" or "_") in 16 characters, as base64 does about one in 32 and a path, a UUID or a slug at least one in 12.
 func encodedRuns(line string) [][]int {
 	var runs [][]int
 	for _, run := range encodedRun.FindAllStringIndex(line, -1) {
@@ -621,7 +622,8 @@ func encodedRuns(line string) [][]int {
 		for _, r := range text {
 			distinct[r] = true
 		}
-		if len(distinct) >= 16 && strings.ContainsAny(text, "0123456789") && strings.ContainsFunc(text, unicode.IsLetter) {
+		separators := strings.Count(text, "+") + strings.Count(text, "/") + strings.Count(text, "-") + strings.Count(text, "_")
+		if len(distinct) >= 16 && strings.ContainsAny(text, "0123456789") && strings.ContainsFunc(text, unicode.IsLetter) && separators*16 <= len(text) {
 			runs = append(runs, run)
 		}
 	}

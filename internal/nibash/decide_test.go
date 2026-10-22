@@ -264,6 +264,23 @@ func TestEncodedDataInPlainOutputIsLeftOutOfItsRow(t *testing.T) {
 	}
 }
 
+func TestALongPathIsNoEncodedData(t *testing.T) {
+	f := newFixture(t, nil)
+	paths := []string{
+		"/home/skerit/projects/claude-configs/nib/claude/projects/-home-skerit-projects-nib/5641e44f-f230-4280-bdad-02f6ce1ef294.jsonl",
+		"mbrand/claude/projects/-home-skerit-projects-zenit-workspace/23ba54e2-efc3-431f-a975-d7cc9c62973b/subagents/agent-a20dd94e4c6c0e9fa.jsonl",
+	}
+	out := f.run("echo " + paths[0] + "; echo " + paths[1])
+	if rows := strings.Split(out, "\n"); len(rows) != 2 || rows[0] != paths[0] || rows[1] != paths[1] {
+		t.Fatalf("got:\n%s", out)
+	}
+	// base64 with its usual separators, about one in 32 characters, is still encoded data.
+	token := strings.Repeat("eyJhbGciOiJIUzI1NiJ9xQ7aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5+/", 3)
+	if runs := encodedRuns("sig=" + token); len(runs) != 1 {
+		t.Fatalf("runs %v", runs)
+	}
+}
+
 func TestACappedLogIsAnnounced(t *testing.T) {
 	saved := logLimit
 	logLimit = 1000
