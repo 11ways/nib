@@ -196,7 +196,7 @@ channel and writes no bytes. The link is keyed by the pipe's `(dev, ino)`, which
 - **Input from a real program:** a nib reader whose input comes from one, or a file redirect, reads bytes and makes plain
   records without origin. It treats a missing final newline as GNU does and replaces invalid UTF-8 for display, keeping
   the bytes as read for `cut`.
-- **Origin:** a nib command reading a file holds it as a snapshot through the engine (2 MiB text limit). A file it
+- **Origin:** a nib command reading a file holds it as a snapshot through the engine (8 MiB text limit). A file it
   cannot hold (too big, binary, still changing) gives plain records.
 
 **Rows in band:** where the writer side of a nib reader's pipe is a compound command, or a command decided as it runs,

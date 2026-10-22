@@ -126,14 +126,14 @@ func TestAttachImageReencodesOneTooBigInBytesAndSkipsOneTooBigToScale(t *testing
 
 func TestReadTakesAnImageBiggerThanTextAndAttachesWhatTheModelSees(t *testing.T) {
 	directory, _ := filepath.EvalSymlinks(t.TempDir())
-	// Noise past the 5 MiB a text read holds, wider than the model's edge.
-	noise := image.NewNRGBA(image.Rect(0, 0, 3000, 600))
+	// Noise past what a text read holds, wider than the model's edge.
+	noise := image.NewNRGBA(image.Rect(0, 0, 3000, 800))
 	random := rand.New(rand.NewPCG(3, 4))
 	for i := range noise.Pix {
 		noise.Pix[i] = uint8(random.Uint32())
 	}
 	data := encodePNG(t, noise)
-	if len(data) <= MediaLimit {
+	if len(data) <= TextLimit {
 		t.Fatalf("only %d bytes", len(data))
 	}
 	if err := os.WriteFile(filepath.Join(directory, "shot.png"), data, 0o644); err != nil {
@@ -143,7 +143,7 @@ func TestReadTakesAnImageBiggerThanTextAndAttachesWhatTheModelSees(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(read.Images) != 1 || len(read.Images[0].Data) > imageBytes || !strings.HasPrefix(read.Text, "shot.png: image/png 3000x600 attached as image/") {
+	if len(read.Images) != 1 || len(read.Images[0].Data) > imageBytes || !strings.HasPrefix(read.Text, "shot.png: image/png 3000x800 attached as image/") {
 		t.Fatalf("got %d images: %s", len(read.Images), read.Text)
 	}
 }

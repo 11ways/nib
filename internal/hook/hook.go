@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/hookstate"
 	"github.com/11ways/nib/internal/names"
 	"github.com/11ways/nib/internal/platform"
@@ -40,9 +41,6 @@ var Matchers = []Matcher{
 	{"PostCompact", "", "auto"},
 	{"UserPromptSubmit", "", "prompt"},
 }
-
-// taggedLimit is the engine's text limit: past it nib reads a file only plain.
-const taggedLimit = 2 * 1024 * 1024
 
 // Input is the part of Claude Code's hook input the hook uses; AgentID and AgentType are set only for a subagent's call, Prompt only for a
 // message the user sent.
@@ -225,7 +223,7 @@ func lookOnly(path string) bool {
 		}
 	}
 	info, err := os.Stat(path)
-	return err == nil && info.Size() > taggedLimit
+	return err == nil && info.Size() > engine.TextLimit
 }
 
 // shown is a path as the agent should pass it to nib: relative to the session's folder when inside it, with slashes as nib prints paths.

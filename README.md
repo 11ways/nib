@@ -129,8 +129,8 @@ Without a selector:
 
 In Java and Kotlin, runs of 10 or more imports print as a package tree. A call's output is capped at 40 KiB, shared
 fairly between its files. Lines over `maxLineLength` (default 2000) print as `[line N, chars 1-2000 of M]|...`, which
-is not an anchor. Text files are limited to 2 MiB. Images (PNG, JPEG, GIF, WebP) are returned as image content, scaled
-down to what the model sees; PDFs are refused.
+is not an anchor; `maxLineLength` goes up to 2 MiB. Text files are limited to 8 MiB. Images (PNG, JPEG, GIF, WebP) are
+returned as image content, scaled down to what the model sees; PDFs are refused.
 
 - `plain: true` prints lines without numbers or tag, strips color codes and collapses repeats; it has no size limit and
   suits logs.
@@ -164,7 +164,7 @@ anchor.
   rules. `noIgnore` turns ignore files off.
 - A path may carry a line selector (`app.log:1100-1250`) to search only those lines.
 - `mode: "files"` lists matching paths; `mode: "count"` counts per file.
-- Files over 2 MiB or still being written print `N|TEXT` rows, which are not anchors.
+- Files over 8 MiB or still being written print `N|TEXT` rows, which are not anchors.
 - `replace` (ripgrep's syntax: `$1`, `${name}`) previews changed lines as `>N|TEXT` rows and returns a token; `edit`
   with `REAPPLY TOKEN` applies exactly those lines.
 

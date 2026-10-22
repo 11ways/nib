@@ -120,8 +120,8 @@ describe("read", () => {
     expect(image.images).toEqual([{ data: png.toString("base64"), mimeType: "image/png" }])
     await writeFile(f.filePath, "%PDF-1.7\n")
     expect((await f.read()).text).toContain("use the built-in Read tool")
-    await writeFile(f.filePath, Buffer.alloc(5 * 1024 * 1024 + 1))
-    expect((await f.read()).text).toBe("[file.txt] skipped: 5.0 MiB, over the 2 MiB text limit. Read it with plain: true (a range like file.txt:-200 works too), or grep it.")
+    await writeFile(f.filePath, Buffer.alloc(8 * 1024 * 1024 + 1))
+    expect((await f.read()).text).toBe("[file.txt] skipped: 8.0 MiB, over the 8 MiB text limit. Read it with plain: true (a range like file.txt:-200 works too), or grep it.")
   })
 
   test("cut long lines are not editable until read whole; a larger maxLineLength shares the output budget", async () => {
@@ -144,8 +144,8 @@ describe("read", () => {
     const page = await f.read(":1-")
     expect(page.text).toMatch(/continue with file\.txt:\d+-\]$/)
     expect(Buffer.byteLength(page.text)).toBeLessThan(41 * 1024)
-    await writeFile(f.filePath, "x".repeat(2 * 1024 * 1024 + 1))
-    expect((await f.read()).text).toContain("[file.txt] skipped: 2.0 MiB, over the 2 MiB text limit.")
+    await writeFile(f.filePath, "x".repeat(8 * 1024 * 1024 + 1))
+    expect((await f.read()).text).toContain("[file.txt] skipped: 8.0 MiB, over the 8 MiB text limit.")
   })
 
   test("a single 2 MiB line can be read and edited, keeping stale-tag protection", async () => {
@@ -155,6 +155,17 @@ describe("read", () => {
     await f.edit(full.tag, [{ start: 1, content: "short", operation: "replace" }])
     expect(await readFile(f.filePath, "utf8")).toBe("short")
     await expect(f.edit(full.tag, [{ start: 1, content: "stale", operation: "replace" }])).rejects.toThrow("is stale")
+  })
+
+  test("a file of a few MiB is read by range with anchors and edited", async () => {
+    const line = (index: number) => `const entry${index} = ${"y".repeat(60)}`
+    const f = await fixture(Array.from({ length: 40_000 }, (_, index) => line(index + 1)).join("\n") + "\n")
+    const range = await f.read(":20000-20001")
+    expect(range.anchors).toEqual([20000, 20001])
+    await f.edit(range.tag, [{ start: 20000, content: "changed", operation: "replace" }])
+    expect((await readFile(f.filePath, "utf8")).split("\n").slice(19998, 20001)).toEqual([line(19999), "changed", line(20001)])
+    const grep = await f.engine.grep(f.ctx, { pattern: "entry30000 ", paths: ["file.txt"] })
+    expect(grep.text).toContain("*30000:const entry30000 =")
   })
 })
 
@@ -2106,13 +2117,13 @@ describe("plain reads", () => {
     ])
   })
 
-  test("plain reads files over 2 MiB by range and tail, and continues past the output budget", async () => {
+  test("plain reads files over the text limit by range and tail, and continues past the output budget", async () => {
     const f = await fixture()
-    const line = (index: number) => `2026-10-14 entry ${index} ${"y".repeat(60)}`
+    const line = (index: number) => `2026-10-14 entry ${index} ${"y".repeat(220)}`
     await writeFile(path.join(f.directory, "big.log"), Array.from({ length: 40_000 }, (_, index) => line(index + 1)).join("\n") + "\n")
     // A normal read notes the oversized file instead of failing, so other files in the same call still come back.
     const both = (await f.engine.read(f.ctx, { paths: ["big.log:39999-", "file.txt"] })).text.split("\n\n")
-    expect(both[0]).toBe("[big.log] skipped: 3.2 MiB, over the 2 MiB text limit. Read it with plain: true (a range like big.log:-200 works too), or grep it.")
+    expect(both[0]).toBe("[big.log] skipped: 9.3 MiB, over the 8 MiB text limit. Read it with plain: true (a range like big.log:-200 works too), or grep it.")
     expect(both[1]).toStartWith("[file.txt#")
     const plain = (entry: string, collapse?: boolean) => f.engine.read(f.ctx, { paths: [entry], plain: true, collapse }).then((result) => result.text)
     expect(await plain("big.log:-2")).toBe(`[big.log] lines 39999-40000 of 40000, plain\n${line(39999)}\n${line(40000)}`)
@@ -2157,13 +2168,13 @@ describe("plain reads", () => {
 })
 
 describe("grep on files nib cannot hold whole", () => {
-  test("a file over 2 MiB gets numbered rows from ripgrep: untagged, colors stripped, shortened, inside the selected lines", async () => {
+  test("a file over the text limit gets numbered rows from ripgrep: untagged, colors stripped, shortened, inside the selected lines", async () => {
     const f = await fixture()
-    const line = (index: number) => index === 30_000 ? `\x1b[31mERROR\x1b[0m entry ${index} ${"z".repeat(60)}` : `info entry ${index} ${"y".repeat(60)}`
+    const line = (index: number) => index === 30_000 ? `\x1b[31mERROR\x1b[0m entry ${index} ${"z".repeat(60)}` : `info entry ${index} ${"y".repeat(220)}`
     await writeFile(path.join(f.directory, "big.log"), Array.from({ length: 40_000 }, (_, index) => line(index + 1)).join("\n") + "\n")
     const result = await f.engine.grep(f.ctx, { pattern: "ERROR", paths: ["big.log"], before: 1, after: 1, maxLineLength: 30 })
     expect(result.text).toBe("1 matches in 1 files\n\n" + [
-      "[big.log] (not anchorable: over 2 MiB; rows from ripgrep)",
+      "[big.log] (not anchorable: over 8 MiB; rows from ripgrep)",
       ` 29999|info entry 29999 ${"y".repeat(13)}...`,
       `*30000|ERROR entry 30000 ${"z".repeat(12)}...`,
       ` 30001|info entry 30001 ${"y".repeat(13)}...`,
@@ -2226,12 +2237,12 @@ describe("minified files", () => {
     expect(wide.text.split("\n").slice(0, 2)).toEqual([`[file.txt#${wide.tag}]`, `[line 1, chars 1-1000 of ${code(2000).length}]|${code(2000).slice(0, 1000)}`])
   })
 
-  test("grep shows the stretches around matches deep in a long line, also for files over 2 MiB", async () => {
+  test("grep shows the stretches around matches deep in a long line, also for files over the text limit", async () => {
     const line = "a".repeat(3000) + "NEEDLE" + "b".repeat(3000) + "NEEDLE" + "c".repeat(50)
     const f = await fixture(line + "\n")
     expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE" })).text).toContain(`\n*[line 1, chars 2916-3091, 5922-6062 of 6062]|${"a".repeat(85)}NEEDLE${"b".repeat(85)} ... ${"b".repeat(85)}NEEDLE${"c".repeat(50)}\n`)
-    await writeFile(path.join(f.directory, "huge.js"), "q".repeat(1_500_000) + "NEEDLE" + "r".repeat(800_000) + "\n")
-    expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE", paths: ["huge.js"] })).text).toContain(`\n*1|[chars 1499916-1500091 of 2300006] ${"q".repeat(85)}NEEDLE${"r".repeat(85)}\n`)
+    await writeFile(path.join(f.directory, "huge.js"), "q".repeat(1_500_000) + "NEEDLE" + "r".repeat(7_000_000) + "\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "NEEDLE", paths: ["huge.js"] })).text).toContain(`\n*1|[chars 1499916-1500091 of 8500006] ${"q".repeat(85)}NEEDLE${"r".repeat(85)}\n`)
   })
 })
 
@@ -2286,12 +2297,12 @@ describe("file facts (read info)", () => {
     ])
   })
 
-  test("a file over 2 MiB is streamed and gets no tag; info takes no selector, plain or since", async () => {
+  test("a file over the text limit is streamed and gets no tag; info takes no selector, plain or since", async () => {
     const f = await fixture()
-    await writeFile(path.join(f.directory, "big.log"), "line\n".repeat(500_000))
+    await writeFile(path.join(f.directory, "big.log"), "line\n".repeat(2_000_000))
     await age(path.join(f.directory, "big.log"), DAYS)
     expect((await f.engine.read(f.ctx, { paths: ["big.log"], info: true })).text)
-      .toBe("[big.log] 500000 lines, 2.4 MiB, about 625k tokens; longest line 4 chars (line 1); LF; over 2 MiB, so no tag: read it with plain: true, or grep it; modified 3d ago")
+      .toBe("[big.log] 2000000 lines, 9.5 MiB, about 2500k tokens; longest line 4 chars (line 1); LF; over 8 MiB, so no tag: read it with plain: true, or grep it; modified 3d ago")
     await expect(f.engine.read(f.ctx, { paths: ["file.txt:1-2"], info: true })).rejects.toThrow("info describes whole files")
     await expect(f.engine.read(f.ctx, { paths: ["file.txt"], info: true, plain: true })).rejects.toThrow("takes no plain, collapse or maxLineLength")
     await expect(f.engine.read(f.ctx, { paths: ["file.txt#ABCD"], info: true })).rejects.toThrow("path#TAG shows what changed since that tag")
@@ -2352,7 +2363,7 @@ describe("find", () => {
       [".gitignore", "ignored.log\n", DAYS],
       [".hidden", "h", DAYS],
       ["a.txt", "one\ntwo\n", 3600 + 60],
-      ["big.txt", "z".repeat(3_000_000), DAYS],
+      ["big.txt", "z".repeat(9_000_000), DAYS],
       ["bin.dat", Buffer.from([0, 1, 2]), DAYS],
       ["empty.txt", "", DAYS],
       ["ignored.log", "secret\n", DAYS],
@@ -2372,7 +2383,7 @@ describe("find", () => {
     ".gitignore (1 line, 12 bytes, 3d ago)",
     ".hidden (1 line, 1 byte, 3d ago)",
     "a.txt (2 lines, 8 bytes, 1h ago)",
-    "big.txt (2.9 MiB, 3d ago)",
+    "big.txt (8.6 MiB, 3d ago)",
     "bin.dat (binary, 3 bytes, 3d ago)",
     "empty.txt (empty, 3d ago)",
     "pic.png (image/png, 8 bytes, 3d ago)",

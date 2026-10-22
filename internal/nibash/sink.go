@@ -638,7 +638,7 @@ func heldRows(e *engine.Engine, ctx *engine.Context, rows []row) []row {
 // dropped as the command showed more files than the store keeps, is still the one the tag names, so only a newer one makes it stale.
 func header(e *engine.Engine, ctx *engine.Context, source *engine.Source) string {
 	if source.View == nil {
-		return fmt.Sprintf("[%s] (not anchorable: over 2 MiB, binary or changing)", source.Display)
+		return fmt.Sprintf("[%s] (not anchorable: over %s, binary or changing)", source.Display, engine.TextLimitName)
 	}
 	if latest := e.Latest(ctx, source.Canonical); latest != nil && latest.Key != source.View.Key {
 		return fmt.Sprintf("[%s] (changed since this command read it; read it again to edit)", source.Display)

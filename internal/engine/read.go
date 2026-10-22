@@ -842,7 +842,7 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (result Result, err error) {
 		ctx = &whole
 	}
 	var caps []string
-	maxLineLength := valueOr(capped("maxLineLength", args.MaxLineLength, TextLimit, &caps), LineLimit)
+	maxLineLength := valueOr(capped("maxLineLength", args.MaxLineLength, WholeLineLimit, &caps), LineLimit)
 	var blocks []*block
 	var absent []string
 	var images []Image
@@ -923,7 +923,7 @@ func (e *Engine) Read(ctx *Context, args ReadArgs) (result Result, err error) {
 	}
 	budget := OutputLimit
 	if single && maxLineLength > LineLimit {
-		budget = TextLimit + 1024
+		budget = WholeLineLimit + 1024
 	}
 	parts := fill(blocks, budget)
 	if len(absent) == len(args.Paths) {
@@ -970,13 +970,13 @@ func (e *Engine) entryBlock(ctx *Context, t *target, sel selection, since string
 			}
 			// A file too big to hold as text is noted rather than failing the call, so the other files of a read still come back.
 			tooBig := func(size int64) *block {
-				return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the 2 MiB text limit. Read it with plain: true (a range like %s:-200 works too), or grep it.", t.display, float64(size)/1048576, t.display))
+				return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the %s text limit. Read it with plain: true (a range like %s:-200 works too), or grep it.", t.display, float64(size)/1048576, TextLimitName, t.display))
 			}
 			// An image may be bigger than any text read holds, since it goes scaled down to what the model sees.
 			head := make([]byte, 12)
 			n, _ := file.ReadAt(head, 0)
 			kind := imageKindOf(head[:n])
-			limit := MediaLimit
+			limit := TextLimit
 			if kind != nil {
 				limit = ImageLimit
 			}
@@ -1156,7 +1156,7 @@ func (e *Engine) facts(ctx *Context, t *target, file *os.File) (*block, error) {
 	if current == nil {
 		reason := "changing while read"
 		if size > TextLimit {
-			reason = "over 2 MiB"
+			reason = "over " + TextLimitName
 		}
 		parts = append(parts, reason+", so no tag: read it with plain: true, or grep it")
 	}

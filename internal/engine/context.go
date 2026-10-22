@@ -4,6 +4,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,11 +13,14 @@ import (
 )
 
 const (
-	TextLimit   = 2 * 1024 * 1024
-	MediaLimit  = 5 * 1024 * 1024
-	OutputLimit = 40 * 1024
-	LineLimit   = 2000
-	ReadLines   = 2000
+	// TextLimit is the largest file nib holds as text: past it, files are read plain, grep rows come from ripgrep, and edits are refused.
+	TextLimit = 8 * 1024 * 1024
+	// WholeLineLimit caps maxLineLength, so a read shows at most this much of one line, and a single read that asks for one line whole
+	// prints at most about this much.
+	WholeLineLimit = 2 * 1024 * 1024
+	OutputLimit    = 40 * 1024
+	LineLimit      = 2000
+	ReadLines      = 2000
 	// GrepContextLines is the context one grep page shows in all; past it every match gets less, except definitions that asked for theirs.
 	GrepContextLines = 2 * grepContext
 
@@ -54,6 +58,9 @@ const (
 	sinceNotes        = 10
 	tokenAlphabet     = "abcdefghijklmnopqrstuvwxyz0123456789"
 )
+
+// TextLimitName is TextLimit as nib's messages name it.
+var TextLimitName = fmt.Sprintf("%d MiB", TextLimit>>20)
 
 // Context is per-call state. Authorize decides writes outside the workspace roots and returns an error to refuse; with Sandbox, no tool
 // touches anything outside them. Names, when set, resolves ~name/ paths and gives every printed path its display form.

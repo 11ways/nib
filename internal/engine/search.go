@@ -1162,7 +1162,7 @@ func (e *Engine) grepLoad(ctx *Context, file string, t *target, matches []int, s
 			return err
 		}
 		if info.Size() > TextLimit {
-			loaded.untagged = "over 2 MiB"
+			loaded.untagged = "over " + TextLimitName
 			return nil
 		}
 		current, err := snapshot(handle, TextLimit)

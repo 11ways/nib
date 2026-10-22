@@ -72,10 +72,11 @@ type LineEdit struct {
 
 const (
 	// maxPaths bounds the agent and file pairs held; text is bounded by maxUnits, so it can be generous. Subagents each hold their own, and
-	// nibash records every file its own commands show, so a long session reaches a few hundred quickly.
+	// nibash records every file its own commands show, so a long session reaches a few hundred quickly. maxUnits holds the versions of a
+	// file at the engine's text limit with room to spare.
 	maxPaths    = 4096
 	maxVersions = 4
-	maxUnits    = 64 * 1024 * 1024
+	maxUnits    = 128 * 1024 * 1024
 	// maxForgotten bounds the evicted pairs remembered, so a refusal can say its earlier views were dropped.
 	maxForgotten = 16384
 	diffTimeout  = time.Second
