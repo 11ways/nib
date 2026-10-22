@@ -64,6 +64,15 @@ func TestReadOfADatabaseOutlinesItsTablesAndViews(t *testing.T) {
 	}
 }
 
+func TestADbPrefixIsNamedAsTheFileItself(t *testing.T) {
+	e, ctx, directory := databaseFixture(t)
+	entry := "db:" + filepath.Join(directory, "state.db") + ":SELECT 1"
+	_, err := e.Read(ctx, ReadArgs{Paths: []string{entry}})
+	if want := entry + " does not exist; for a SQLite file, name the file itself, as in " + filepath.Join(directory, "state.db") + ":SELECT 1"; err == nil || err.Error() != want {
+		t.Fatalf("got %v\nwant %s", err, want)
+	}
+}
+
 func TestReadOfATableGivesItsRowsByPosition(t *testing.T) {
 	e, ctx, _ := databaseFixture(t)
 	last := readText(t, e, ctx, "state.db:runs:-3")

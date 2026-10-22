@@ -77,8 +77,12 @@ func outsideSandbox(ctx *Context, input string) (string, error) {
 
 var pairSelector = regexp.MustCompile(`^(.*):([1-9]\d*):([1-9]\d*)$`)
 
-// missingPath says why entry names nothing; one written path:A:B gets the range form, since a selector writes A to B as A-B.
+// missingPath says why entry names nothing; one written path:A:B gets the range form, since a selector writes A to B as A-B, and one
+// written db:PATH:QUERY the database form, since a SQLite file takes its selector directly.
 func missingPath(entry string, ctx *Context) string {
+	if rest, ok := strings.CutPrefix(entry, "db:"); ok && rest != "" {
+		return fmt.Sprintf("%s does not exist; for a SQLite file, name the file itself, as in %s", entry, rest)
+	}
 	pair := pairSelector.FindStringSubmatch(entry)
 	if pair == nil {
 		return entry + " does not exist"

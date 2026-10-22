@@ -115,7 +115,7 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | `path:name`, `path:Type.member`, `path:a,b` | declarations, with their comments and annotations |
 | `path#TAG` | what changed since that version (nib keeps 4 per file) |
 | `path@REV` | the file at a git revision; a folder gives the commit and its diff |
-| `db:TABLE`, `db:TABLE:-15`, `db:SELECT ...` | rows of a SQLite database, or a read-only query |
+| `file.db:TABLE`, `file.db:TABLE:-15`, `file.db:SELECT ...` | rows of a SQLite database file, or a read-only query |
 
 Declarations are found with tree-sitter for Java, Kotlin, TypeScript, TSX, JavaScript, Go, Python, Rust, C, C++ and
 Zig, and as blocks and snippets in Hawkeye (`.hwk`) templates.
