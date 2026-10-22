@@ -650,7 +650,7 @@ far and the command goes on as a job, its whole output, from the start, in the j
 waits for jobs, with a note naming the jobs, `[job %2 still running after 10m0s; wait %2 again]`, which run on. Only
 the client cancelling a call that still waits, `kill`, or the end of the connection stops a program (SIGTERM, then
 SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat` and
-`TERM=dumb` keep programs from waiting on a terminal.
+`TERM=dumb` keep programs from waiting on a terminal; `GIT_ADVICE=0` keeps git from printing its `hint:` advice.
 
 - **nib's own commands.** `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n` (line selections), `cut -c`
   (character selections) and `wc` run as nib's own when their output goes to the model or into another of them and
@@ -682,9 +682,10 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   (`-b`, `-f`, `-d`, `-s`, `--complement`, `--output-delimiter`) run the system `cut`.
 - **git, reshaped.** `git` is nib's own only where its output goes to the model, directly or through nib's own commands,
   and only for the forms it reads: `status` (short, porcelain v1, long), `add -v`/`-n`, `rm`, `ls-files`, `diff`, `show`
-  and `log` with a patch, `--stat`, `--name-only`, `--name-status` or `--numstat`, and `show` and `log` in git's default
-  format. It runs the real git with the command line's own arguments, so the exit status, standard error and every side
-  effect are git's; what it prints changes form, and in one place content. Path lists name each folder once, as `find`
+  and `log` with a patch, `--stat`, `--name-only`, `--name-status` or `--numstat`, `show` and `log` in git's default
+  format, and the subcommands that change a repository (below). It runs the real git
+  with the command line's own arguments, so the exit status, standard error and every side
+  effect are git's; what it prints changes form, and in a few places content. Path lists name each folder once, as `find`
   does, in a bracketed row (`[src/server/java/be/elevenways/cms/]`) with the rest of each path under it and the rest of
   every line kept (the `XY` of a status, a stat's counts); a folder within a folder gets its own row under it, and a run
   is laid out so only where that saves at least 16 characters, never making the output longer. A `--stat` file row
@@ -707,6 +708,21 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   how: the full hash, the author's name, the seconds and the zone are gone. A header in another format (`--format`,
   `--pretty`, `--oneline`, `--graph`, `--date`, or a configured date or format that does not read as git's default),
   and a tag's own header in `git show TAG`, print as git printed them.
+- **git that changes a repository.** `commit`, `merge`, `pull`, `rebase`, `cherry-pick`, `revert`, `push`, `fetch`,
+  `checkout`, `switch`, `reset` and `stash` are nib's own with any option (except `-p`/`--patch` and `--porcelain`,
+  which run the system git), and where their output reaches the model, both of git's streams are tidied. A path in a
+  commit's summary (`create mode 100644 PATH` prints as ` create PATH`, `delete` likewise; another mode stays), a
+  conflict (`CONFLICT (content): Merge conflict in PATH`), an `Auto-merging PATH`, a checkout's or reset's `M\tPATH`
+  and a status a commit prints is laid out by folder as above. The diffstat a merge or pull prints runs with
+  `COLUMNS=1000000` and `-c diff.statGraphWidth=1000000`, so its rows print every path whole with exact counts, as a
+  `--stat` does. Hidden from the model, and kept in the log: every `hint:` line (pull's divergent-branches hint prints
+  whatever `GIT_ADVICE` says), the progress a carriage return writes over (`Rebasing (1/1)`), the ` Date:` line a
+  cherry-pick's or amend's summary repeats, and an unindented line printed already, as ssh repeats a warning for each
+  connection. A ref's line from `push` or `fetch` loses its padding (`   1a2b3c4..5d6e7f8 main -> origin/main`). A
+  merge or pull that cannot fast-forward ends with how the branches diverged, from `git rev-list --left-right --count`:
+  `[nibash: HEAD and origin/main have diverged: 2 commits only on HEAD, 1 commit only on origin/main]` (for a pull
+  without arguments against `@{upstream}`, with arguments against `FETCH_HEAD`). Into a file or a real program, their
+  output is git's own.
 - **git through head and tail.** Into nib's own `head`, `tail` (whole lines by count: `-n N`, `-N`, `tail -n +N`,
   `head -n -N`) or `cat` without `-n`, one after another and on to the model, git streams, so `head` still stops it
   early, and every line git prints counts as one line for them. The lines they keep then print as they would at the

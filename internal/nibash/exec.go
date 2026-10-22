@@ -309,6 +309,11 @@ func (c *call) runProgram(ctx context.Context, args []string, printed func()) er
 // runProgramTo is runProgram with its standard output and error going to stdout and stderr, which a nib command that renders a real program's
 // output passes; the same writer for both gives the program one descriptor for both, as 2>&1 does.
 func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr io.Writer, printed func()) error {
+	return c.runProgramWith(ctx, args, nil, stdout, stderr, printed)
+}
+
+// runProgramWith is runProgramTo with env added to the shell's environment.
+func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, stderr io.Writer, printed func()) error {
 	hc := interp.HandlerCtx(ctx)
 	// A shell knows no named directories, so a script it gets with -c has them expanded as nibash would expand them there.
 	args = namedScripts(hc.Env, args)
@@ -336,7 +341,7 @@ func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr i
 		// The program sees the name it was called by, as under bash.
 		cmd.Args[0] = args[0]
 	}
-	cmd.Env = environ(hc.Env)
+	cmd.Env = append(environ(hc.Env), env...)
 	cmd.Dir = hc.Dir
 	platform.Prepare(cmd)
 	if hc.Stdin != nil {

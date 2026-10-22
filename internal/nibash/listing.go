@@ -38,7 +38,7 @@ func runInto(inv *invocation, args []string, out io.Writer, quiet bool) int {
 	case quiet:
 		stderr = io.Discard
 	}
-	err := inv.call.runProgramTo(inv.ctx, args, out, stderr, nil)
+	err := inv.call.runProgramWith(inv.ctx, args, inv.env, out, stderr, nil)
 	var status interp.ExitStatus
 	switch {
 	case err == nil:

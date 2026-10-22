@@ -148,7 +148,7 @@ The 2048-character test covers this description too.
 - **Each call:**
   - re-applies stdin `/dev/null` and the terminal sink as stdout and stderr, so an `exec >file` from an earlier call
     cannot capture later ones [m3];
-  - sets `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `PAGER=cat` and `TERM=dumb` for children [m3].
+  - sets `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `PAGER=cat`, `TERM=dumb` and `GIT_ADVICE=0` for children [m3].
 - **Shell options:** bash dialect, no `pipefail`, no `errexit`.
 - **Quirk:** mvdan runs a pipeline's last stage in the parent shell (`runner.go:506-521`), so `... | read v` and
   `... | cd x` change the rest of the call, unlike bash. The description notes it [M9].

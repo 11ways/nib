@@ -33,9 +33,9 @@ const (
 
 // description is the nibash tool's description, with %s for nib's own commands and for how long output is cut; a test holds every variant
 // under 2048 characters.
-const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function carries over), in parallel. Programs are real processes, stdin empty.
+const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
-Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commit headers, %s, with the whole kept in a log you can read. Changed files list new tags.
+Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commits, no git hints, %s, with the whole kept in a log to read. Changed files list new tags.
 Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! is a job's %%N, and the next call reports its end. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
@@ -262,10 +262,11 @@ func (s *Shell) Close(key any) {
 	}
 }
 
-// environment is the process environment with the settings that keep programs from waiting on a terminal the model does not have, and
-// without the launcher's word that this session names nib's channel, which a Claude Code started inside it must not take for its own.
+// environment is the process environment with the settings that keep programs from waiting on a terminal the model does not have and git
+// from printing advice for a person, and without the launcher's word that this session names nib's channel, which a Claude Code started
+// inside it must not take for its own.
 func environment(pairs []string) []string {
-	quiet := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "TERM": "dumb"}
+	quiet := map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "GIT_ADVICE": "0", "PAGER": "cat", "TERM": "dumb"}
 	var env []string
 	for _, pair := range pairs {
 		name, _, _ := strings.Cut(pair, "=")

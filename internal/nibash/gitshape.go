@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/11ways/nib/internal/engine"
 	"github.com/11ways/nib/internal/gitform"
@@ -40,8 +42,10 @@ const (
 	diffHeader
 	// diffRow is a line that prints under the file's header: a row of the file, or shown.
 	diffRow
-	// statRow is a --stat file row, which prints as shown, its bar given as counts; it belongs to no part.
-	statRow
+	// shownRow is a line that prints as shown, as a --stat file row with its bar given as counts or a tidied line; it belongs to no part.
+	shownRow
+	// hiddenRow is a line git prints for a person at a terminal, which the model does not see; the log keeps it.
+	hiddenRow
 )
 
 // shaped is how a line of git's prints at the terminal: by its role in its part, and as shown when it is a line under a file's header that
@@ -60,8 +64,11 @@ func (s *shaped) counts() bool {
 // view is the line's text at the terminal, given how many counted lines of each part reached it; ok is false for a line that a commit
 // header's one line or a file's header stands for.
 func (s *shaped) view(text string, reached map[*gitPart]int) (string, bool) {
-	if s.role == statRow {
+	switch s.role {
+	case shownRow:
 		return s.shown, true
+	case hiddenRow:
+		return "", false
 	}
 	whole := s.part.lines > 0 && reached[s.part] == s.part.lines
 	switch s.role {
@@ -120,10 +127,16 @@ type gitShaper struct {
 	next, old, added int
 	email            *string
 	stopped          bool
+	// tidier tidies the lines of a subcommand that changes a repository; nil for the others.
+	tidier *gitTidier
 }
 
 func newGitShaper(inv *invocation, p *gitPlan) *gitShaper {
-	return &gitShaper{inv: inv, plan: p, parse: gitParser(p.forms)}
+	s := &gitShaper{inv: inv, plan: p, parse: gitParser(p.forms)}
+	if p.tidy {
+		s.tidier = &gitTidier{seen: map[string]bool{}}
+	}
+	return s
 }
 
 // line takes git's next line; false means nothing reads any more.
@@ -183,13 +196,84 @@ func (s *gitShaper) between(text string) bool {
 		return true
 	}
 	if shown, l, ok := s.plan.statCounts(text); ok {
-		r := record{text: text, shape: &shaped{role: statRow, shown: shown}}
+		r := record{text: text, shape: &shaped{role: shownRow, shown: shown}}
 		if plainPath(l.path) {
 			r.listed = &listedLine{text: shown, listed: l}
 		}
 		return s.emit(r)
 	}
+	if s.tidier != nil {
+		return s.tidied(text)
+	}
 	return s.emit(listingRecord(text, s.parse))
+}
+
+// tidied takes a line of a subcommand that changes a repository: hidden, or as the tidier shows it, marked when it names a path.
+func (s *gitShaper) tidied(text string) bool {
+	shown, keep := s.tidier.line(text)
+	if !keep {
+		return s.emit(record{text: text, shape: &shaped{role: hiddenRow}})
+	}
+	r := listingRecord(shown, s.parse)
+	r.text = text
+	if r.listed != nil {
+		shown = r.listed.before + r.listed.path + r.listed.after
+		r.listed.text = shown
+	}
+	if shown != text {
+		r.shape = &shaped{role: shownRow, shown: shown}
+	}
+	return s.emit(r)
+}
+
+// gitTidier hides what a subcommand changing a repository prints for a person at a terminal: hints, most of which GIT_ADVICE=0 already keeps
+// git from printing, the progress a carriage return writes over, the author date a commit's summary repeats, and an unindented line printed
+// already, as ssh repeats a warning for each connection; a ref's update loses the padding that lines it up. Both of git's streams pass it.
+type gitTidier struct {
+	mu      sync.Mutex
+	seen    map[string]bool
+	summary bool
+	// diverged is whether git refused to join branches that diverged.
+	diverged bool
+}
+
+var (
+	// gitCommitSummary starts the line a new commit's summary starts with, as "[main 3fcda4b] message".
+	gitCommitSummary = regexp.MustCompile(`^\[\S+(?: \([^)]*\))? [0-9a-f]{4,64}\] `)
+	// gitRefUpdate is a ref's line in what push and fetch print: its flag, its summary, its source and, unless deleted, its destination.
+	gitRefUpdate = regexp.MustCompile(`^ ([ +\-*!=t]) (\[[^\]]+\]|[0-9a-f]+\.\.\.?[0-9a-f]+) +(\S+)(?: +-> (\S+))?(.*)$`)
+)
+
+// line is text as the model sees it; keep is false for a line it does not see.
+func (t *gitTidier) line(text string) (shown string, keep bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if at := strings.LastIndexByte(text, '\r'); at >= 0 && at < len(text)-1 {
+		text = text[at+1:]
+	}
+	summary := t.summary
+	t.summary = gitCommitSummary.MatchString(text)
+	switch {
+	case strings.HasPrefix(text, "hint:"), summary && strings.HasPrefix(text, " Date: "):
+		return "", false
+	case strings.Contains(text, "Not possible to fast-forward") || strings.Contains(text, "reconcile divergent branches"):
+		t.diverged = true
+	}
+	if m := gitRefUpdate.FindStringSubmatch(text); m != nil {
+		text = " " + m[1] + " " + m[2] + " " + m[3]
+		if m[4] != "" {
+			text += " -> " + m[4]
+		}
+		text += m[5]
+	}
+	// An indented line, a commit's summary or an empty one may well come again, for the next commit or as a status's layout.
+	if text != "" && !strings.HasPrefix(text, " ") && !strings.HasPrefix(text, "\t") && !strings.HasPrefix(text, "[") {
+		if t.seen[text] {
+			return "", false
+		}
+		t.seen[text] = true
+	}
+	return text, true
 }
 
 // headerLine takes the next line of a commit header: a merge's parents, the author, the date and the blank line after them, in that order.

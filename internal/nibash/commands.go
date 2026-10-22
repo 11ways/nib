@@ -29,8 +29,10 @@ type invocation struct {
 	name   string
 	dir    string
 	stderr io.Writer
-	in     *input
-	out    *output
+	// env is what a real program the command runs gets beside the shell's environment, as COLUMNS for git.
+	env []string
+	in  *input
+	out *output
 	// inLink is the link the command reads, for facts about what its writer saw.
 	inLink *link
 	// outLink is the link it writes, whose stats it keeps.

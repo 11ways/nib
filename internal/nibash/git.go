@@ -3,6 +3,7 @@ package nibash
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -38,12 +39,20 @@ type gitPlan struct {
 	forms []*regexp.Regexp
 	// diffs is whether the output holds a diff's lines; headers is whether its commits print in git's default format.
 	diffs, headers bool
+	// columns runs git with COLUMNS wide enough that a diffstat it prints on its own, as merge and pull do, holds every path whole and bars
+	// that draw every changed line; tidy hides what git prints for a person at a terminal (see gitTidier).
+	columns, tidy bool
+	// target is what a merge or pull joins HEAD with, whose divergence from HEAD a failed fast-forward is told with; "" for none.
+	target string
 }
 
 // gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
-// is the next word. A name ending in "*" takes any attached rest, as -U3 or -n5 do.
+// is the next word. A name ending in "*" takes any attached rest, as -U3 or -n5 do. An open subcommand takes any option, since none changes
+// the lines nib reads into a form it misreads, except its foreign ones, with which the system git runs.
 type gitOptions struct {
 	flags, attached, separate []string
+	open                      bool
+	foreign                   []string
 }
 
 var gitSubcommands = map[string]gitOptions{
@@ -60,7 +69,31 @@ var gitSubcommands = map[string]gitOptions{
 	"diff": diffOptions,
 	"show": diffOptions,
 	"log":  diffOptions,
+	// The subcommands that change a repository print what they changed: a summary of created and deleted files, a diffstat, conflicts, refs.
+	"commit":      {open: true, foreign: []string{"-p", "--patch", "--interactive"}},
+	"merge":       {open: true},
+	"pull":        {open: true},
+	"rebase":      {open: true},
+	"cherry-pick": {open: true},
+	"revert":      {open: true},
+	"push":        {open: true, foreign: []string{"--porcelain"}},
+	"fetch":       {open: true, foreign: []string{"--porcelain"}},
+	"checkout":    {open: true, foreign: []string{"-p", "--patch"}},
+	"switch":      {open: true},
+	"reset":       {open: true, foreign: []string{"-p", "--patch"}},
+	"stash":       {open: true, foreign: []string{"-p", "--patch"}},
 }
+
+// mergeValues are merge's options whose value is the next word, so that word is not taken for what it merges.
+var mergeValues = []string{"-m", "-F", "-s", "-X", "--file", "--strategy", "--strategy-option", "--into-name"}
+
+// The forms of the lines naming a path that the subcommands changing a repository print: a commit's summary of created and deleted files and
+// changed modes, a conflict, a file merged on both sides; status lines, as a commit with nothing to commit prints; checkout's and reset's
+// changed files.
+var (
+	changeForms = []*regexp.Regexp{gitSummary, gitConflict, gitMerging, gitStat}
+	statusForms = []*regexp.Regexp{gitShort, gitLong, gitTabbed}
+)
 
 // diffOptions are what diff, show and log share here: none changes the shape of the lines nib reads, or it handles the change (--relative,
 // --no-prefix), or the lines it cannot read print as git printed them.
@@ -106,6 +139,7 @@ subcommand:
 		return nil, errForeign
 	}
 	verbose, shapes, sized, formatted := false, false, false, false
+	var operands []string
 	rest := args[i+1:]
 	for k := 0; k < len(rest); k++ {
 		a := rest[k]
@@ -116,6 +150,17 @@ subcommand:
 			// A show of REV:PATH prints a file's content, not a diff.
 			if p.subcommand == "show" && strings.Contains(a, ":") {
 				return nil, errForeign
+			}
+			operands = append(operands, a)
+			continue
+		}
+		if spec.open {
+			name, _, _ := strings.Cut(a, "=")
+			if slices.Contains(spec.foreign, name) {
+				return nil, errForeign
+			}
+			if p.subcommand == "merge" && slices.Contains(mergeValues, a) {
+				k++
 			}
 			continue
 		}
@@ -172,7 +217,7 @@ subcommand:
 	p.wide = p.wide && !sized
 	switch p.subcommand {
 	case "status":
-		p.forms = []*regexp.Regexp{gitShort, gitLong, gitTabbed}
+		p.forms = statusForms
 	case "rm":
 		p.forms = []*regexp.Regexp{gitVerbose}
 	case "ls-files":
@@ -195,6 +240,20 @@ subcommand:
 		p.headers = p.subcommand == "show" && !formatted
 		// Without a list of files they print the diff itself.
 		p.diffs = p.diffs || len(p.forms) == 0
+	case "commit", "stash":
+		p.forms, p.columns, p.tidy = append(slices.Clone(changeForms), statusForms...), true, true
+	case "checkout", "switch", "reset":
+		p.forms, p.tidy = []*regexp.Regexp{gitStatus}, true
+	case "merge", "pull", "rebase", "cherry-pick", "revert", "push", "fetch":
+		p.forms, p.columns, p.tidy = changeForms, true, true
+		switch {
+		case p.subcommand == "pull" && len(operands) == 0:
+			p.target = "@{upstream}"
+		case p.subcommand == "pull":
+			p.target = "FETCH_HEAD"
+		case p.subcommand == "merge" && len(operands) == 1:
+			p.target = operands[0]
+		}
 	}
 	return p, nil
 }
@@ -255,10 +314,35 @@ func (p *gitPlan) run(inv *invocation) int {
 		// git streams, so what it printed shows when the call returns while it runs, and nib's own head and tail still stop it early. Each
 		// line it prints is one record, so they keep the lines they would of the system git's. A wide stat prints the same lines, one a file
 		// in the same order, and only it lays out a stat whose paths git cut, so through them it is the stat that runs.
+		if p.columns {
+			inv.env = []string{"COLUMNS=" + gitform.StatWidth}
+			defer func() { inv.env = nil }()
+		}
+		stderr := inv.stderr
+		var tidied *lineWriter
+		if shaper.tidier != nil && reachesModel(stderr) {
+			// What git writes to its standard error, as push and fetch write all they print, is tidied the same way where the model reads it.
+			tidied = &lineWriter{each: func(line string) bool {
+				if shown, keep := shaper.tidier.line(line); keep {
+					io.WriteString(stderr, shown+"\n")
+				}
+				return true
+			}}
+			inv.stderr = tidied
+		}
 		w := &lineWriter{each: shaper.line}
 		status := runInto(inv, p.command(p.wide), w, false)
 		w.flush()
+		if tidied != nil {
+			tidied.flush()
+			inv.stderr = stderr
+		}
 		shaper.flush()
+		if status != 0 && p.target != "" && shaper.tidier.diverged {
+			if note := p.divergence(inv); note != "" {
+				shaper.emit(record{text: note})
+			}
+		}
 		return status
 	}
 	// git cuts a path to fit 80 columns, which leaves it out of its folder; asked for a width that prints every path whole, with bars that
@@ -277,7 +361,8 @@ func (p *gitPlan) run(inv *invocation) int {
 }
 
 // command is the git that runs for output the model gets: the command line's own, with --abbrev-commit where nib prints commit headers as
-// one line, and with a --stat wide enough for every path whole and every changed line its own bar character, when wide.
+// one line, with a --stat wide enough for every path whole and every changed line its own bar character, when wide, and with bars that wide
+// in a diffstat git prints on its own, with columns.
 func (p *gitPlan) command(wide bool) []string {
 	var extra []string
 	if p.headers {
@@ -286,7 +371,45 @@ func (p *gitPlan) command(wide bool) []string {
 	if wide {
 		extra = append(extra, gitform.StatArgs...)
 	}
-	return append(append(append([]string{"git"}, p.args[:p.at+1]...), extra...), p.args[p.at+1:]...)
+	globals := p.args[:p.at]
+	if p.columns {
+		globals = append(slices.Clone(globals), "-c", "diff.statGraphWidth="+gitform.StatWidth)
+	}
+	return append(append(append(append([]string{"git"}, globals...), p.args[p.at]), extra...), p.args[p.at+1:]...)
+}
+
+// divergence tells how HEAD and target diverged, for a merge or pull that could not fast-forward; "" when git cannot say.
+func (p *gitPlan) divergence(inv *invocation) string {
+	var out bytes.Buffer
+	args := append(append([]string{"git"}, p.globals...), "rev-list", "--left-right", "--count", "HEAD..."+p.target)
+	if inv.call.runProgramTo(inv.ctx, args, &out, io.Discard, nil) != nil {
+		return ""
+	}
+	fields := strings.Fields(out.String())
+	if len(fields) != 2 {
+		return ""
+	}
+	return fmt.Sprintf("[nibash: HEAD and %s have diverged: %s only on HEAD, %s only on %[1]s]", p.target, commits(fields[0]), commits(fields[1]))
+}
+
+// commits is a count of commits in words.
+func commits(count string) string {
+	if count == "1" {
+		return "1 commit"
+	}
+	return count + " commits"
+}
+
+// reachesModel is whether what a command writes to w reaches the model as it is, through the terminal sink, so tidying it hides nothing a file
+// or a program would have read.
+func reachesModel(w io.Writer) bool {
+	switch w := w.(type) {
+	case *sink:
+		return true
+	case *headedWriter:
+		return reachesModel(w.w)
+	}
+	return false
 }
 
 // shown is about how many characters lines print as: the lines outside the diff's files laid out by folder, a wide stat's rows with their
@@ -321,10 +444,10 @@ func (p *gitPlan) shown(lines []string) int {
 	}))
 }
 
-// statCounts is gitform.StatCounts for a wide stat, the only one whose bars nib asked to draw every changed line, with the row's path as
-// the listing reads it.
+// statCounts is gitform.StatCounts for a wide stat or a diffstat git printed with columns, the only ones whose bars nib asked to draw every
+// changed line, with the row's path as the listing reads it.
 func (p *gitPlan) statCounts(line string) (string, listed, bool) {
-	if !p.wide {
+	if !p.wide && !p.columns {
 		return "", listed{}, false
 	}
 	shown, path, ok := gitform.StatCounts(line)
@@ -360,6 +483,9 @@ var (
 	gitStatus   = regexp.MustCompile(`^([ACDMTUXB]\t)(.+)()$`)
 	gitNumstat  = regexp.MustCompile(`^((?:\d+|-)\t(?:\d+|-)\t)(.+)()$`)
 	gitBarePath = regexp.MustCompile(`^()([^ \t]*[/.][^ \t]*)()$`)
+	gitSummary  = regexp.MustCompile(`^( (?:create|delete) mode \d{6} | mode change \d{6} => \d{6} )(.+)()$`)
+	gitConflict = regexp.MustCompile(`^(CONFLICT \([^)]+\): Merge conflict in )(.+)()$`)
+	gitMerging  = regexp.MustCompile(`^(Auto-merging )(.+)()$`)
 )
 
 // gitParser reads the path listing lines of the forms a command line asked git for; other lines, in a commit's message or a file's content,
@@ -371,12 +497,16 @@ func gitParser(forms []*regexp.Regexp) func(string) (listed, bool) {
 			if m == nil || !plainPath(m[2]) {
 				continue
 			}
-			after := m[3]
+			before, after := m[1], m[3]
+			if form == gitSummary {
+				// A file created or deleted with the usual mode says only that.
+				before = strings.Replace(before, " mode 100644 ", " ", 1)
+			}
 			if form == gitStat {
 				// The padding that lines up the bars would no longer line anything up.
 				after = " " + after
 			}
-			return listed{before: m[1], path: m[2], after: after}, true
+			return listed{before: before, path: m[2], after: after}, true
 		}
 		return listed{}, false
 	}
