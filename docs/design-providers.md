@@ -46,6 +46,8 @@ choice. The rows nib prints for it are still confined to the roots.
 ## Lifecycle
 
 Providers start with nib, before it answers the client, so their tools are listed from the first request; one that fails
-to start or to list its tools within 30 seconds is left out with a note on stderr. A provider whose process ended is
-started again on the next call to one of its tools; a call it was answering when it ended fails, saying so, and is not
-sent again, since nib cannot know what it did.
+to start or to list its tools within 30 seconds is left out with a note on stderr. A provider may begin work for nib's
+project directory as it starts, as zemble warms its daemon's index and symbol graph there, so the agent's first question
+is answered warm; nib waits for none of it. A provider whose process ended is started again on the next call to one of
+its tools; a call it was answering when it ended fails, saying so, and is not sent again, since nib cannot know what it
+did.
