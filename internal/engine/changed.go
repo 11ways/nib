@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/snapshots"
 )
@@ -24,8 +27,9 @@ type Change struct {
 	Rows []string
 }
 
-// Changed diffs canonical's version tagged was against view and records the new rows it shows whole as seen.
-func (e *Engine) Changed(ctx *Context, canonical, was string, view snapshots.View, most, limit int) Change {
+// Changed diffs canonical's version tagged was against view and records the new rows it shows whole as seen. A run of added lines that sent
+// holds in order, the text of a here-document the agent typed, prints as one marker and counts as seen and known.
+func (e *Engine) Changed(ctx *Context, canonical, was string, view snapshots.View, most, limit int, sent []string) Change {
 	var old *snapshots.Version
 	for _, v := range e.Store.Versions(ctx.Session, canonical) {
 		if v.Tag == was {
@@ -53,7 +57,7 @@ func (e *Engine) Changed(ctx *Context, canonical, was string, view snapshots.Vie
 		return result
 	}
 	var rows []string
-	var seen []int
+	var seen, known []int
 	shown := func(prefix string, line int) {
 		r := lineRow(line, view.Lines[line-1], editColumns)
 		rows = append(rows, prefix+r.text)
@@ -65,8 +69,16 @@ func (e *Engine) Changed(ctx *Context, canonical, was string, view snapshots.Vie
 	for i, change := range changes {
 		switch {
 		case change.Added:
-			for offset := range change.Count {
-				shown("+", after+offset)
+			if typedRun(view.Lines[after-1:after-1+change.Count], sent) {
+				rows = append(rows, sentMarker(after, after+change.Count-1))
+				for offset := range change.Count {
+					seen = append(seen, after+offset)
+					known = append(known, after+offset)
+				}
+			} else {
+				for offset := range change.Count {
+					shown("+", after+offset)
+				}
 			}
 			after += change.Count
 		case change.Removed:
@@ -89,7 +101,20 @@ func (e *Engine) Changed(ctx *Context, canonical, was string, view snapshots.Vie
 	}
 	result.Rows = rows
 	if len(seen) > 0 {
-		e.Store.Record(ctx.Session, canonical, view, seen, nil)
+		e.Store.Record(ctx.Session, canonical, view, seen, known)
 	}
 	return result
+}
+
+// typedRun says whether lines follow each other, in order, in one of texts.
+func typedRun(lines []string, texts []string) bool {
+	for _, text := range texts {
+		typed := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+		for start := 0; start+len(lines) <= len(typed); start++ {
+			if slices.Equal(typed[start:start+len(lines)], lines) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -793,7 +793,7 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		entry := fmt.Sprintf("%s#%s", c.tools.Display(path), view.Tag)
 		if !mine {
 			if found.was != "" && found.was != view.Tag {
-				if change := c.engine.Changed(c.tools, path, found.was, view, -1, 0); change.Counted {
+				if change := c.engine.Changed(c.tools, path, found.was, view, -1, 0, nil); change.Counted {
 					entry += fmt.Sprintf(" (was #%s, +%d -%d)", found.was, change.Added, change.Removed)
 				} else {
 					entry += fmt.Sprintf(" (was #%s)", found.was)
@@ -818,7 +818,7 @@ func (c *call) changed(before map[string]held, bodies []string) string {
 		case found.created:
 			entry += " (new)"
 		case found.was != "" && found.was != view.Tag:
-			change := c.engine.Changed(c.tools, path, found.was, view, changedLines, budget)
+			change := c.engine.Changed(c.tools, path, found.was, view, changedLines, budget, bodies)
 			if !change.Counted {
 				entry += fmt.Sprintf(" (was #%s)", found.was)
 				break

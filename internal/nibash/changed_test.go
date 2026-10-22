@@ -137,6 +137,19 @@ func TestAChangedFileTheAgentSawShowsItsChangeAsRows(t *testing.T) {
 	}
 }
 
+func TestLinesAHereDocumentAddedPrintAsOneMarker(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": "one\ntwo\n"})
+	f.run("cat a.txt")
+	out := f.run("cat >> a.txt <<'EOF'\nthree\nfour\nEOF")
+	expect(t, tags.ReplaceAllString(out, "#T"), "[changed by this command: a.txt#T (was #T, +2 -0)]\n[a.txt#T]\n[lines 3-4 as you sent them]")
+	// The agent typed them, so an edit replaces one at once.
+	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+FOUR", tagOf(t, out))); err != nil {
+		t.Fatalf("edit of a typed row: %v", err)
+	}
+	// Lines a program added print as rows.
+	expect(t, tags.ReplaceAllString(f.run("echo five >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n+5:five")
+}
+
 func TestALargeChangeOrAnUnseenFileShowsOnlyCounts(t *testing.T) {
 	var lines []string
 	for i := range 40 {
