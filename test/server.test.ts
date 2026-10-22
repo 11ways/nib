@@ -226,7 +226,7 @@ describe("MCP server", () => {
     expect(refused.isError).toBe(true)
     const applied = await call("edit", { input: `REAPPLY ${/REAPPLY ([a-z0-9]{6})$/.exec(refused.text)![1]}` })
     expect(applied.isError).toBeFalsy()
-    expect(applied.text).toContain("19:row 19\n20:TWENTY\n21:row 21")
+    expect(applied.text).toContain("19:row 19\n[line 20 as you sent it]\n21:row 21")
   })
 
   test("arguments in other tools' shapes work and teach nib's own: filePath with offset and limit, one path string, numbers as strings", async () => {

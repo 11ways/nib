@@ -63,9 +63,11 @@ type LineEdit struct {
 	Sub        *string
 	Quoted     bool
 	Opaque     bool
-	Old        []string
-	Written    string
-	Import     string
+	// Composed marks Content nib wrote from the agent's words, as a SUB or an IMPORT does, which the agent knows only part of.
+	Composed bool
+	Old      []string
+	Written  string
+	Import   string
 }
 
 const (

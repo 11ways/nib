@@ -148,7 +148,7 @@ func placeImports(canonical string, lines []string, edits, imports []snapshots.L
 		if s.after {
 			content = append(content, "")
 		}
-		edit := snapshots.LineEdit{Start: after, End: after, Operation: snapshots.After, Content: content}
+		edit := snapshots.LineEdit{Start: after, End: after, Operation: snapshots.After, Content: content, Composed: true}
 		if after == 0 {
 			edit.Start, edit.End, edit.Operation = 1, 1, snapshots.Before
 		}

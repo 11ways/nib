@@ -315,7 +315,7 @@ func resolveSubs(named, display string, lines []string, edits []snapshots.LineEd
 			cursor = s.at + len(s.old)
 		}
 		composed.WriteString(content[cursor:])
-		resolved = append(resolved, snapshots.LineEdit{Start: line, End: line, Operation: snapshots.Replace, Content: strings.Split(composed.String(), "\n"), Quoted: true})
+		resolved = append(resolved, snapshots.LineEdit{Start: line, End: line, Operation: snapshots.Replace, Content: strings.Split(composed.String(), "\n"), Quoted: true, Composed: true})
 	}
 	if len(failures) == 0 {
 		return checked{edits: resolved, lessons: lessons}, nil
@@ -490,12 +490,13 @@ func oldRowsLesson(edits []snapshots.LineEdit) []string {
 }
 
 // changeRow is one row of an edited file; origin is the 0-based index of the line it kept, -1 for a new row; was is the line a one-for-one
-// replacement overwrote, so a long changed line can show where it changed.
+// replacement overwrote, so a long changed line can show where it changed; written marks a new row the agent wrote whole, as it is.
 type changeRow struct {
-	raw    string
-	origin int
-	opaque bool
-	was    *string
+	raw     string
+	origin  int
+	opaque  bool
+	written bool
+	was     *string
 }
 
 type run struct{ at, length int }
@@ -534,7 +535,7 @@ func applyChanges(source *text, changes []rawEdit) applied {
 		// A replacement with as many rows as lines it replaces pairs them up, so each new row knows the line it overwrote.
 		paired := change.Operation == snapshots.Replace && len(change.raw) == change.End-change.Start+1
 		for offset, raw := range change.raw {
-			r := changeRow{raw: raw, origin: -1, opaque: change.Opaque}
+			r := changeRow{raw: raw, origin: -1, opaque: change.Opaque, written: !change.Composed}
 			if paired {
 				was := lineContent(source.lines[change.Start-1+offset])
 				r.was = &was
@@ -997,9 +998,11 @@ const (
 
 // preview is the rows of an edit response: the kept row on each side of every change, the new rows whole except a sparse N~ map inside a long
 // run, and one note per stretch of moved lines the agent knew, with their old numbers. New rows are cut past limit and kept rows past keptLimit.
-func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, keptLimit int) previewed {
+// With sent, a run of new rows the agent wrote whole prints as one marker naming their lines instead, a long run's map rows under it.
+func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, keptLimit int, sent bool) previewed {
 	full := map[int]bool{}
 	mapped := map[int]bool{}
+	markers := map[int]string{}
 	var contents []string
 	lines := func() []string {
 		if contents == nil {
@@ -1023,14 +1026,23 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 				full[index] = true
 			}
 		}
-		if r.length <= writtenRows {
+		switch {
+		case r.length == 0:
+			continue
+		case sent && rows[r.at].written:
+			markers[r.at] = sentMarker(r.at+1, r.at+r.length)
+			if r.length <= writtenRows {
+				continue
+			}
+		case r.length <= writtenRows:
 			for index := r.at; index < r.at+r.length; index++ {
 				full[index] = true
 			}
 			continue
+		default:
+			full[r.at] = true
+			full[r.at+r.length-1] = true
 		}
-		full[r.at] = true
-		full[r.at+r.length-1] = true
 		after := r.at + 1
 		for _, line := range mapLines(lines(), r.at+2, r.at+r.length-1, mapOptions{after: &after}) {
 			if !rows[line-1].opaque {
@@ -1113,11 +1125,17 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 	for k := range notes {
 		indexes[k] = true
 	}
+	for k := range markers {
+		indexes[k] = true
+	}
 	var out previewed
 	for _, index := range sortedSet(indexes) {
 		whole := full[index]
 		if note, ok := notes[index]; ok {
 			out.output = append(out.output, note)
+		}
+		if marker, ok := markers[index]; ok {
+			out.output = append(out.output, marker)
 		}
 		r := rows[index]
 		if whole {
@@ -1153,6 +1171,14 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 	}
 	out.moved = len(notes) > 0
 	return out
+}
+
+// sentMarker is the row that stands for lines first to last, which the agent sent whole in its edit and knows as they are.
+func sentMarker(first, last int) string {
+	if first == last {
+		return fmt.Sprintf("[line %d as you sent it]", first)
+	}
+	return fmt.Sprintf("[lines %d-%d as you sent them]", first, last)
 }
 
 func abs(n int) int {
@@ -1935,7 +1961,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 		if minifiedReason(canonical, len(item.live.Key), item.live.Lines) != "" {
 			limit = minifiedColumns
 		}
-		rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, limit)
+		rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, limit, false)
 		// Rewriting the last line of a file without a final newline is the usual way to try adding one, which an edit never does on its own.
 		unterminated := false
 		if item.source.body != "" && !strings.HasSuffix(item.source.body, "\n") {
@@ -2035,7 +2061,7 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	if minifiedReason(limitPath, len(next.Key), next.Lines) != "" {
 		limit = minifiedColumns
 	}
-	rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, min(limit, keptColumns))
+	rows := preview(item.applied.rows, item.applied.runs, item.prior, limit, min(limit, keptColumns), true)
 	shownDisplay := display
 	if destination != nil {
 		shownDisplay = destination.display

@@ -104,7 +104,7 @@ func TestFileViewsPrintAnchoredRowsThatEditAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit from grep rows: %v", err)
 	}
-	if !strings.Contains(result.Text, "4:four NEEDLE") {
+	if !strings.Contains(result.Text, "[line 4 as you sent it]") {
 		t.Fatalf("edit response: %s", result.Text)
 	}
 	// A line the shell never showed still needs a read.

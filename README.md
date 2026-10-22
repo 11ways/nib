@@ -534,15 +534,18 @@ REM
   line, and no other hunk of the section anchors it. Otherwise the `SUB` is refused as before, showing the line.
 - A successful section returns its new `[PATH#TAG]` and the kept row on each side of each change, in full, where a
   leftover line or a misplaced range shows (a grep replace token applied as previewed returns only the tag and a count;
-  see grep). The new rows come back whole, so a row that landed other than the agent meant (a cut-off line, a wrong
-  place) shows: every row of a run of up to 5, otherwise the first and last row, with a sparse map of `N~TEXT` rows
-  between them (the line number plus the first 30 characters after the indentation; at most 40 map rows per response).
+  see grep). The new rows the agent sent whole come back as one marker per run naming their lines,
+  `[lines 40-46 as you sent them]` (`[line 40 as you sent it]` for one), since the agent knows them, and a run of more
+  than 5 keeps a sparse map of `N~TEXT` rows under the marker (the line number plus the first 30 characters after the
+  indentation; at most 40 map rows per response), so no number needs counting. The rows nib composed from the agent's
+  words, a `SUB`'s result or an `IMPORT`, print as rows: every row of a run of up to 5, otherwise the first and last
+  row with the map between them.
   Each stretch of kept lines that moved and holds a line the agent knew gets one note, such as
   `[lines 427-1004 are old lines 423-1000, moved down by 4]`; an edit that moves nothing adds none. An agent's first
   response with such a note also says how to anchor on a moved line without a read: a `~TEXT` check of its start at its
-  new number. An edit response cuts a new row past 300 characters and a kept row past 120, as the agent knows the one
-  and only needs the other to place the change; a changed row past the cut shows the stretch where it changed when a
-  line was replaced by one line, as `[N chars 2952-3057 of 3108]|...`, instead of the line's start. A cut row still
+  new number. An edit response cuts a composed row past 300 characters and a kept row past 120, as the agent knows part
+  of the one and only needs the other to place the change; a changed row past the cut shows the stretch where it changed
+  when a line was replaced by one line, as `[N chars 2952-3057 of 3108]|...`, instead of the line's start. A cut row still
   counts as seen when the agent wrote it, or knew the line whole before the edit moved it, so it anchors the next edit;
   every new row does, cut, mapped or elided, except a `SUB` result on a line the agent never knew whole. A response that
   changes nothing still shows the lines whole, up to 2000 characters. Follow-up edits can use that tag and numbering
@@ -1223,7 +1226,7 @@ line shown, and `path#TAG` reads record it like an edit response.
   stands for stay seen at their current numbers, so an edit anchors on them with no read. The first marker an agent gets
   ends with a line saying what it means; the same call sent again straight away, or a read with `full: true`, prints the
   rows. Edit responses are unchanged: their kept rows are one on each side of a change, never a run of 3, and the agent's
-  own new rows always print.
+  own new rows print as their `[lines A-B as you sent them]` marker.
 - **Dropped contexts.** When Claude Code compacts an agent's conversation, or a session starts anew (`/clear`, a
   resume), the agent no longer has what it was shown: every line it saw or knew before that moment stops counting, for
   markers and for edits, which then need the lines shown again (the usual refusal, and an unchanged resend), and the

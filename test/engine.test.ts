@@ -185,7 +185,7 @@ describe("large reads", () => {
     expect(r.text).not.toContain("const doubled")
     expect(r.text).not.toContain("Explains")
     const edited = await f.edit(r.tag, [{ start: 7, content: "  method0(value: number, scale = 1) {", operation: "replace" }])
-    expect(edited.text).toContain("7:  method0(value: number, scale = 1) {")
+    expect(edited.text).toContain("6:export class Big {\n[line 7 as you sent it]\n8:")
     await expect(f.edit(edited.tag, [{ start: 13, content: "x", operation: "replace" }])).rejects.toThrow("never displayed in full")
     expect((await f.read(":1-")).anchors).toHaveLength(lines.length - 1)
   })
@@ -453,7 +453,7 @@ describe("edit", () => {
     const shifted = await h.edit(t.tag, [{ start: 2, content: "TWO", operation: "replace" }])
     expect(await readFile(h.filePath, "utf8")).toBe("zero\none\nTWO\nthree\n")
     expect(shifted.text).toContain("Recovered by remapping stale line numbers")
-    expect(shifted.text).toStartWith(`[file.txt#${fileTag("zero\none\nTWO\nthree\n")}]\n2:one\n3:TWO\n4:three`)
+    expect(shifted.text).toStartWith(`[file.txt#${fileTag("zero\none\nTWO\nthree\n")}]\n2:one\n[line 3 as you sent it]\n4:three`)
     const d = await fixture()
     const u = await d.read()
     await writeFile(d.filePath, "one\ntwo\nthree\none\n")
@@ -551,13 +551,14 @@ describe("edit", () => {
     const f = await fixture(Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n") + "\n")
     const r = await f.read()
     const first = await f.edit(r.tag, [{ start: 10, content: "inserted a\ninserted b", operation: "after" }])
-    // The two inserted lines come back whole between the kept rows around them, and the lines they moved down as one note.
-    expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n11:inserted a\n12:inserted b\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]\n${movedLesson}`)
+    // The two inserted lines, which the agent sent, come back as one marker between the kept rows around them, and the lines they moved down
+    // as one note.
+    expect(first.text).toBe(`[file.txt#${first.tag}]\n10:line 10\n[lines 11-12 as you sent them]\n13:line 11\n[lines 14-22 are old lines 12-20, moved down by 2]\n${movedLesson}`)
     expect(first.tag).toBe(fileTag(await readFile(f.filePath, "utf8")))
     const second = await f.edit(first.tag, [{ start: 2, content: "LINE 2", operation: "replace" }, { start: 12, content: "INSERTED B", operation: "replace" }])
-    expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n2:LINE 2\n3:line 3\n11:inserted a\n12:INSERTED B\n13:line 11`)
+    expect(second.text).toBe(`[file.txt#${second.tag}]\n1:line 1\n[line 2 as you sent it]\n3:line 3\n11:inserted a\n[line 12 as you sent it]\n13:line 11`)
     const long = await f.edit(second.tag, [{ start: 1, content: Array.from({ length: 10 }, (_, index) => `new ${index}`).join("\n"), operation: "before" }])
-    expect(long.text).toBe(`[file.txt#${long.tag}]\n1:new 0\n10:new 9\n11:line 1\n[lines 12-32 are old lines 2-22, moved down by 10]`)
+    expect(long.text).toBe(`[file.txt#${long.tag}]\n[lines 1-10 as you sent them]\n11:line 1\n[lines 12-32 are old lines 2-22, moved down by 10]`)
   })
 
   test("lines outside the tagged output are rejected with their content, then a straight retry succeeds", async () => {
@@ -660,14 +661,14 @@ describe("multi-file patches", () => {
     expect(await readFile(path.join(f.directory, "new/created.txt"), "utf8")).toBe("hello\n\n")
     await expect(stat(path.join(f.directory, "b.txt"))).rejects.toThrow()
     await expect(stat(path.join(f.directory, "gone.txt"))).rejects.toThrow()
-    expect(result.text).toContain(`Moved b.txt to [nested/dir/c.txt#${fileTag("bee\ncee\n")}]\n1:bee\n2:cee`)
+    expect(result.text).toContain(`Moved b.txt to [nested/dir/c.txt#${fileTag("bee\ncee\n")}]\n1:bee\n[line 2 as you sent it]`)
     expect(result.text).toContain("Moved gone.txt to the trash; trash restore gone.txt in nibash puts it back")
     const info = path.join(process.env.XDG_DATA_HOME!, "Trash", "info")
     const records = await Promise.all((await readdir(info)).map((name) => readFile(path.join(info, name), "utf8")))
     expect(records.some((record) => record.includes("/gone.txt\nDeletionDate="))).toBe(true)
     expect(result.text).toContain(`Created [new/created.txt#${fileTag("hello\n\n")}] (2 lines, 1 non-blank, 1 shown)\n1~hello`)
     const followUp = await f.patch(`[nested/dir/c.txt#${fileTag("bee\ncee\n")}]\nPUT 2.=2:\n+CEE`)
-    expect(followUp.text).toContain("2:CEE")
+    expect(followUp.text).toContain("1:bee\n[line 2 as you sent it]")
   })
 
   test("one invalid section stops every write", async () => {
@@ -717,7 +718,7 @@ describe("multi-file patches", () => {
     await chmod(f.filePath, 0o640)
     const r = await f.read()
     const copied = await f.patch(`[file.txt#${r.tag}]\nPUT 2.=2:\n+TWO\nCP variant/copy.txt`)
-    expect(copied.text).toBe(`Copied file.txt to [variant/copy.txt#${fileTag("one\nTWO\nthree\n")}]\n1:one\n2:TWO\n3:three`)
+    expect(copied.text).toBe(`Copied file.txt to [variant/copy.txt#${fileTag("one\nTWO\nthree\n")}]\n1:one\n[line 2 as you sent it]\n3:three`)
     expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\n")
     expect(await readFile(path.join(f.directory, "variant/copy.txt"), "utf8")).toBe("one\nTWO\nthree\n")
     expect((await stat(path.join(f.directory, "variant/copy.txt"))).mode & 0o777).toBe(0o640)
@@ -1090,12 +1091,12 @@ describe("created files", () => {
     const f = await fixture()
     const small = await f.engine.write(f.ctx, { path: "small.txt", content: "a\nb\nc\n" })
     const smallTag = /#([0-9A-F]{4})\]/.exec(small.text)![1]!
-    expect((await f.patch(`[small.txt#${smallTag}]\nPUT 2.=2:\n+B`)).text).toContain("1:a\n2:B\n3:c")
+    expect((await f.patch(`[small.txt#${smallTag}]\nPUT 2.=2:\n+B`)).text).toContain("1:a\n[line 2 as you sent it]\n3:c")
     const content = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n"
     const large = await f.engine.write(f.ctx, { path: "large.txt", content })
     const largeTag = /#([0-9A-F]{4})\]/.exec(large.text)![1]!
     const edited = await f.patch(`[large.txt#${largeTag}]\nPUT 5.=5:\n+five`)
-    expect(edited.text).toContain("4:line 4\n5:five\n6:line 6")
+    expect(edited.text).toContain("4:line 4\n[line 5 as you sent it]\n6:line 6")
     const overwritten = await f.engine.write(f.ctx, { path: "large.txt", content: "x\n", tag: edited.tag })
     expect(overwritten.text).toStartWith("Overwrote [large.txt#")
   })
@@ -1379,7 +1380,7 @@ describe("final newlines", () => {
     // With the final newline in place, the same hunk adds a real blank line.
     const blank = await f.patch(`[file.txt#${added.tag}]\nPUT >$:\n+`)
     expect(await readFile(f.filePath, "utf8")).toBe("one\r\ntwo\r\nthree\r\n\r\n")
-    expect(blank.text).toBe(`[file.txt#${blank.tag}]\n3:three\n4:`)
+    expect(blank.text).toBe(`[file.txt#${blank.tag}]\n3:three\n[line 4 as you sent it]`)
   })
 
   test("an empty row that ends an unterminated file next to a deletion still gets its response, before anything is written", async () => {
@@ -1396,7 +1397,7 @@ describe("final newlines", () => {
     const r = await f.read()
     const added = await f.patch(`[file.txt#${r.tag}]\nPUT >$:\n+c\n+`)
     expect(await readFile(f.filePath, "utf8")).toBe("a\nb\nc\n")
-    expect(added.text).toBe(`[file.txt#${added.tag}]\n2:b\n3:c\n[file.txt now ends with a newline]`)
+    expect(added.text).toBe(`[file.txt#${added.tag}]\n2:b\n[line 3 as you sent it]\n[file.txt now ends with a newline]`)
   })
 
   test("rewriting the last line of a file without a final newline says how to add one", async () => {
@@ -1454,7 +1455,7 @@ describe("row maps and ~ checks", () => {
       "23~Last line",
     ].join("\n"))
     const edited = await f.patch(`[brief.md#${tag}]\nPUT >19:\n+\n+Context.\nPUT 15.=15:\n+- item fifteen\nPUT 6.=7:\n+- items 6 and 7`)
-    expect(edited.text).toContain("6:- items 6 and 7\n7:- item 8\n[lines 8-12 are old lines 9-13, moved up by 1]\n13:- item 14\n14:- item fifteen\n15:- item 16\n[lines 16-17 are old lines 17-18, moved up by 1]\n18:## Do the remaining work before the deadline\n19:\n20:Context.\n21:\n")
+    expect(edited.text).toContain("5:## Settled\n[line 6 as you sent it]\n7:- item 8\n[lines 8-12 are old lines 9-13, moved up by 1]\n13:- item 14\n[line 14 as you sent it]\n15:- item 16\n[lines 16-17 are old lines 17-18, moved up by 1]\n18:## Do the remaining work before the deadline\n[lines 19-20 as you sent them]\n21:\n")
     expect(await lineOf(f, "brief.md", 20)).toBe("Context.")
     expect(await lineOf(f, "brief.md", 6)).toBe("- items 6 and 7")
   })
@@ -1502,10 +1503,11 @@ describe("row maps and ~ checks", () => {
     const f = await fixture("end\n")
     const r = await f.read()
     const inserted = await f.edit(r.tag, [{ start: 1, content: Array.from({ length: 30 }, (_, index) => `new ${index + 1}`).join("\n"), operation: "before" }])
-    expect(inserted.text).toBe(`[file.txt#${inserted.tag}]\n1:new 1\n11~new 11\n21~new 21\n30:new 30\n31:end`)
+    // The run the agent sent prints as one marker, with map rows in it so its numbers need no counting.
+    expect(inserted.text).toBe(`[file.txt#${inserted.tag}]\n[lines 1-30 as you sent them]\n11~new 11\n21~new 21\n31:end`)
     // A shown map row is an anchor; one between them needs a ~ check.
     const next = await f.patch(`[file.txt#${inserted.tag}]\nPUT 11.=11:\n+NEW 11\nPUT 15.=15:\n~new 15\n+NEW 15`)
-    expect(next.text).toContain("11:NEW 11")
+    expect(next.text).toContain("10:new 10\n[line 11 as you sent it]\n12:new 12")
     expect(await lineOf(f, "file.txt", 15)).toBe("NEW 15")
   })
 
@@ -1605,9 +1607,9 @@ describe("SUB", () => {
     const prose = (word: string) => `${word} ` + "word ".repeat(80)
     const f = await fixture(`top\n${prose("kept")}\nend\n`)
     const r = await f.read()
-    // A new long row the agent wrote, shown cut at 300 characters, still anchors an insert after it.
+    // A new long row the agent wrote prints as a marker, and still anchors an insert after it.
     const written = await f.patch(`[file.txt#${r.tag}]\nPUT >1:\n+${prose("new")}${"tail ".repeat(60)}marker`)
-    expect(written.text).toContain("\n[line 2, chars 1-300 of ")
+    expect(written.text).toContain("\n1:top\n[line 2 as you sent it]\n")
     const after = await f.patch(`[file.txt#${written.tag}]\nPUT >2:\n+after new`)
     // The kept line moved down and showed cut at 120 characters; the agent read it whole before, so it anchors an edit at its new number.
     expect(after.text).toContain("\n[line 4, chars 1-120 of ")
@@ -1646,7 +1648,7 @@ describe("tagless appends", () => {
   test("a [PATH] section appends without a tag, even in a session that never read the file", async () => {
     const f = await fixture()
     const result = await f.patch("[file.txt]\nPUT >$:\n+four")
-    expect(result.text).toBe(`[file.txt#${fileTag("one\ntwo\nthree\nfour\n")}]\n3:three\n4:four`)
+    expect(result.text).toBe(`[file.txt#${fileTag("one\ntwo\nthree\nfour\n")}]\n3:three\n[line 4 as you sent it]`)
     await f.engine.patch({ ...f.ctx, session: "other" }, "[file.txt]\nPUT >$:\n+five")
     expect(await readFile(f.filePath, "utf8")).toBe("one\ntwo\nthree\nfour\nfive\n")
   })
@@ -1943,7 +1945,7 @@ describe("moved lines after an edit", () => {
     const f = await fixture(numbered(1000))
     const r = await f.read(":1-")
     const edited = await f.edit(r.tag, [{ start: 20, content: "a\nb\nc\nd", operation: "after" }])
-    expect(edited.text.split("\n")).toEqual([`[file.txt#${edited.tag}]`, "20:line 20", "21:a", "22:b", "23:c", "24:d", "25:line 21", "[lines 26-1004 are old lines 22-1000, moved down by 4]", movedLesson])
+    expect(edited.text.split("\n")).toEqual([`[file.txt#${edited.tag}]`, "20:line 20", "[lines 21-24 as you sent them]", "25:line 21", "[lines 26-1004 are old lines 22-1000, moved down by 4]", movedLesson])
     const unchecked = await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 500.=500:\n+x`))
     expect(unchecked).toContain("This edit anchors to lines 500 of file.txt")
     expect(unchecked).toContain("Lines you wrote, or saw before an edit moved them, can skip this step")
@@ -1972,14 +1974,14 @@ describe("moved lines after an edit", () => {
     const cut = await f.edit((await f.read(":1-")).tag, [{ start: 10, end: 13, content: "", operation: "replace" }])
     expect(cut.text).toBe(`[file.txt#${cut.tag}]\n9:line 9\n10:line 14\n[lines 11-996 are old lines 15-1000, moved up by 4]\n${movedLesson}`)
     const same = await f.edit(cut.tag, [{ start: 5, content: "replaced", operation: "replace" }])
-    expect(same.text).toBe(`[file.txt#${same.tag}]\n4:line 4\n5:replaced\n6:line 6`)
+    expect(same.text).toBe(`[file.txt#${same.tag}]\n4:line 4\n[line 5 as you sent it]\n6:line 6`)
   })
 
   test("a moved stretch gets its note when it holds a line the agent saw, and a check lets an insert there but not a replace", async () => {
     const f = await fixture(numbered(100))
     const edited = await f.edit((await f.read(":1-5")).tag, [{ start: 2, content: "x", operation: "after" }])
     // Old lines 4 and 5 were read, so the stretch they moved in gets a note; the lines past them were never seen.
-    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n2:line 2\n3:x\n4:line 3\n[lines 5-101 are old lines 4-100, moved down by 1]\n${movedLesson}`)
+    expect(edited.text).toBe(`[file.txt#${edited.tag}]\n2:line 2\n[line 3 as you sent it]\n4:line 3\n[lines 5-101 are old lines 4-100, moved down by 1]\n${movedLesson}`)
     expect(await refusal(f.patch(`[file.txt#${edited.tag}]\nPUT 15.=15:\n~line 14\n+y`))).toContain("never displayed in full")
     await f.patch(`[file.txt#${edited.tag}]\nPUT >15:\n~line 14\n+after fourteen`)
     expect((await readFile(f.filePath, "utf8")).split("\n")[15]).toBe("after fourteen")
