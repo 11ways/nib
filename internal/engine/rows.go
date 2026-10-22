@@ -45,7 +45,8 @@ func visible(content string) string {
 // Visible is visible for other packages.
 func Visible(content string) string { return visible(content) }
 
-type marks struct{ cut, colored bool }
+// marks are what a row's bracket says of it: cut, stripped of color, and, for a cut row, short, cut below what a read shows whole.
+type marks struct{ cut, colored, short bool }
 
 type span struct{ start, end int }
 
@@ -192,13 +193,14 @@ func lineRow(line int, content string, limit int) row {
 	if cut {
 		labels = append(labels, charsLabel([]string{fmt.Sprintf("1-%d", limit)}, length))
 	}
-	return row{text: cutRow(line, strings.Join(labels, ", "), js.Slice(shown, 0, limit)), marks: marks{cut, colored}}
+	return row{text: cutRow(line, strings.Join(labels, ", "), js.Slice(shown, 0, limit)), marks: marks{cut: cut, colored: colored}}
 }
 
 // The notes that explain bracketed rows, by the lesson each teaches; the rows themselves say what they are, so an agent gets each once
 // (teachRowNotes), and again after its context was dropped.
 const (
 	cutRowsNote      = "[cut rows: change them in place with SUB N: OLD, or read %s:N with maxLineLength to see one whole]"
+	cutShortNote     = "[cut rows: change them in place with SUB N: OLD, or read %s:N to see one whole]"
 	cutRevisionNote  = "[cut rows: read %s:N with maxLineLength to see one whole]"
 	ansiRowsNote     = "[ansi rows: their color codes are stripped, so they are not anchors; change them in place with SUB N: OLD]"
 	cutRowsLesson    = "cut-rows"
@@ -213,14 +215,20 @@ var rowNoteLessons = []struct {
 }{
 	{regexp.MustCompile(`^` + strings.ReplaceAll(regexp.QuoteMeta(cutRowsNote), `%s`, rowNoteDisplayRe) + `$`), cutRowsLesson},
 	{regexp.MustCompile(`^` + strings.ReplaceAll(regexp.QuoteMeta(cutRevisionNote), `%s`, rowNoteDisplayRe) + `$`), cutRowsLesson},
+	{regexp.MustCompile(`^` + strings.ReplaceAll(regexp.QuoteMeta(cutShortNote), `%s`, rowNoteDisplayRe) + `$`), cutRowsLesson},
 	{regexp.MustCompile(`^` + regexp.QuoteMeta(ansiRowsNote) + `$`), ansiRowsLesson},
 }
 
-// rowNotes are footer notes explaining the bracketed rows among rows, once per block; teachRowNotes keeps the ones the agent is to learn.
+// rowNotes are footer notes explaining the bracketed rows among rows, once per block; teachRowNotes keeps the ones the agent is to learn. When
+// every cut row is short, a plain read shows it whole.
 func rowNotes(display string, rows []marks) []string {
 	var notes []string
 	if slices.ContainsFunc(rows, func(m marks) bool { return m.cut }) {
-		notes = append(notes, fmt.Sprintf(cutRowsNote, display))
+		note := cutShortNote
+		if slices.ContainsFunc(rows, func(m marks) bool { return m.cut && !m.short }) {
+			note = cutRowsNote
+		}
+		notes = append(notes, fmt.Sprintf(note, display))
 	}
 	if slices.ContainsFunc(rows, func(m marks) bool { return m.colored }) {
 		notes = append(notes, ansiRowsNote)

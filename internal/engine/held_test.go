@@ -53,3 +53,14 @@ func TestRowsTheAgentSentPrintAsOneMarkerAndASubsResultAsItsRow(t *testing.T) {
 		t.Fatalf("sub: %v\n%s", err, sub.Text)
 	}
 }
+
+// A kept row an edit response cuts at 120 characters shows whole in a plain read, so its note asks for no maxLineLength.
+func TestAnEditResponsesCutRowNeedsOnlyAPlainRead(t *testing.T) {
+	e, ctx, path := showFixture(t, "one\n"+strings.Repeat("long ", 60)+"\nthree\n")
+	tag := regexp.MustCompile(`#([0-9A-F]{4})\]`).FindStringSubmatch(readText(t, e, ctx, path))[1]
+	edited, err := e.Patch(ctx, "[a.py#"+tag+"]\nPUT 1:\n+ONE")
+	if err != nil || !strings.Contains(edited.Text, "\n[line 2, chars 1-120 of 300]|long ") ||
+		!strings.Contains(edited.Text, "\n[cut rows: change them in place with SUB N: OLD, or read a.py:N to see one whole]") {
+		t.Fatalf("edit: %v\n%s", err, edited.Text)
+	}
+}

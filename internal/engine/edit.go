@@ -1152,13 +1152,15 @@ func preview(rows []changeRow, runs []run, prior *snapshots.Version, limit, kept
 			anchor := knew(index)
 			if w != nil {
 				out.output = append(out.output, cutRow(index+1, w.label, w.text))
-				out.marks = append(out.marks, marks{cut: true})
+				out.marks = append(out.marks, marks{cut: true, short: rowLimit < LineLimit})
 			} else {
 				line := lineRow(index+1, content, rowLimit)
 				out.output = append(out.output, line.text)
 				anchor = anchor || line.anchor
 				if !line.anchor {
-					out.marks = append(out.marks, line.marks)
+					m := line.marks
+					m.short = m.cut && rowLimit < LineLimit
+					out.marks = append(out.marks, m)
 				}
 			}
 			if anchor {
