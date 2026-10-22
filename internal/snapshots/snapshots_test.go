@@ -49,6 +49,39 @@ func TestStoreDeduplicatesUnionsAndEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
+func TestATextManyAgentsHoldCountsOnce(t *testing.T) {
+	store := NewStoreWith(Limits{Paths: 8, Versions: 2, Units: 1 << 30})
+	text := "the same file\n"
+	for _, session := range []string{"main", "builder", "reviewer"} {
+		store.Record(session, "a", view(text), []int{1}, nil)
+	}
+	// Three histories cost one unit each, and their one text once.
+	if want := 3 + 2*len(text); store.units != want || len(store.texts) != 1 || store.texts[text].refs != 3 {
+		t.Fatalf("units %d, want %d; texts %d", store.units, want, len(store.texts))
+	}
+	store.Record("main", "a", view("changed\n"), []int{1}, nil)
+	store.Forget("builder", time.Now())
+	if store.texts[text].refs != 3 {
+		t.Fatalf("refs %d", store.texts[text].refs)
+	}
+}
+
+func TestAFileTheAgentWroteOutlastsOneRoundOfEviction(t *testing.T) {
+	store := NewStoreWith(Limits{Paths: 2, Versions: 1, Units: 1 << 30})
+	store.Record("main", "AGENTS.md", view("rules"), []int{1}, []int{1})
+	store.Record("builder", "x.go", view("x"), []int{1}, nil)
+	store.Record("builder", "y.go", view("y"), []int{1}, nil)
+	if len(store.Versions("main", "AGENTS.md")) != 1 || len(store.Versions("builder", "x.go")) != 0 {
+		t.Fatal("the written file went before one only read")
+	}
+	// The second round takes it like any other.
+	store.Record("builder", "z.go", view("z"), []int{1}, nil)
+	store.Record("builder", "w.go", view("w"), []int{1}, nil)
+	if len(store.Versions("main", "AGENTS.md")) != 0 {
+		t.Fatal("the written file never goes")
+	}
+}
+
 func TestAnEvictedHistoryIsRememberedAsForgotten(t *testing.T) {
 	store := NewStoreWith(Limits{Paths: 2, Versions: 2, Units: 1 << 30})
 	store.Record("a", "/f", view("x"), []int{1}, nil)

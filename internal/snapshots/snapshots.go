@@ -93,6 +93,14 @@ type history struct {
 	units    int
 	// forgotten is set when an earlier history of the same agent and file was evicted: lines seen before then no longer count.
 	forgotten bool
+	// edited is set when the agent wrote lines of the file, which gets the history a second round before eviction takes it.
+	edited bool
+}
+
+// sharedText is the one copy of a version's text every history holding that text uses, and how many versions hold it.
+type sharedText struct {
+	view View
+	refs int
 }
 
 // Store holds per-session file versions with LRU eviction across all sessions and paths. It is safe for concurrent use; a Version's line
@@ -103,6 +111,8 @@ type Store struct {
 	histories map[string]*list.Element
 	order     *list.List
 	units     int
+	// texts are the texts the versions hold, each once: units count a text once however many agents hold it.
+	texts     map[string]*sharedText
 	forgotten map[string]bool
 	evicted   *list.List
 	taught    map[string]bool
@@ -120,7 +130,7 @@ func NewStore() *Store { return NewStoreWith(Limits{maxPaths, maxVersions, maxUn
 
 // NewStoreWith makes a store with the given limits.
 func NewStoreWith(limits Limits) *Store {
-	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, cleared: map[string]int64{}, Now: time.Now}
+	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), texts: map[string]*sharedText{}, forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, cleared: map[string]int64{}, Now: time.Now}
 }
 
 func id(session, path string) string { return session + "\x00" + path }
@@ -145,6 +155,7 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 		s.order.Remove(element)
 		delete(s.histories, key)
 		s.units -= h.units
+		s.unshare(h.versions)
 	}
 	var version *Version
 	for i, existing := range h.versions {
@@ -177,9 +188,8 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 		h.versions = h.versions[:s.limits.Versions]
 	}
 	h.units = 1
-	for _, v := range h.versions {
-		h.units += js.Len(v.Key) * 2
-	}
+	s.share(h.versions)
+	h.edited = h.edited || len(known) > 0
 	s.histories[key] = s.order.PushBack(h)
 	s.units += h.units
 	s.evict()
@@ -239,7 +249,33 @@ func (s *Store) carry(session, path string, view View) *carried {
 	return c
 }
 
-// evict drops least recently used histories until the store is within its limits, remembering which.
+// share charges the store for the texts of versions, each once, and makes every version hold the one copy of its text; unshare releases them.
+func (s *Store) share(versions []*Version) {
+	for _, v := range versions {
+		t, ok := s.texts[v.Key]
+		if !ok {
+			t = &sharedText{view: v.View}
+			s.texts[v.Key] = t
+			s.units += js.Len(v.Key) * 2
+		}
+		t.refs++
+		v.View.Key, v.View.Lines = t.view.Key, t.view.Lines
+	}
+}
+
+func (s *Store) unshare(versions []*Version) {
+	for _, v := range versions {
+		if t, ok := s.texts[v.Key]; ok {
+			if t.refs--; t.refs == 0 {
+				delete(s.texts, v.Key)
+				s.units -= js.Len(v.Key) * 2
+			}
+		}
+	}
+}
+
+// evict drops least recently used histories until the store is within its limits, remembering which; one of a file the agent wrote lines of
+// goes to the back once first, so an agent's own files outlast what other agents only read since.
 func (s *Store) evict() {
 	for len(s.histories) > s.limits.Paths || s.units > s.limits.Units {
 		oldest := s.order.Front()
@@ -247,7 +283,13 @@ func (s *Store) evict() {
 			break
 		}
 		old := oldest.Value.(*history)
+		if old.edited {
+			old.edited = false
+			s.order.MoveToBack(oldest)
+			continue
+		}
 		s.units -= old.units
+		s.unshare(old.versions)
 		s.order.Remove(oldest)
 		delete(s.histories, old.id)
 		s.forgotten[old.id] = true
@@ -469,6 +511,7 @@ func (s *Store) Copy(from, to string, asOf time.Time) {
 		switch {
 		case strings.HasPrefix(h.id, target):
 			s.units -= h.units
+			s.unshare(h.versions)
 			s.order.Remove(element)
 			delete(s.histories, h.id)
 		case strings.HasPrefix(h.id, source):
@@ -478,7 +521,7 @@ func (s *Store) Copy(from, to string, asOf time.Time) {
 	}
 	for _, element := range originals {
 		h := element.Value.(*history)
-		copied := &history{id: target + h.id[len(source):], units: 1}
+		copied := &history{id: target + h.id[len(source):], units: 1, edited: h.edited}
 		for _, v := range h.versions {
 			if v.at >= moment {
 				continue
@@ -487,11 +530,11 @@ func (s *Store) Copy(from, to string, asOf time.Time) {
 			version.Seen, version.seenAt = before(v.Seen, v.seenAt, moment)
 			version.Known, version.knownAt = before(v.Known, v.knownAt, moment)
 			copied.versions = append(copied.versions, version)
-			copied.units += js.Len(v.Key) * 2
 		}
 		if len(copied.versions) == 0 {
 			continue
 		}
+		s.share(copied.versions)
 		s.histories[copied.id] = s.order.InsertAfter(copied, element)
 		s.units += copied.units
 	}

@@ -1186,7 +1186,9 @@ and only for subagents: a Claude Code subagent the hook names, or an OpenCode ch
 ### Snapshots, seen lines and stale tags
 
 The server keeps an in-memory snapshot store for its process: up to 4 versions per path, 4096 agent and file pairs and
-64 MiB of text, evicting the least recently used pair. Evicting one drops what that agent saw of the file, as a restart
+64 MiB of text, each distinct text held and counted once however many agents hold it, evicting the least recently used
+pair; a pair whose file the agent wrote lines of goes to the back once first, so an orchestrator's own files outlast what
+its subagents only read since. Evicting one drops what that agent saw of the file, as a restart
 does; nib remembers that it did, and an edit then refused for lines read before says so instead of calling them never
 displayed. The main agent's calls share one session in it; each Claude Code subagent that nib's hook names, and each
 OpenCode session, gets its own, so lines a subagent saw never let the main agent, or another subagent, edit them, and
