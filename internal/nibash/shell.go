@@ -338,6 +338,11 @@ type call struct {
 	change []string
 	// halted is set once a directory change whose failure the command left unhandled failed, ending the call.
 	halted *stopped
+	// steps are the commands the call watches for failing, and failures those that failed, in order; mu guards failures.
+	steps    []step
+	failures []failedStep
+	// commands counts the command line's simple commands, which decides whether its closing line names the one that failed.
+	commands int
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -481,7 +486,9 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	// Before classify, which renames nib's own commands.
 	savedPatch := savesGitPatch(file)
+	watched := watchFailures(file)
 	jobs, piped := classify(file, 0)
+	watched.mark()
 	bodies := heredocs(file)
 	before := map[string]held{}
 	others := sess.runningCommands()
@@ -498,7 +505,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	// The call's own copy of the tools, as the run may outlive the request when it goes on as a job.
 	callTools := *tools
-	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped, savedPatch: savedPatch}
+	c := &call{engine: s.engine, tools: &callTools, session: sess, runner: runner, names: view, sink: &sink{}, links: &links{}, logs: s.logs, jobs: jobs, groups: map[int]bool{}, written: map[string]bool{}, piped: piped, savedPatch: savedPatch, steps: watched.steps, commands: watched.commands}
 	s.register(c)
 	// A call that goes on as a job ends with it.
 	defer func() {
@@ -564,8 +571,11 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}
 	callTools.Ctx = ctx
 	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
+	if note := c.failureNote(status); note != "" {
+		tail = append(tail, note)
+	}
 	if status != 0 {
-		tail = append(tail, fmt.Sprintf("[exit %d]", status))
+		tail = append(tail, c.exitLabel(status))
 	}
 	return c.result(reports, text, tail, before, bodies), nil
 }

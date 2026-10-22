@@ -46,6 +46,14 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 				err = interp.ExitStatus(2)
 			}
 		}()
+		// A watched command's failure is recorded for the notes that close the call.
+		defer func() {
+			name := args[0]
+			if _, marked, ok := parseMarker(name); ok {
+				name = marked
+			}
+			c.recordStep(interp.HandlerCtx(ctx).Env, name, err)
+		}()
 		c.reachIn(interp.HandlerCtx(ctx).Dir, args[1:])
 		name := args[0]
 		mode, marked, ok := parseMarker(args[0])
@@ -282,11 +290,11 @@ func (c *call) band() *rowBand {
 	return c.rows
 }
 
-// environ is the variables a child process gets: the shell's exported ones.
+// environ is the variables a child process gets: the shell's exported ones, without the step nibash gives a command it watches.
 func environ(env expand.Environ) []string {
 	var pairs []string
 	env.Each(func(name string, vr expand.Variable) bool {
-		if vr.Exported && vr.IsSet() && !strings.Contains(name, " ") {
+		if vr.Exported && vr.IsSet() && !strings.Contains(name, " ") && name != stepVariable {
 			pairs = append(pairs, name+"="+vr.String())
 		}
 		return true

@@ -1,6 +1,7 @@
 package nibash
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -154,10 +155,19 @@ func (c *call) haltNote(err error) (string, error) {
 	return "", err
 }
 
-// jobError is err as a job's log ends with it: for a call a failed directory change halted, its note written to out and its status instead.
+// jobError is err as a job's log ends with it: for a call a failed directory change halted, its note written to out and its status instead;
+// a note of failures its exit status does not tell written to out too.
 func (c *call) jobError(err error, out io.Writer) error {
 	note, err := c.haltNote(err)
 	if note != "" {
+		fmt.Fprintln(out, note)
+	}
+	status := 0
+	var exit interp.ExitStatus
+	if errors.As(err, &exit) {
+		status = int(exit)
+	}
+	if note := c.failureNote(status); note != "" {
 		fmt.Fprintln(out, note)
 	}
 	return err

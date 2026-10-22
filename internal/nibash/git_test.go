@@ -83,7 +83,7 @@ func TestGitPathListingsNameEachFolderOnce(t *testing.T) {
 	expect(t, f.run("git ls-files"), "a.go\n["+operation+"]\n  Operation.java\n  OperationResult.java\n  ResultStep.java")
 	f.git("add", "-A")
 	expect(t, f.run("git diff --cached --name-status"), "M\ta.go\n["+operation+"]\n  M\tOperation.java\n  M\tOperationResult.java\n  M\tResultStep.java")
-	expect(t, f.run("git rm -q --cached -r src && git rm --cached -r src"), "fatal: pathspec 'src' did not match any files\n[exit 128]")
+	expect(t, f.run("git rm -q --cached -r src && git rm --cached -r src"), "fatal: pathspec 'src' did not match any files\n[exit 128: git rm --cached -r src]")
 	f.git("add", "-A")
 	expect(t, f.run("git rm --cached -r src"), "["+operation+"]\n  rm 'Operation.java'\n  rm 'OperationResult.java'\n  rm 'ResultStep.java'")
 }

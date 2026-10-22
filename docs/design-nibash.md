@@ -362,7 +362,13 @@ When the command finishes or its time runs out, the sink is rendered once:
     left out: `[4,762 earlier lines in LOG]`; fewer get no note and no log.
     With a decision model or a summarizer, the lines it left out may first be checked by the decider and the ones the
     call needs added after the tail's own output (`docs/design-decider.md`, section 17).
-- **Exit status:** a nonzero exit status ends the output with `[exit 1]`.
+- **Exit status:** a nonzero exit status ends the output with `[exit 1]`, naming the program that failed with it when
+  the command line has more than one command (`[exit 1: make test]`). Before classify, nibash reads each program the
+  command line runs outside a condition and a pipeline (`failwatch.go`): its words, whether its standard error goes to
+  `/dev/null`, what an `&&` chain skips when it fails and whether what follows handles that; after classify each gets
+  `NIBASH_STEP=N` for itself, which the exec handler reads to record a failure and `environ` keeps from programs. A
+  failure the exit status does not tell, whose message went nowhere or whose chain stopped unhandled, is named in a
+  closing `[nibash: ...]` line.
 - **Files changed by the command** [missing]:
   - Before the call, nibash notes size and mtime of every file the session's store holds. Every file a redirect opens
     for writing is noted through `OpenHandler`.

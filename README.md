@@ -806,7 +806,15 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   in 16 characters, such as a token or a signature, never a path or a UUID) shows in that form without it
   (`[line 1, chars 1-6, 145-157 of 157]|token= ...  expires=3600`). Output over 400 rows or 30 KiB
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
-  the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`.
+  the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`, which names the program that
+  failed with that status when the command line has more than one command: `[exit 128: git pull --rebase]`.
+- **Failures that could go unseen.** A program (not a builtin, a function or a pipeline's stage) that failed without the
+  call's exit status saying so is named in one closing line when its standard error went to `/dev/null` or an `&&`
+  chain skipped what followed it: `[nibash: git pull -q exited 1, its stderr discarded; git push exited 1, so git log
+  did not run]` (up to three, a loop's repeats counted). A failure is handled, and not named, in an `if` or `while`
+  condition, after `!`, before `||` with anything but `true` or `:` after it, or when the next command reads `$?`; so
+  is exit status 1 of `grep`, `rg`, `diff`, `cmp` and `which`, which answers a question. nibash finds each program by a
+  `NIBASH_STEP` variable it sets for that one command, which no program gets.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
   when the command changed them: `[changed by this command: a.txt#9C10 (was #3F2A, +1 -1), notes.md#1B2C (new)]`. A
   file the agent saw some of, changed in at most 10 lines, then shows the change under its header: removed lines as `-|`
