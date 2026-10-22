@@ -13,7 +13,11 @@ const heldRun = 3
 
 // heldMapped is the most lines a held run prints as row-map rows instead of one marker: an agent checking a few lines it holds would
 // otherwise call again to see them, translating earlier numbers by hand on the way, which is where its line numbers go wrong.
-const heldMapped = 30
+// heldMappedMoved is that for a run an edit moved, whose earlier numbers would need translating at any length.
+const (
+	heldMapped      = 30
+	heldMappedMoved = 100
+)
 
 // heldLessonKey is the lesson heldLesson teaches; heldLesson explains held markers, once per agent and again after its context was dropped.
 const heldLessonKey = "held"
@@ -25,10 +29,10 @@ const heldLesson = "[a [lines A-B unchanged since you saw them] row stands for l
 type HeldRun struct{ Start, End, First, Last, From int }
 
 // HeldLines maps each line of view the calling agent already holds, seen whole and unchanged since, to its number when it saw it, or to 0
-// when it knows only the content; nil when markers are off for the call. The caller holds the path's lock, as for any read of the store's
-// versions.
+// when it knows only the content; nil when markers are off for the call, or the agent's last edit of the file drew warnings, after which
+// its picture of the file may be off. The caller holds the path's lock, as for any read of the store's versions.
 func (e *Engine) HeldLines(ctx *Context, canonical string, view snapshots.View) map[int]int {
-	if !ctx.Markers {
+	if !ctx.Markers || e.Store.Doubted(ctx.Session, canonical) {
 		return nil
 	}
 	return e.Store.Held(ctx.Session, canonical, view)
@@ -112,9 +116,12 @@ func (e *Engine) MarkerFor(ctx *Context, canonical string, view snapshots.View, 
 	return strings.TrimSuffix(marker, "]") + ", " + strings.Join(spans, ", ") + " of them before the last edit of this file]"
 }
 
-// Mapped reports whether the run prints as one MapRow per line, under its current numbers, rather than as its Marker: a short run, or one
-// the agent never had numbers for.
-func (r HeldRun) Mapped() bool { return r.From == 0 || r.Last-r.First+1 <= heldMapped }
+// Mapped reports whether the run prints as one MapRow per line, under its current numbers, rather than as its Marker: a short run, one the
+// agent never had numbers for, or one an edit moved, up to heldMappedMoved lines.
+func (r HeldRun) Mapped() bool {
+	length := r.Last - r.First + 1
+	return r.From == 0 || length <= heldMapped || r.From != r.First && length <= heldMappedMoved
+}
 
 // MapRow is the N~ row of line, whose content the agent saw whole: its indentation and start.
 func MapRow(line int, content string) string { return fmt.Sprintf("%d~%s", line, clip(content)) }

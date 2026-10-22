@@ -64,3 +64,42 @@ func TestAnEditResponsesCutRowNeedsOnlyAPlainRead(t *testing.T) {
 		t.Fatalf("edit: %v\n%s", err, edited.Text)
 	}
 }
+
+// After an edit that drew warnings, the agent's picture of the file may be off, so its next read shows every line; the one after holds again.
+func TestAReadAfterAWarnedEditShowsEveryLine(t *testing.T) {
+	var content strings.Builder
+	for i := 1; i <= 40; i++ {
+		content.WriteString(word(i) + " = 1\n")
+	}
+	e, ctx, path := showFixture(t, content.String())
+	ctx.Markers = true
+	tag := regexp.MustCompile(`#([0-9A-F]{4})\]`).FindStringSubmatch(readText(t, e, ctx, path))[1]
+	edited, err := e.Patch(ctx, "[a.py#"+tag+"]\nPUT 20:\n+broken = (")
+	if err != nil || !strings.Contains(edited.Text, "Warnings:") {
+		t.Fatalf("edit: %v\n%s", err, edited.Text)
+	}
+	if out := readText(t, e, ctx, path); strings.Contains(out, "unchanged") || !strings.Contains(out, "\n19:"+word(19)+" = 1\n20:broken = (\n") {
+		t.Fatalf("after a warned edit:\n%s", out)
+	}
+	if out := readText(t, e, ctx, path); !strings.Contains(out, "unchanged since you saw them") {
+		t.Fatalf("the read after:\n%s", out)
+	}
+}
+
+// A run an edit moved prints as map rows under its new numbers up to 100 lines, never as earlier numbers to translate.
+func TestAMovedRunPrintsAsMapRows(t *testing.T) {
+	var content strings.Builder
+	for i := 1; i <= 60; i++ {
+		content.WriteString(word(i) + " = 1\n")
+	}
+	e, ctx, path := showFixture(t, content.String())
+	ctx.Markers = true
+	tag := regexp.MustCompile(`#([0-9A-F]{4})\]`).FindStringSubmatch(readText(t, e, ctx, path))[1]
+	if _, err := e.Patch(ctx, "[a.py#"+tag+"]\nPUT <1:\n+top = 0"); err != nil {
+		t.Fatal(err)
+	}
+	out := readText(t, e, ctx, path)
+	if strings.Contains(out, "your earlier") || !strings.Contains(out, "\n3~"+word(2)+" = 1\n4~"+word(3)+" = 1\n") {
+		t.Fatalf("moved run:\n%s", out)
+	}
+}

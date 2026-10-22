@@ -2102,6 +2102,10 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 	}
 	return response{strings.Join(output, "\n"), func() {
 		store.Record(ctx.Session, recordPath, next, append(slices.Clone(seen), rows.shown...), known)
+		// An edit that drew warnings may not have done what the agent pictures, so its next view of the file shows every line.
+		if len(item.warnings) > 0 {
+			store.Doubt(ctx.Session, recordPath)
+		}
 	}}
 }
 

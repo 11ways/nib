@@ -1228,9 +1228,12 @@ line shown, and `path#TAG` reads record it like an edit response.
 - **Held markers.** Where nib can tell when an agent's context is dropped (below), a run of 3 or more rows that agent
   was shown whole before, in this version or one it still holds, and that have not changed since, prints shorter. A run
   of up to 30 lines in `read`, in `grep`'s context rows and in nibash's own file rows prints as row-map rows under the
-  lines' current numbers, each line's indentation and start: `41~    return row`. A longer run prints as one
-  row: `[lines 40-120 unchanged since you saw them]`, or `[lines 40-120 = your earlier 37-117, unchanged]` when an edit
-  moved them. When nib's own edit or write tools last wrote the file after the lines were seen, the marker says so,
+  lines' current numbers, each line's indentation and start: `41~    return row`; so does a run an edit moved, up to 100
+  lines, whose earlier numbers would need translating. A longer run prints as one row:
+  `[lines 40-120 unchanged since you saw them]`, or `[lines 40-220 = your earlier 37-217, unchanged]` when an edit
+  moved them. After an edit whose response carried warnings (a likely slip, a parse error, unbalanced brackets), the
+  agent's next view of that file prints every line, since its picture of the file may be off; the views after hold
+  again. When nib's own edit or write tools last wrote the file after the lines were seen, the marker says so,
   `[lines 40-120 unchanged since you saw them, before the last edit of this file]`, or names the lines that were
   (`..., 42-120 of them before the last edit of this file]`): an agent reading after an edit it expected there would
   otherwise take the marker for the edit's result. A marker or an `N~` row means the line is as when it was last seen

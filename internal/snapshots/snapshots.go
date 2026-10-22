@@ -116,6 +116,9 @@ type Store struct {
 	forgotten map[string]bool
 	evicted   *list.List
 	taught    map[string]bool
+	// doubted are the agent and file pairs whose last edit drew warnings, whose next view shows every line, as the agent's picture of the
+	// file may be off; a view that records seen lines alone ends it.
+	doubted map[string]bool
 	// cleared is the latest moment each session's context was dropped, in Unix nanoseconds, so a drop told again is applied once.
 	cleared map[string]int64
 	// Now is the wall clock lines are stamped with when they become seen or known; it must be comparable with other processes' clocks, as a
@@ -130,7 +133,7 @@ func NewStore() *Store { return NewStoreWith(Limits{maxPaths, maxVersions, maxUn
 
 // NewStoreWith makes a store with the given limits.
 func NewStoreWith(limits Limits) *Store {
-	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), texts: map[string]*sharedText{}, forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, cleared: map[string]int64{}, Now: time.Now}
+	return &Store{limits: limits, histories: map[string]*list.Element{}, order: list.New(), texts: map[string]*sharedText{}, forgotten: map[string]bool{}, evicted: list.New(), taught: map[string]bool{}, doubted: map[string]bool{}, cleared: map[string]int64{}, Now: time.Now}
 }
 
 func id(session, path string) string { return session + "\x00" + path }
@@ -150,6 +153,9 @@ func (s *Store) Record(session, path string, view View, seen, known []int) *Vers
 	key := id(session, path)
 	h := &history{id: key, forgotten: s.forgotten[key]}
 	delete(s.forgotten, key)
+	if seen != nil && known == nil {
+		delete(s.doubted, key)
+	}
 	if element, ok := s.histories[key]; ok {
 		h = element.Value.(*history)
 		s.order.Remove(element)
@@ -308,6 +314,20 @@ func (s *Store) Forgotten(session, path string) bool {
 		return element.Value.(*history).forgotten
 	}
 	return s.forgotten[id(session, path)]
+}
+
+// Doubt marks that session's last edit of path drew warnings, so its next view shows every line.
+func (s *Store) Doubt(session, path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doubted[id(session, path)] = true
+}
+
+// Doubted reports whether session's last edit of path drew warnings that no view since answered.
+func (s *Store) Doubted(session, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.doubted[id(session, path)]
 }
 
 // Teach reports whether session has not yet been taught lesson, and marks it taught: a hint a response gives each agent once.
