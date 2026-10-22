@@ -1,6 +1,6 @@
 # AGENTS.md
 
-nib is a stdio MCP server that gives coding agents hashline file tools: `read`, `grep`, `find`, `edit` (a line-anchored patch language) and `write`, plus `nibash`, a shell whose own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n`, `cut -c` and `wc` print the same anchored rows. See `README.md` for the full tool behavior and `docs/design-nibash.md` for the design of the shell and the Go port; keep them in sync when behavior changes.
+nib is a stdio MCP server that gives coding agents hashline file tools: `read`, `grep`, `find`, `edit` (a line-anchored patch language) and `write`, plus `nibash`, a shell whose own `cat`, `head`, `tail`, `grep`, `rg`, `sed -n`, `cut -c` and `wc` print the same anchored rows. See `README.md` for the tools and their configuration and `docs/design-nibash.md` for the design of the shell and the Go port; keep them in sync when behavior changes.
 
 ## Stack
 
