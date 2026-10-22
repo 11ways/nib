@@ -341,6 +341,56 @@ func TestJoinedFilesWithoutADeciderEachShowTheirStart(t *testing.T) {
 	}
 }
 
+// diffText is a git diff of files, each with hunks hunks of size changed lines, every hunk named after its function.
+func diffText(files []string, hunks, size int) string {
+	var b strings.Builder
+	for _, name := range files {
+		fmt.Fprintf(&b, "diff --git a/%s b/%[1]s\nindex 1111111..2222222 100644\n--- a/%[1]s\n+++ b/%[1]s\n", name)
+		for h := range hunks {
+			fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@ func %s%d() {\n", 100*h+1, size, 100*h+1, size, strings.TrimSuffix(name, ".go"), h)
+			for i := range size {
+				fmt.Fprintf(&b, "-\t%s%d := error(%d)\n+\t%[1]s%[2]d := error(%[3]d, %[2]d)\n", strings.TrimSuffix(name, ".go"), h*size+i, i)
+			}
+		}
+	}
+	return b.String()
+}
+
+// A long diff is cut file by file and hunk by hunk, as nib's git diff is: every file's first line stays, and what each leaves out is named
+// under it by hunk, never judged by keywords, which code matches everywhere.
+func TestASkimmedDiffIsCutFileByFileAndHunkByHunk(t *testing.T) {
+	f := newFixture(t, map[string]string{"change.diff": diffText([]string{"alpha.go", "beta.go", "gamma.go"}, 4, 40)})
+	f.shell.Deciding(keywordHits("error("))
+	out := f.readLog("what changed", "change.diff")
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if !regexp.MustCompile(`\n\d+\|diff --git a/` + name + `.go b/` + name + `.go\n`).MatchString(out) {
+			t.Fatalf("%s's head row missing:\n%s", name, out)
+		}
+		if !regexp.MustCompile(`\n\[` + engine.Skim + `: (?:the rest of this hunk and )?\d+ (?:more |hunks? )?left out, \+\d+ -\d+: func ` + name).MatchString(out) {
+			t.Fatalf("%s's gap note missing:\n%s", name, out)
+		}
+	}
+	// Its rows carry the file's lines, so a gap's hunks are a read away.
+	if len(out) > budgetBytes || !strings.Contains(out, "\n1|diff --git a/alpha.go b/alpha.go\n") ||
+		!strings.HasSuffix(out, "; N| is a row's line in the whole file: read change.diff:A-B plain:true for others]") {
+		t.Fatalf("%d bytes:\n%s", len(out), out)
+	}
+}
+
+// A log that only mentions a diff, with no hunk under it, stays plain output.
+func TestALogThatOnlyMentionsADiffIsNoDiff(t *testing.T) {
+	rows := []row{{text: "diff the two runs:", header: -1}, {text: "run 1 took 3s", header: -1}, {text: "run 2 took 4s", header: -1}}
+	underFiles(rows)
+	if slices.ContainsFunc(rows, func(r row) bool { return r.header >= 0 }) {
+		t.Fatalf("got %+v", rows)
+	}
+	unified := []row{{text: "--- a.txt", header: -1}, {text: "+++ b.txt", header: -1}, {text: "@@ -1 +1 @@", header: -1}, {text: "-one", header: -1}, {text: "+two", header: -1}}
+	underFiles(unified)
+	if unified[0].header != -1 || unified[4].header != 0 {
+		t.Fatalf("got %+v", unified)
+	}
+}
+
 // A summary of joined files points at a passage in each, past what one output's passages share, each under its file's head row.
 func TestASummaryOfJoinedFilesShowsAPassageOfEach(t *testing.T) {
 	files := map[string]string{}

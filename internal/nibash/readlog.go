@@ -149,11 +149,58 @@ func (w *logWindow) rows(label, shift int) []row {
 }
 
 // fit is the window's rows shaped as the log of their own, which numbers them from log.base on, as the file does; footer explains cut rows.
+// A unified diff's rows stand under their file's first line, so a long one is cut file by file and hunk by hunk, as nib's git diff is.
 func (w *logWindow) fit(ctx context.Context, d decision, log saved) (rows []row, footer []string) {
 	if rows = w.rows(log.base, 0); len(rows) == 0 {
 		return nil, nil
 	}
+	underFiles(rows)
 	return fit(ctx, rows, strings.Join(w.lines, "\n"), d, func() saved { return log })
+}
+
+// underFiles puts each row of a unified diff under its file's head row: its diff line, or, in a diff without them, its --- line followed by
+// +++; rows before the first file stay nib's own. Rows where a file holds no hunk, as a log that only mentions a diff, are left as they are.
+func underFiles(rows []row) {
+	heads := make([]bool, len(rows))
+	found := false
+	for i, r := range rows {
+		heads[i] = strings.HasPrefix(r.text, "diff ")
+		found = found || heads[i]
+	}
+	if !found {
+		for i := 0; i+1 < len(rows); i++ {
+			heads[i] = strings.HasPrefix(rows[i].text, "--- ") && strings.HasPrefix(rows[i+1].text, "+++ ")
+			found = found || heads[i]
+		}
+	}
+	if !found {
+		return
+	}
+	// Every file must hold a hunk before the next one starts.
+	hunk := true
+	for i, r := range rows {
+		switch {
+		case heads[i]:
+			if !hunk {
+				return
+			}
+			hunk = false
+		case strings.HasPrefix(r.text, "@@ "):
+			hunk = true
+		}
+	}
+	if !hunk {
+		return
+	}
+	head := -1
+	for i := range rows {
+		switch {
+		case heads[i]:
+			head = i
+		case head >= 0:
+			rows[i].header = head
+		}
+	}
 }
 
 // shapeLines is lines as a window after log.base, shaped as its fit does; echoed says a recurring block got markers.

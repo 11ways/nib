@@ -210,6 +210,10 @@ plain:true for others`). That output is cut file by file: every head row stays, 
 budget for the decider's picks, or without them for its first lines, so one file cannot crowd out the others. Its
 summary gives up to 3 sentences for each file that bears on `expect`, and the lines it points at, up to 5 ranges for
 each file and 30 in all, share what one output's would get for each file.
+A file that is a unified diff (each `diff ...` line, or `--- ` then `+++ ` without them, followed by a hunk) is cut as
+nibash cuts `git diff`: every file's first lines stay, each file's hunks show whole from its start as far as its share
+of the budget goes, or as a decision model picks them for the `expect`, and what a file leaves out is named under it by
+hunk, `[skim: 3 hunks left out, +120 -120: func alpha1() {, ...]`, its rows numbered with the file's lines as above.
 `expect` is required. `read` itself never takes it, so a read always gives rows to edit from.
 
 #### Changes since a tag
@@ -547,7 +551,8 @@ REM
   of the one and only needs the other to place the change; a changed row past the cut shows the stretch where it changed
   when a line was replaced by one line, as `[N chars 2952-3057 of 3108]|...`, instead of the line's start. A cut row still
   counts as seen when the agent wrote it, or knew the line whole before the edit moved it, so it anchors the next edit;
-  every new row does, cut, mapped or elided, except a `SUB` result on a line the agent never knew whole. A response that
+  every new row does, cut, mapped or elided, except a `SUB` result on a line the agent never knew whole. The note on such
+  cut rows says a plain `read PATH:N` shows one whole, which needs no `maxLineLength` below 2000 characters. A response that
   changes nothing still shows the lines whole, up to 2000 characters. Follow-up edits can use that tag and numbering
   without a read. A section that reproduces the current content reports `No changes` with those lines whole, so an edit
   resent unchanged shows what the file already holds, and leaves the file untouched.

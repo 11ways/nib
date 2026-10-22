@@ -32,7 +32,9 @@ func purpose(description string) string {
 // skim output is cut file by file (assemble, fairFixed).
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
 	over := overBudget(rows)
-	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })
+	files := grouped(rows, log)
+	// Plain output under file headers, as a skimmed diff, is cut as nib's own file rows are.
+	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) && (files == nil || files.joined)
 	model := d.decider != nil && d.decider.Kind() == decider.OpenRouter
 	var lines []string
 	var entries []decider.Entry
@@ -41,7 +43,6 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		lines = plainLines([]byte(raw))
 		entries, legend = dedupe(lines)
 	}
-	files := grouped(rows, log)
 	from, to := chosenSpan(rows, files)
 	decide := func() decider.Choice {
 		return choose(ctx, rows[from:to], entries, legend, d, model)
@@ -299,8 +300,8 @@ type fileGroups struct {
 	of    []int
 	count int
 	// joined says the output is a skim's joined files, cut by their lines; otherwise the files' rows are nib's own file rows, a diff's
-	// cut by hunk.
-	joined bool
+	// cut by hunk, or plain is set for a file's plain lines, as a skimmed diff, cut by hunk as well.
+	joined, plain bool
 }
 
 // grouped is rows by file when they are joined skim output or sit under file headers, else nil.
@@ -314,7 +315,7 @@ func grouped(rows []row, log saved) *fileGroups {
 	if log.files == 0 && len(heads) == 0 {
 		return nil
 	}
-	g := &fileGroups{of: make([]int, len(rows)), joined: log.files > 0}
+	g := &fileGroups{of: make([]int, len(rows)), joined: log.files > 0, plain: !slices.ContainsFunc(rows, func(r row) bool { return !r.plain })}
 	current := -1
 	for i := range rows {
 		if heads[i] || current < 0 {
@@ -325,6 +326,9 @@ func grouped(rows []row, log saved) *fileGroups {
 	g.count = current + 1
 	return g
 }
+
+// numbered says whether a cut of the output numbers its rows with their log lines: plain output, joined or not, whose rows are no file's.
+func (g *fileGroups) numbered() bool { return g == nil || g.joined || g.plain }
 
 // hunkStart says whether a row under a file's header is a diff hunk's header, which starts the hunk's rows.
 func hunkStart(r row) bool { return r.header >= 0 && strings.HasPrefix(r.text, "@@ ") }
@@ -393,9 +397,9 @@ func leftOutRows(rows []row) string {
 			if name != "" && len(names) < 3 && !slices.Contains(names, name) {
 				names = append(names, name)
 			}
-		case strings.HasPrefix(r.text, "+"):
+		case strings.HasPrefix(r.text, "+") && !strings.HasPrefix(r.text, "+++ "):
 			added++
-		case strings.HasPrefix(r.text, "-|"):
+		case strings.HasPrefix(r.text, "-") && !strings.HasPrefix(r.text, "--- "):
 			removed++
 		}
 	}
@@ -940,7 +944,7 @@ func assemble(rows []row, choice decider.Choice, log saved, d decision, notes ..
 			shown++
 		}
 	}
-	out := gapped(rows, keep, files.notes(rows, keep, log), log, files == nil || files.joined)
+	out := gapped(rows, keep, files.notes(rows, keep, log), log, files.numbered())
 	clauses := []string{who + " chose the middle" + purpose}
 	if files != nil {
 		clauses[0] = who + " chose" + purpose + ", each file within its share of the budget"
@@ -1032,7 +1036,7 @@ func fairFixed(rows []row, log saved, because string) []row {
 	if because != "" {
 		clauses = append(clauses, because)
 	}
-	return append(gapped(rows, keep, files.notes(rows, keep, log), log, files.joined), row{text: closing(shown, log, endingOf(files, true), clauses), header: -1})
+	return append(gapped(rows, keep, files.notes(rows, keep, log), log, files.numbered()), row{text: closing(shown, log, endingOf(files, true), clauses), header: -1})
 }
 
 // logLines are the first and last log lines rows stand for; 0 when none stands for any, as for file headers.
@@ -1099,7 +1103,7 @@ const (
 // endingOf is the ending for output by file, or numberedEnding when numbered says the rows carry their log lines, else logEnding.
 func endingOf(files *fileGroups, numbered bool) int {
 	switch {
-	case files != nil && !files.joined:
+	case files != nil && !files.numbered():
 		return fileEnding
 	case numbered:
 		return numberedEnding
