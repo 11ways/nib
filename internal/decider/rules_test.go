@@ -11,7 +11,7 @@ import (
 func TestBreaksAsksOneQuestionPerRuleAndCachesTheAnswer(t *testing.T) {
 	f := &fake{answer: func(_ int, req map[string]any) (int, string) {
 		state := req["state"].(map[string]any)
-		if state["command"] != "./gradlew test" || state["purpose"] != "run the tests" {
+		if state["command"] != "./gradlew test" || state["purpose"] != "run the tests" || !slices.Equal(state["programs"].([]any), []any{"gradlew"}) {
 			t.Errorf("state %v", state)
 		}
 		rules := state["rules"].(map[string]any)
@@ -19,7 +19,7 @@ func TestBreaksAsksOneQuestionPerRuleAndCachesTheAnswer(t *testing.T) {
 			t.Errorf("rules %v", rules)
 		}
 		question := req["questions"].(map[string]any)["r0"].(map[string]any)
-		if !strings.Contains(question["instructions"].(string), "`rules.r0`") {
+		if !strings.Contains(question["instructions"].(string), "`rules.r0`") || !strings.Contains(question["instructions"].(string), "`programs` are the programs it runs") {
 			t.Errorf("question %v", question)
 		}
 		return 200, answerAll(req, func(id string) float64 {
@@ -31,7 +31,7 @@ func TestBreaksAsksOneQuestionPerRuleAndCachesTheAnswer(t *testing.T) {
 	}}
 	server := f.serve(t)
 	o := openRouterFor(server, 5*time.Second, t.TempDir())
-	q := RuleQuestion{Command: "./gradlew test", Purpose: "run the tests", Rules: []string{"Do not run builds directly.", "Do not delete branches."}}
+	q := RuleQuestion{Command: "./gradlew test", Programs: []string{"gradlew"}, Purpose: "run the tests", Rules: []string{"Do not run builds directly.", "Do not delete branches."}}
 	verdict := o.Breaks(context.Background(), q)
 	if verdict.Failure != "" || !slices.Equal(verdict.Broken, []int{0}) || verdict.Who != DefaultModel {
 		t.Fatalf("verdict %+v", verdict)

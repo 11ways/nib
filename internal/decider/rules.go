@@ -13,9 +13,10 @@ type RuleJudge interface {
 	Breaks(ctx context.Context, q RuleQuestion) RuleVerdict
 }
 
-// RuleQuestion is a command about to run and the rules that may forbid it.
+// RuleQuestion is a command about to run and the rules that may forbid it; Programs are the programs nib parsed it to run.
 type RuleQuestion struct {
 	Command   string
+	Programs  []string
 	Purpose   string
 	Directory string
 	Rules     []string
@@ -29,12 +30,13 @@ type RuleVerdict struct {
 	Usage   Usage
 }
 
-// ruleState is what a rules request tells the model: the command and the rules by id.
+// ruleState is what a rules request tells the model: the command, the programs it runs and the rules by id.
 type ruleState struct {
-	Command   string  `json:"command"`
-	Purpose   string  `json:"purpose,omitempty"`
-	Directory string  `json:"directory,omitempty"`
-	Rules     ordered `json:"rules"`
+	Command   string   `json:"command"`
+	Programs  []string `json:"programs,omitempty"`
+	Purpose   string   `json:"purpose,omitempty"`
+	Directory string   `json:"directory,omitempty"`
+	Rules     ordered  `json:"rules"`
 }
 
 type ruleRequest struct {
@@ -44,9 +46,10 @@ type ruleRequest struct {
 	Questions ordered   `json:"questions"`
 }
 
-// ruleQuestion asks whether running the command breaks one rule.
+// ruleQuestion asks whether running the command breaks one rule; a program's name in a path or an argument would otherwise pass for
+// running it.
 func ruleQuestion(id string) noul {
-	return noul{"noul", fmt.Sprintf("Does running `command` break the rule in `rules.%s`?", id), criteria{
+	return noul{"noul", fmt.Sprintf("Does running `command` break the rule in `rules.%s`? `programs` are the programs it runs; a program named only in a path or an argument does not run.", id), criteria{
 		"Running the command does what the rule forbids, or does it in the way the rule says not to.",
 		"The command does not do what the rule is about, or does it the way the rule allows.",
 	}}
@@ -60,7 +63,7 @@ func (o *openRouter) Breaks(ctx context.Context, q RuleQuestion) RuleVerdict {
 	started := time.Now()
 	deadline, cancel := context.WithTimeout(ctx, o.config.Timeout)
 	defer cancel()
-	state := ruleState{Command: q.Command, Purpose: q.Purpose, Directory: q.Directory}
+	state := ruleState{Command: q.Command, Programs: q.Programs, Purpose: q.Purpose, Directory: q.Directory}
 	var questions ordered
 	var ids []string
 	for i, rule := range q.Rules {

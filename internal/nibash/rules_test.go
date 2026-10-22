@@ -142,6 +142,32 @@ func TestAVagueRuleWithAMatchIsAskedOnlyWhenTheCommandTextMatches(t *testing.T) 
 	}
 }
 
+func TestAVagueRuleNamingProgramsIsAskedOnlyOfACallThatRunsOne(t *testing.T) {
+	rules := `{"rules": [{"rule": "Do not pipe or filter zenit-dev's output.", "program": "zenit-dev"}, {"rule": "Do not watch a build.", "program": "zenit-dev", "args": "^build"}]}`
+	f := newFixture(t, map[string]string{"nib.json": rules, ".zenit-dev/state.db": ""})
+	j := newJudge(func(q decider.RuleQuestion) []int {
+		if strings.Contains(q.Command, "| grep") {
+			return []int{0}
+		}
+		return nil
+	})
+	f.shell.Deciding(j)
+	// A path that holds the program's name runs something else, so the model is not asked.
+	if out := f.run("ls .zenit-dev | grep state"); out != "state.db" || len(j.asked) != 0 {
+		t.Fatalf("got %q, asked %+v", out, j.asked)
+	}
+	if out := f.run("zenit-dev status | grep fail"); !strings.Contains(out, "against a rule in "+filepath.Join(f.directory, "nib.json")+": Do not pipe or filter zenit-dev's output.]") {
+		t.Fatalf("got %q", out)
+	}
+	if len(j.asked) != 1 || !slices.Equal(j.asked[0].Rules, []string{"Do not pipe or filter zenit-dev's output."}) || !slices.Equal(j.asked[0].Programs, []string{"zenit-dev", "grep"}) {
+		t.Fatalf("asked %+v", j.asked)
+	}
+	f.run("env X=1 zenit-dev build --watch")
+	if len(j.asked) != 2 || len(j.asked[1].Rules) != 2 || !slices.Equal(j.asked[1].Programs, []string{"env", "zenit-dev"}) {
+		t.Fatalf("asked %+v", j.asked)
+	}
+}
+
 func TestVagueRulesUncheckedRunTheCommandAndSaySoOnce(t *testing.T) {
 	rules := `{"rules": [{"rule": "Do not run long builds directly."}]}`
 	f := newFixture(t, map[string]string{"nib.json": rules})
@@ -209,7 +235,7 @@ func TestARefusedCommandReadingANibLogPointsAtSkim(t *testing.T) {
 }
 
 func TestAMalformedRulesFileRefusesNamingIt(t *testing.T) {
-	for _, content := range []string{`{"rules": [{"program": "gradle"}]}`, `{"rules": [{"program": "x", "rule": "y", "why": "z"}]}`, `{"rules": [{"program": "x", "args": "(", "why": "z"}]}`, `{"rules": [{"program": "x", "match": "y", "why": "z"}]}`, `{"rules": [{"rule": "y", "match": "("}]}`, `{"rules": `} {
+	for _, content := range []string{`{"rules": [{"program": "gradle"}]}`, `{"rules": [{"why": "z"}]}`, `{"rules": [{"rule": "y", "args": "z"}]}`, `{"rules": [{"program": "x", "args": "(", "why": "z"}]}`, `{"rules": [{"program": "x", "match": "y", "why": "z"}]}`, `{"rules": [{"rule": "y", "match": "("}]}`, `{"rules": `} {
 		f := newFixture(t, map[string]string{"nib.json": content})
 		out := f.run("echo x")
 		if !strings.HasPrefix(out, "[nothing ran: the rules in "+filepath.Join(f.directory, "nib.json")+" cannot be read: ") || !strings.HasSuffix(out, "\n[exit 126]") {

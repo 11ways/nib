@@ -21,8 +21,9 @@ import (
 	"github.com/11ways/nib/internal/server"
 )
 
-// A rule is one entry of nib.json's "rules": exact when it names programs, which refuses a matching command always, or vague when it is
-// text, which a decision model judges each command against.
+// A rule is one entry of nib.json's "rules": exact when it names programs and no text, which refuses a matching command always, or vague
+// when it is text, which a decision model judges each command against; a vague rule that names programs is asked only of a call that
+// runs one of them.
 type rule struct {
 	Program programs `json:"program"`
 	// Args is a regular expression the command's arguments, joined by spaces, must match; empty matches any.
@@ -35,7 +36,17 @@ type rule struct {
 	match *regexp.Regexp
 }
 
-func (r rule) exact() bool { return len(r.Program) > 0 }
+func (r rule) exact() bool { return len(r.Program) > 0 && r.Rule == "" }
+
+// runs is the first of commands that the rule's programs and args name; ok is false when none does or the rule names no programs.
+func (r rule) runs(commands []simpleCommand) (simpleCommand, bool) {
+	for _, c := range commands {
+		if slices.Contains(r.Program, c.program) && (r.args == nil || r.args.MatchString(strings.Join(c.args, " "))) {
+			return c, true
+		}
+	}
+	return simpleCommand{}, false
+}
 
 // programs is one program name or a list of them, matched by base name.
 type programs []string
@@ -104,11 +115,11 @@ func parseRules(path string) *ruleFile {
 	for i := range config.Rules {
 		r := &config.Rules[i]
 		switch {
-		case r.exact() == (r.Rule != ""):
-			return &ruleFile{path: path, err: fmt.Errorf("rule %d needs either \"program\" or \"rule\"", i+1)}
+		case len(r.Program) == 0 && r.Rule == "":
+			return &ruleFile{path: path, err: fmt.Errorf("rule %d needs \"program\", \"rule\" or both", i+1)}
 		case r.exact() && r.Why == "":
 			return &ruleFile{path: path, err: fmt.Errorf("rule %d names programs but no \"why\" to tell the agent", i+1)}
-		case !r.exact() && r.Args != "":
+		case len(r.Program) == 0 && r.Args != "":
 			return &ruleFile{path: path, err: fmt.Errorf("rule %d has \"args\" but no \"program\"", i+1)}
 		case r.exact() && r.Match != "":
 			return &ruleFile{path: path, err: fmt.Errorf("rule %d has \"match\", which only a vague \"rule\" takes; \"args\" narrows a program", i+1)}
@@ -290,6 +301,17 @@ func (s *scan) source(text string, depth int) {
 	}
 }
 
+// programs are the distinct programs the call may run, in the order found.
+func (s *scan) programs() []string {
+	var found []string
+	for _, c := range s.commands {
+		if !slices.Contains(found, c.program) {
+			found = append(found, c.program)
+		}
+	}
+	return found
+}
+
 // word is w's value when it is known before the call runs: literals and quotes, with ~ and ~name/ expanded; else its source text.
 func (s *scan) word(w *syntax.Word) (string, bool) {
 	var b strings.Builder
@@ -371,17 +393,16 @@ func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File
 		}
 		for _, r := range f.rules {
 			if !r.exact() {
-				// A vague rule whose pattern the command text misses cannot apply, so no model is asked about it.
-				if r.match == nil || r.match.MatchString(request.Command) {
+				// A vague rule whose pattern the command text misses, or whose programs the call does not run, cannot apply, so no model is
+				// asked about it.
+				_, runs := r.runs(sc.commands)
+				if (r.match == nil || r.match.MatchString(request.Command)) && (len(r.Program) == 0 || runs) {
 					vagues = append(vagues, vague{f, r})
 				}
 				continue
 			}
-			for _, c := range sc.commands {
-				if slices.Contains(r.Program, c.program) && (r.args == nil || r.args.MatchString(strings.Join(c.args, " "))) {
-					broken = append(broken, fmt.Sprintf("[nothing ran: %s is against a rule in %s: %s]", c, f.path, r.Why))
-					break
-				}
+			if c, ok := r.runs(sc.commands); ok {
+				broken = append(broken, fmt.Sprintf("[nothing ran: %s is against a rule in %s: %s]", c, f.path, r.Why))
 			}
 		}
 	}
@@ -399,7 +420,7 @@ func (s *Shell) checkRules(ctx context.Context, sess *session, file *syntax.File
 	for i, v := range vagues {
 		texts[i] = v.rule.Rule
 	}
-	verdict := judge.Breaks(ctx, decider.RuleQuestion{Command: request.Command, Purpose: request.Description, Directory: tools.Directory, Rules: texts})
+	verdict := judge.Breaks(ctx, decider.RuleQuestion{Command: request.Command, Programs: sc.programs(), Purpose: request.Description, Directory: tools.Directory, Rules: texts})
 	if verdict.Failure != "" {
 		return ruleCheck{notes: sess.uncheckedOnce(vagues[0].file.path, verdict.Failure)}
 	}

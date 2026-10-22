@@ -301,14 +301,16 @@ A `nib.json` can forbid commands:
 {"rules": [
   {"program": ["gradlew", "gradle"], "why": "Gradle runs through zenit-dev's MCP tools"},
   {"program": "zenit-dev", "args": "^(build|test)( |$)", "why": "use zd_build / zd_test"},
-  {"rule": "Do not run full test suites directly.", "match": "gradle|test", "why": "Use the zenit-dev MCP tools."}
+  {"rule": "Do not run full test suites directly.", "match": "gradle|test", "why": "Use the zenit-dev MCP tools."},
+  {"rule": "Do not pipe or filter zenit-dev's output.", "program": "zenit-dev"}
 ]}
 ```
 
 nibash checks every command a call may run, including inside pipelines, `$(...)`, wrappers like `env` and `xargs`, and
 `bash -c` strings. `program` rules match by base name, `args` is a regex over the arguments. `rule` entries are judged
-by the decision model when `match` hits, and are skipped without one. A refused call runs nothing and exits 126. The
-nearest `nib.json` with rules at or above the call's directory applies.
+by the decision model, with the programs the call runs, when `match` hits the command text and, if they name a
+`program` (and `args`), only when the call runs it; they are skipped without a model. A refused call runs nothing and
+exits 126. The nearest `nib.json` with rules at or above the call's directory applies.
 
 ## Named directories
 
