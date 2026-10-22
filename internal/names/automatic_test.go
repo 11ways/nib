@@ -285,6 +285,23 @@ func TestNamesNibMakesStayShort(t *testing.T) {
 	}
 }
 
+func TestADirectoryWhoseNameIsTakenIsNamedByTheFolderThatSetsItApart(t *testing.T) {
+	main := "/p/src/main/java/be/elevenways/quirkyquack"
+	table := &Table{Base: "/p", Entries: []Entry{{"bequirkyquac", main}}}
+	test := "/p/src/test/java/be/elevenways/quirkyquack"
+	if got := autoName(test, table); got != "test-quirkyq" {
+		t.Fatalf("got %q", got)
+	}
+	table.Entries = append(table.Entries, Entry{"test-quirkyq", test})
+	if got := autoName("/p/src/integration/java/be/elevenways/quirkyquack", table); got != "integr-quirk" {
+		t.Fatalf("got %q", got)
+	}
+	// A learned name of that form is nib's own.
+	if !fromScheme(Entry{"test-quirkyq", test}) || fromScheme(Entry{"tests-quirky", test}) {
+		t.Fatal("fromScheme")
+	}
+}
+
 func TestNamesAnAgentDefinesAreLearnedToo(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	widgets := deep(t, root, "widgets")

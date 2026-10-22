@@ -367,7 +367,8 @@ func stem(folder string) string {
 // meaningless matches a folder whose name says nothing of what it holds: a hash, or a version.
 var meaningless = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8,}|v?[0-9]+(?:\.[0-9]+)*)$`)
 
-// autoName is a free name for directory: schemeName, with a number after where that is taken, never past nameMax; "" when none can be made.
+// autoName is a free name for directory: schemeName, or where a directory that scheme names the same holds it, directory's stem after the
+// folder that sets it apart (parted), or else a number after it; never past nameMax; "" when none can be made.
 func autoName(directory string, table *Table) string {
 	base := schemeName(directory)
 	if base == "" {
@@ -376,12 +377,55 @@ func autoName(directory string, table *Table) string {
 	if free(base, table) {
 		return base
 	}
+	var holders []string
+	for _, e := range table.Entries {
+		if schemeName(e.Directory) == base {
+			holders = append(holders, e.Directory)
+		}
+	}
+	if len(holders) > 0 {
+		if name := parted(directory, holders); name != "" && free(name, table) {
+			return name
+		}
+	}
 	for n := 2; n < 100; n++ {
 		if candidate := numbered(base, n); free(candidate, table) {
 			return candidate
 		}
 	}
 	return ""
+}
+
+// partWord caps how much of the folder that sets a directory apart its parted name keeps.
+const partWord = 6
+
+// parted is the name of directory's stem after the nearest folder above it that is no hash or version and that none of others has at the
+// same height, as test-quirkyq for src/test/java/be/elevenways/quirkyquack beside src/main/java/be/elevenways/quirkyquack; "" when no
+// folder does.
+func parted(directory string, others []string) string {
+	theirs := slices.Clone(others)
+	for above := filepath.Dir(directory); above != filepath.Dir(above); above = filepath.Dir(above) {
+		folder := filepath.Base(above)
+		apart := slug(folder) != "" && !meaningless.MatchString(folder)
+		for i := range theirs {
+			theirs[i] = filepath.Dir(theirs[i])
+			if slug(filepath.Base(theirs[i])) == slug(folder) {
+				apart = false
+			}
+		}
+		if apart {
+			return partedName(folder, directory)
+		}
+	}
+	return ""
+}
+
+// partedName is directory's stem after folder's, each cut so the whole stays within nameMax.
+func partedName(folder, directory string) string {
+	word := stem(folder)
+	word = strings.TrimRight(word[:min(len(word), partWord)], "-")
+	last := stem(filepath.Base(directory))
+	return word + "-" + strings.TrimRight(last[:min(len(last), nameMax-len(word)-1)], "-")
 }
 
 // schemeName is the name nib makes for directory: the first letters of the two folders above it that say something (a hash or a version
@@ -421,6 +465,11 @@ func fromScheme(entry Entry) bool {
 	}
 	for n := 1; n < 100; n++ {
 		if (n == 1 && entry.Name == base) || (n > 1 && entry.Name == numbered(base, n)) {
+			return true
+		}
+	}
+	for above := filepath.Dir(entry.Directory); above != filepath.Dir(above); above = filepath.Dir(above) {
+		if entry.Name == partedName(filepath.Base(above), entry.Directory) {
 			return true
 		}
 	}
