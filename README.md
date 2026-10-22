@@ -1135,8 +1135,9 @@ characters: `~bewidgets` for `.../java/be/elevenways/widgets`, `~bptypes` for
 hash or a version says nothing and is passed over. A name that a directory named the same way already holds goes to the
 other directory with the folder that sets it apart in front, cut to 6 characters: `~test-quirkyq` for
 `src/test/java/be/elevenways/quirkyquack` beside `src/main/...`'s `~bequirkyquac`; a name taken otherwise gets a number
-after it, and no name nib makes is over 12 characters. The name holds at once: `read`, `grep`, `find` and hosted tools' locations count every path a
-response will print before printing any, so all of them print under a name they earn, and a listing names each folder
+after it, and no name nib makes is over 12 characters. The name holds at once: `read`, `grep`, `find` and hosted
+tools' locations count every path a response will print before printing any, so all of them print under a name they
+earn, and a listing names each folder
 once; nibash, whose output streams, prints its later paths under it. One note, which names the directory whole, opens
 the response:
 `[nib named ~bewidgets = /home/me/zenit/src/server/java/be/elevenways/widgets, which 6 of the paths shown to you ran through (or, named at once, `too
