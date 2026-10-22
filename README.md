@@ -167,7 +167,8 @@ or in nibash, a closing line explains them. Collapsing only happens where it pri
 in characters, than the lines it stands for, so three copies of a short line print as they are; never across a gap
 between selected ranges, and when it hid other numbers the block ends with a note; `collapse: false` shows every line.
 
-nibash folds output across calls too: a block of at least 5 rows of program output that one of the agent's last 50 calls
+nibash folds output across calls too: a block of at least 5 rows (20 when the call failed, so an error shows again) of
+program output that one of the agent's last 50 calls
 showed, row for row, prints as one row naming that call and where the lines are,
 ``[nibash: the same 15 rows from `--- FAIL: TestNames (0.01s)` your previous call showed; log lines 40-54 in LOG]``, where it is shorter
 than the rows. Each agent folds only against its own calls, never against calls from before its context was compacted

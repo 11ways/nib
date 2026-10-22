@@ -17,6 +17,8 @@ const (
 	recallRows = 2000
 	// foldMin is the fewest rows a block repeated from an earlier call needs before it folds; the marker must cost less than them too.
 	foldMin = 5
+	// foldFailedMin is foldMin for a call that failed: its error, shown again, costs a few rows, and missed it costs a call to read it.
+	foldFailedMin = 20
 	// foldNamed caps how much of the block's first row the marker names it by.
 	foldNamed = 40
 )
@@ -49,9 +51,10 @@ func rowHash(text string) uint64 {
 // foldable says whether r is a row of program output a fold may stand for: plain, shown whole, and no listed path a folder row prints.
 func foldable(r row) bool { return r.plain && !r.capped && r.listed == nil && r.first > 0 }
 
-// fold puts each block of rows the agent was shown, identical and in the same order, by one of its earlier calls since its context was last
-// dropped (cleared) as one marker naming that call and the block's lines in the log save writes, then remembers what this call shows.
-func (rc *recall) fold(agent string, cleared time.Time, rows []row, save func() saved) []row {
+// fold puts each block of at least least rows the agent was shown, identical and in the same order, by one of its earlier calls since its
+// context was last dropped (cleared) as one marker naming that call and the block's lines in the log save writes, then remembers what this
+// call shows.
+func (rc *recall) fold(agent string, cleared time.Time, rows []row, least int, save func() saved) []row {
 	if rc == nil || agent == "" {
 		return rows
 	}
@@ -94,7 +97,7 @@ func (rc *recall) fold(agent string, cleared time.Time, rows []row, save func() 
 				}
 			}
 		}
-		if length >= foldMin {
+		if length >= least {
 			if log == nil {
 				saved := save()
 				log = &saved

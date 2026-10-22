@@ -344,7 +344,8 @@ When the command finishes or its time runs out, the sink is rendered once:
     are shown of how many log lines and who chose. 30 KiB stays under Claude Code's 50,000-character result limit [m2].
   - A plain row longer than 2,000 characters is cut in `read`'s bracketed form, numbered with its log line
     (`[line 2, chars 1-2000 of 20157]|...`), and the log is kept so it can be read whole.
-  - A block of at least `foldMin` (5) plain rows that one of the agent's last `recallCalls` (50) calls showed, row for
+  - A block of at least `foldMin` (5) plain rows, `foldFailedMin` (20) when the call exited nonzero, that one of the
+    agent's last `recallCalls` (50) calls showed, row for
     row, prints as ``[nibash: the same 15 rows from `FIRST ROW` your previous call showed; log lines 40-54 in LOG]`` where that is
     shorter (`recall.go`). The shell keeps, per agent (the engine session), only hashes of the rows each call showed, a
     folded row as a break; calls from before the agent's last compaction or clear (`Store.Cleared`) never fold, and a

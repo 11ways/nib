@@ -254,7 +254,11 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 		return *log
 	}
 	rows, footer := fit(ctx.Ctx, rows, raw, d, save)
-	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), rows, save)
+	least := foldMin
+	if d.exit != 0 {
+		least = foldFailedMin
+	}
+	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), rows, least, save)
 	// Only what is shown is laid out by folder, so a cut never leaves a path without its folder row.
 	rows = groupListings(rows)
 	// Only rows that are shown count as seen.

@@ -78,3 +78,16 @@ func TestAFoldNeedsTheSameAgentAndItsContextSinceTheEarlierCall(t *testing.T) {
 		t.Fatalf("got %s", out)
 	}
 }
+
+func TestAFailedCallFoldsOnlyALongBlock(t *testing.T) {
+	long := strings.ReplaceAll(failure(25, 0), "names_test", "store_test")
+	f := newFixture(t, map[string]string{"fail.txt": failure(15, 0), "long.txt": long})
+	f.run("awk 1 fail.txt long.txt")
+	// An error of 15 rows shows again whole when the call fails; 25 rows fold.
+	if out := f.run("awk 1 fail.txt; false"); strings.Contains(out, "the same") || !strings.HasSuffix(out, "want 15\n[exit 1]") {
+		t.Fatalf("short block: %s", out)
+	}
+	if out := f.run("awk 1 long.txt; false"); !strings.HasPrefix(out, "[nibash: the same 25 rows from ") {
+		t.Fatalf("long block: %s", out)
+	}
+}
