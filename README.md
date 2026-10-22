@@ -167,7 +167,8 @@ or in nibash, a closing line explains them. Collapsing only happens where it pri
 in characters, than the lines it stands for, so three copies of a short line print as they are; never across a gap
 between selected ranges, and when it hid other numbers the block ends with a note; `collapse: false` shows every line.
 
-nibash folds output across calls too: a block of at least 5 rows (20 when the call failed, so an error shows again) of
+nibash folds output across calls too: a block of at least 5 rows (20 when the call failed, or a program in it failed
+where its exit status does not say so, so an error shows again) of
 program output that one of the agent's last 50 calls
 showed, row for row, prints as one row naming that call and where the lines are,
 ``[nibash: the same 15 rows from `--- FAIL: TestNames (0.01s)` your previous call showed; log lines 40-54 in LOG]``, where it is shorter
@@ -817,13 +818,15 @@ SIGKILL after 3 s). Standard input is empty, and `GIT_TERMINAL_PROMPT=0`, `PAGER
   is cut by the decider ([below](#long-output-and-deciders)) and the whole saved to a log in `$XDG_RUNTIME_DIR/nib/` (or
   the temp directory), capped at 64 MiB. A nonzero exit ends the result with `[exit N]`, which names the program that
   failed with that status when the command line has more than one command: `[exit 128: git pull --rebase]`.
-- **Failures that could go unseen.** A program (not a builtin, a function or a pipeline's stage) that failed without the
-  call's exit status saying so is named in one closing line when its standard error went to `/dev/null` or an `&&`
-  chain skipped what followed it: `[nibash: git pull -q exited 1, its stderr discarded; git push exited 1, so git log
-  did not run]` (up to three, a loop's repeats counted). A failure is handled, and not named, in an `if` or `while`
-  condition, after `!`, before `||` with anything but `true` or `:` after it, or when the next command reads `$?`; so
-  is exit status 1 of `grep`, `rg`, `diff`, `cmp` and `which`, which answers a question. nibash finds each program by a
-  `NIBASH_STEP` variable it sets for that one command, which no program gets.
+- **Failures that could go unseen.** A program (not a builtin or a function) that failed without the call's exit status
+  saying so is named in one closing line when its standard error went to `/dev/null`, an `&&` chain skipped what followed
+  it, or it is a pipeline's stage before the last, whose status the pipeline's is not: `[nibash: git pull -q exited 1,
+  its stderr discarded; go test ./... exited 1 before | grep FAIL]` (up to three, a loop's repeats counted). A failure
+  is handled, and not named, in an `if` or `while` condition, after `!`, before `||` with anything but `true` or `:`
+  after it, or when the next command reads `$?`; so is exit status 1 of `grep`, `rg`, `diff`, `cmp` and `which`, which
+  answers a question, and a stage's end by SIGPIPE (141) when what reads it stopped, as `head` does; nib's own commands
+  end with 141 too when their reader stopped and they failed, as the system program would. nibash finds each program by
+  a `NIBASH_STEP` variable it sets for that one command, which no program gets.
 - **Changed files.** Files the session holds versions of, and files a redirect wrote, are listed with their new tags
   when the command changed them: `[changed by this command: a.txt#9C10 (was #3F2A, +1 -1), notes.md#1B2C (new)]`. A
   file the agent saw some of, changed in at most 10 lines, then shows the change under its header: removed lines as `-|`

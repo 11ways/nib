@@ -194,13 +194,14 @@ func TestRgListsAndCountsFromItsOwnEvents(t *testing.T) {
 
 func TestStandardErrorMergedIntoAPipeReachesTheNextNibCommand(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": numbers})
-	// A link carries records, not bytes, so a stage whose standard error goes into the pipe writes its rows in band instead.
-	expect(t, f.run("grep x missing.txt 2>&1 | head -3"), "grep: missing.txt: No such file or directory")
-	expect(t, f.run("cat missing.txt |& wc -l"), "1")
+	// A link carries records, not bytes, so a stage whose standard error goes into the pipe writes its rows in band instead. Its failure, which
+	// the pipeline's status does not tell, closes the call.
+	expect(t, f.run("grep x missing.txt 2>&1 | head -3"), "grep: missing.txt: No such file or directory\n[nibash: grep x missing.txt exited 2 before | head -3]")
+	expect(t, f.run("cat missing.txt |& wc -l"), "1\n[nibash: cat missing.txt exited 1 before | wc -l]")
 	out := f.run("cat a.txt missing.txt 2>&1 | head -3")
-	expect(t, out, fmt.Sprintf("[a.txt#%s]\n1:one\n2:two needle\n3:three", tagOf(t, out)))
+	expect(t, out, fmt.Sprintf("[a.txt#%s]\n1:one\n2:two needle\n3:three\n[nibash: cat a.txt missing.txt exited 1 before | head -3]", tagOf(t, out)))
 	out = f.run("cat missing.txt a.txt 2>&1 | head -2")
-	expect(t, out, fmt.Sprintf("cat: missing.txt: No such file or directory\n[a.txt#%s]\n1:one", tagOf(t, out)))
+	expect(t, out, fmt.Sprintf("cat: missing.txt: No such file or directory\n[a.txt#%s]\n1:one\n[nibash: cat missing.txt a.txt exited 1 before | head -2]", tagOf(t, out)))
 	if _, err := exec.LookPath("rg"); err == nil {
 		out = f.run("rg needle missing 2>&1 | head -3")
 		if !strings.HasPrefix(out, "rg: missing: ") || !strings.Contains(out, "No such file or directory") {

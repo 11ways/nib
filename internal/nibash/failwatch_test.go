@@ -26,6 +26,10 @@ func TestAFailureTheExitStatusDoesNotTellIsNamedWhereItCouldGoUnseen(t *testing.
 		{"sh -c 'exit 9'", "[exit 9]"},
 		// No program sees the step nibash gives it.
 		{"printenv NIBASH_STEP; echo $?", "1"},
+		// A stage before a pipeline's last fails where the pipeline's status cannot say so; one SIGPIPE ended as head stopped reading did not.
+		{"sh -c 'echo FAIL x; exit 1' | grep FAIL", "FAIL x\n[nibash: sh -c 'echo FAIL x; exit 1' exited 1 before | grep FAIL]"},
+		{"seq 1 200000 | head -1", "1"},
+		{"if sh -c 'exit 3' | grep -q x; then echo y; fi; echo n", "n"},
 	} {
 		expect(t, f.run(c.command), c.want)
 	}

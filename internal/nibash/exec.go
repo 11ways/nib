@@ -274,6 +274,10 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		}
 	}()
 	status := p.run(inv)
+	// A command whose reader stopped, as head does, fails as the system program would on SIGPIPE.
+	if status != 0 && inv.out.stopped {
+		status = sigpipe
+	}
 	if status != 0 {
 		return interp.ExitStatus(status)
 	}

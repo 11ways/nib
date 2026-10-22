@@ -218,6 +218,8 @@ type decision struct {
 	expect     string
 	exit       int
 	timedOut   bool
+	// failed says a program of the call failed where its exit status does not say so, as a failureNote names it.
+	failed bool
 	// read says the purpose is skim's expect, not a call's description.
 	read bool
 	// recall folds blocks the agent saw in an earlier call; nil folds none.
@@ -255,7 +257,7 @@ func (s *sink) render(e *engine.Engine, ctx *engine.Context, logs *logDirectory,
 	}
 	rows, footer := fit(ctx.Ctx, rows, raw, d, save)
 	least := foldMin
-	if d.exit != 0 {
+	if d.exit != 0 || d.failed {
 		least = foldFailedMin
 	}
 	rows = d.recall.fold(ctx.Session, e.Store.Cleared(ctx.Session), rows, least, save)

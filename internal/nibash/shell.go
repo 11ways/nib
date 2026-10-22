@@ -570,9 +570,10 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		status = 1
 	}
 	callTools.Ctx = ctx
-	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status})
-	if note := c.failureNote(status); note != "" {
-		tail = append(tail, note)
+	failed := c.failureNote(status)
+	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status, failed: failed != ""})
+	if failed != "" {
+		tail = append(tail, failed)
 	}
 	if status != 0 {
 		tail = append(tail, c.exitLabel(status))

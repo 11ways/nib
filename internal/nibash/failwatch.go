@@ -16,12 +16,14 @@ import (
 const stepVariable = "NIBASH_STEP"
 
 // step is a command a call watches for failing: its name and its words as the command line wrote them, whether its standard error goes to
-// /dev/null, the commands an && chain skips when it fails, and whether what follows it handles its failure.
+// /dev/null, the commands an && chain skips when it fails, whether what follows it handles its failure, and, for a pipeline's stage before
+// its last, the stages after it, whose status the pipeline's is.
 type step struct {
 	name, text string
 	discarded  bool
 	skipped    []string
 	handled    bool
+	piped      string
 }
 
 // failedStep is a watched command that failed, by its step, and its exit status.
@@ -42,10 +44,12 @@ type watch struct {
 }
 
 // scope is where a statement runs: whether its standard output and error go to /dev/null, whether its status is a condition, and, for the
-// last statement of a list, what an && chain skips when it fails and whether what follows handles that.
+// last statement of a list, what an && chain skips when it fails and whether what follows handles that; piped is the stages after a
+// pipeline's stage, for one before its last.
 type scope struct {
 	outNull, discarded, condition, handled bool
 	skipped                                []string
+	piped                                  string
 }
 
 // watchFailures reads each program a call should watch for failing, before classify renames nib's own commands; mark then gives each its
@@ -115,8 +119,9 @@ func (w *watch) stmt(s *syntax.Stmt, sc scope) {
 			x.skipped, x.handled = nil, !silences(cmd.Y)
 			w.stmt(cmd.X, x)
 			w.stmt(cmd.Y, sc)
+		case syntax.Pipe, syntax.PipeAll:
+			w.pipeline(cmd, sc)
 		}
-		// A pipeline's stages are left as they are: a stage before the last has no say in its status.
 	case *syntax.Block:
 		w.list(cmd.Stmts, sc)
 	case *syntax.Subshell:
@@ -146,6 +151,29 @@ func (w *watch) stmt(s *syntax.Stmt, sc scope) {
 	}
 }
 
+// pipeline watches each stage of a pipeline: the last as any statement, since the pipeline's status is its own, and each before it as a step
+// whose failure that status hides, as go test's is in go test | grep FAIL.
+func (w *watch) pipeline(cmd *syntax.BinaryCmd, sc scope) {
+	list, _ := stages(cmd)
+	for i, s := range list {
+		if i == len(list)-1 {
+			w.stmt(s, sc)
+			break
+		}
+		call, ok := s.Cmd.(*syntax.CallExpr)
+		if !ok || sc.condition || s.Background || s.Negated {
+			continue
+		}
+		var after []string
+		for _, later := range list[i+1:] {
+			after = append(after, printed(later))
+		}
+		stage := sc.redirected(s.Redirs)
+		stage.skipped, stage.handled, stage.piped = nil, false, "| "+strings.Join(after, " | ")
+		w.call(call, stage)
+	}
+}
+
 // call watches a program, which a builtin or a function of the command line is not.
 func (w *watch) call(call *syntax.CallExpr, sc scope) {
 	if len(call.Args) == 0 {
@@ -158,7 +186,7 @@ func (w *watch) call(call *syntax.CallExpr, sc scope) {
 	if !ok {
 		name = ""
 	}
-	w.steps = append(w.steps, step{name: name, text: printed(call), discarded: sc.discarded, skipped: sc.skipped, handled: sc.handled})
+	w.steps = append(w.steps, step{name: name, text: printed(call), discarded: sc.discarded, skipped: sc.skipped, handled: sc.handled, piped: sc.piped})
 	w.calls = append(w.calls, call)
 }
 
@@ -224,11 +252,7 @@ func printed(node syntax.Node) string {
 	if err := syntax.NewPrinter(syntax.SingleLine(true)).Print(&b, node); err != nil {
 		return "?"
 	}
-	text := []rune(strings.TrimSpace(b.String()))
-	if len(text) > printedLimit {
-		return string(text[:printedLimit-3]) + "..."
-	}
-	return string(text)
+	return clip(strings.TrimSpace(b.String()))
 }
 
 // mark gives each watched command its step, once classify has read the command line as written.
@@ -257,13 +281,19 @@ func (c *call) recordStep(env expand.Environ, name string, err error) {
 	c.failures = append(c.failures, failedStep{step: id, status: int(status)})
 }
 
-// told is the failure the call's exit status tells: the last one, when it failed with that status; -1 when none did.
+// told is the failure the call's exit status tells: the last one of a command whose status can be the call's, when it failed with that
+// status; -1 when none did. A pipeline's stage before its last never is.
 func (c *call) told(status int) int {
-	last := len(c.failures) - 1
-	if status == 0 || last < 0 || c.failures[last].status != status {
-		return -1
+	for i := len(c.failures) - 1; i >= 0; i-- {
+		if c.steps[c.failures[i].step].piped != "" {
+			continue
+		}
+		if status == 0 || c.failures[i].status != status {
+			return -1
+		}
+		return i
 	}
-	return last
+	return -1
 }
 
 // exitLabel is the closing line of a call that exited with status: [exit N], naming the command that failed with it among several watched.
@@ -277,8 +307,9 @@ func (c *call) exitLabel(status int) string {
 }
 
 // failureNote names the commands that failed where the call's exit status does not say so and nothing after them handles it, while the
-// failure could go unnoticed: their standard error went to /dev/null, or an && chain skipped what followed; "" for none. An answer, as grep's
-// 1 for no match, is no failure.
+// failure could go unnoticed: their standard error went to /dev/null, an && chain skipped what followed, or a later stage of their pipeline
+// gave its status; "" for none. An answer, as grep's 1 for no match, is no failure, nor is a stage's end by SIGPIPE when what reads it
+// stopped, as head does.
 func (c *call) failureNote(status int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -288,7 +319,8 @@ func (c *call) failureNote(status int) string {
 	var order []int
 	for i, f := range c.failures {
 		s := c.steps[f.step]
-		if i == told || predicates[filepath.Base(s.name)] && f.status == 1 || s.handled || !s.discarded && len(s.skipped) == 0 {
+		if i == told || predicates[filepath.Base(s.name)] && f.status == 1 || s.handled || s.piped != "" && f.status == sigpipe ||
+			!s.discarded && len(s.skipped) == 0 && s.piped == "" {
 			continue
 		}
 		if counts[f.step] == 0 {
@@ -301,6 +333,9 @@ func (c *call) failureNote(status int) string {
 	for _, id := range order {
 		s := c.steps[id]
 		clause := fmt.Sprintf("%s exited %d", s.text, statuses[id])
+		if s.piped != "" {
+			clause += " before " + clip(s.piped)
+		}
 		if counts[id] > 1 {
 			clause += fmt.Sprintf(" (%d times)", counts[id])
 		}
@@ -323,3 +358,14 @@ func (c *call) failureNote(status int) string {
 
 // noteFailures is how many failures a note names.
 const noteFailures = 3
+
+// sigpipe is the exit status of a program SIGPIPE ended, as one writing into a pipe its reader closed.
+const sigpipe = 128 + 13
+
+// clip is text cut to printedLimit characters.
+func clip(text string) string {
+	if runes := []rune(text); len(runes) > printedLimit {
+		return string(runes[:printedLimit-3]) + "..."
+	}
+	return text
+}

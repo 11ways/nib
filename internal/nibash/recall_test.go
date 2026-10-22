@@ -91,3 +91,12 @@ func TestAFailedCallFoldsOnlyALongBlock(t *testing.T) {
 		t.Fatalf("long block: %s", out)
 	}
 }
+
+// A pipeline whose first stage failed is a failed call for the fold too, though its last stage set its status.
+func TestAPipelineWhoseStageFailedFoldsOnlyALongBlock(t *testing.T) {
+	f := newFixture(t, map[string]string{"fail.txt": failure(15, 0)})
+	f.run("awk 1 fail.txt")
+	if out := f.run("sh -c 'cat fail.txt; exit 1' | cat"); strings.Contains(out, "the same") || !strings.Contains(out, "want 15\n[nibash: sh -c 'cat fail.txt; exit 1' exited 1 before | cat]") {
+		t.Fatalf("got %s", out)
+	}
+}
