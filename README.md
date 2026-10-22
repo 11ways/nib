@@ -552,8 +552,8 @@ REM
   when a line was replaced by one line, as `[N chars 2952-3057 of 3108]|...`, instead of the line's start. A cut row still
   counts as seen when the agent wrote it, or knew the line whole before the edit moved it, so it anchors the next edit;
   every new row does, cut, mapped or elided, except a `SUB` result on a line the agent never knew whole. The note on such
-  cut rows says a plain `read PATH:N` shows one whole, which needs no `maxLineLength` below 2000 characters. A response that
-  changes nothing still shows the lines whole, up to 2000 characters. Follow-up edits can use that tag and numbering
+  cut rows says a plain `read PATH:N` shows one whole, which needs no `maxLineLength` below 2000 characters. A response
+  that changes nothing still shows the lines whole, up to 2000 characters. Follow-up edits can use that tag and numbering
   without a read. A section that reproduces the current content reports `No changes` with those lines whole, so an edit
   resent unchanged shows what the file already holds, and leaves the file untouched.
 - A replace whose range looks one line off still applies, with a warning naming the two lines: the kept line just above
