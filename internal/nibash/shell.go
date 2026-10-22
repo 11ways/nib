@@ -122,7 +122,7 @@ func (s *Shell) Description() string {
 	}
 	cut := kind.Cut()
 	if s.summarizer != nil {
-		cut += fmt.Sprintf(", or past %d lines or %d KB to a <summary> of it and the log lines that summary points at", summaryLines, summaryBytes/1024)
+		cut += fmt.Sprintf(", or past %d lines or %d KB to a <summary> of it and the log lines that summary points at, and a failed call's last %d", summaryLines, summaryBytes/1024, failedTail)
 	}
 	return fmt.Sprintf(description, ownNames(), cut)
 }

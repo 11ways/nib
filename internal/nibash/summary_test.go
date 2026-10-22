@@ -107,6 +107,28 @@ func TestASummaryThatPointsAtNothingShowsItselfAndHowMuchItLeftOut(t *testing.T)
 	}
 }
 
+func TestAFailedCallsSummaryIsFollowedByTheEndOfItsOutput(t *testing.T) {
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "Step 1000 failed.", Ranges: [][2]int{{500, 500}, {995, 995}}, Who: "vendor/model"}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice { return decider.Choice{Who: "keywords"} }}
+	out := renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, purpose: "run every step", exit: 1})
+	rows := strings.Split(out, "\n")
+	// The passages come first, then the last 20 lines whole, the one a passage already shows once.
+	want := []string{"<summary>Step 1000 failed.</summary>", "499|line 499", "500|line 500", "501|line 501"}
+	for line := 981; line <= 1000; line++ {
+		want = append(want, fmt.Sprintf("%d|line %d", line, line))
+	}
+	if !slices.Equal(rows[:len(rows)-1], want) || !strings.HasPrefix(rows[len(rows)-1], "[nibash: 23 rows shown of 1,000 log lines; ") {
+		t.Fatalf("rows:\n%s", out)
+	}
+	// A call that succeeded gets the summary's passages alone.
+	passed := renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, purpose: "run every step"})
+	if strings.Contains(passed, "\n981|line 981\n") || !strings.Contains(passed, "\n995|line 995\n") {
+		t.Fatalf("rows:\n%s", passed)
+	}
+}
+
 // Past excerptLines entries but within wholeBytes, an output goes to the summarizer whole, and no decider is asked for an excerpt.
 func TestASmallOutputPastExcerptLinesIsSummarizedWhole(t *testing.T) {
 	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
@@ -305,7 +327,7 @@ func TestTheDescriptionSaysASummaryMayLeadACut(t *testing.T) {
 	if strings.Contains(s.Description(), "summary") {
 		t.Fatal("no summarizer, yet the description names one")
 	}
-	if !strings.Contains(s.Summarizing(&fakeSummarizer{}).Description(), "a <summary> of it") {
+	if !strings.Contains(s.Summarizing(&fakeSummarizer{}).Description(), "a <summary> of it and the log lines that summary points at, and a failed call's last 20") {
 		t.Fatal("the description does not name the summary")
 	}
 }

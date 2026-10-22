@@ -387,7 +387,10 @@ line around each; the ranges share `summaryRows`, 30: by `decider.Shares`, one t
 shows whole and the longer ones split the rest, at least 3 rows each, dropping their surrounding lines first and then
 showing their start and a note naming the rest), every row numbered with its log line, and a closing note with nib's own
 counts and the read of the other lines; the agent sees fewer rows than any decider shows, and nothing in it is the
-model's but the `<summary>` element. When every entry fails, the decider's cut stands with `no summary` in its note.
+model's but the `<summary>` element. A failed call's (a nonzero exit status, or a failure `failwatch.go` names) also
+shows its last 20 rows (`failedTail`) as printed, numbered and up to 240 characters wide (`passageColumns`), after the
+passages and outside their share, since a failure reports itself at the end and a summary may paraphrase it; a row a
+passage shows is not shown twice. When every entry fails, the decider's cut stands with `no summary` in its note.
 
 The 96 KiB is for outputs of many short lines, a skim of a few dozen short files above all: the 600-entry cap alone
 sent the changelog capture's 918 lines (59 KB as read) to an excerpt that left out the files in its middle. Of the

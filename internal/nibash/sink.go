@@ -43,6 +43,8 @@ const (
 	summaryContext = 1
 	summaryRows    = 30
 	summaryShare   = 3
+	// A failed call's summary is followed by its output's last failedTail rows as printed.
+	failedTail = 20
 	// passageBytes bounds the rows a summary's passages show in all, each row at most passageColumns and at least passageLeast characters
 	// wide; a pointed-at line can be thousands of characters of JSON or encoded data the summary already told.
 	passageBytes   = 4 * 1024

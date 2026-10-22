@@ -1,6 +1,7 @@
 package nibash
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -97,7 +98,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	}
 	if wholeFits(entries, legend) {
 		if s, ok := ask(entries); ok {
-			return summarized(rows, s, log, lines)
+			return summarized(rows, s, log, lines, d.exit != 0 || d.failed)
 		}
 		return cut(nil, "no summary")
 	}
@@ -110,7 +111,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		return cut(&choice)
 	}
 	if s, ok := ask(excerpt(rows[from:to], choice, entries, files)); ok {
-		return summarized(rows, s, log, lines)
+		return summarized(rows, s, log, lines, d.exit != 0 || d.failed)
 	}
 	return cut(&choice, "no summary")
 }
@@ -606,9 +607,14 @@ func cmpScore(a, b float64) int {
 	return 0
 }
 
-// summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note. lines are the log's lines.
-func summarized(rows []row, s decider.Summary, log saved, lines []string) []row {
-	out, shown := summaryPassages(rows, s, log, lines)
+// summarized shows a checked summary in place of a decider's cut: the summary's rows, then a closing note. lines are the log's lines. A failed
+// call's output also shows its last failedTail rows, where a failure usually reports itself, whatever the summary pointed at.
+func summarized(rows []row, s decider.Summary, log saved, lines []string, failed bool) []row {
+	tail := 0
+	if failed {
+		tail = failedTail
+	}
+	out, shown := summaryPassages(rows, s, log, lines, tail)
 	return append(out, row{text: closing(shown, log, endingOf(nil, shown > 0), nil), header: -1})
 }
 
@@ -666,8 +672,8 @@ func briefLine(label int, line string, width int) (text string, cut bool) {
 
 // summaryPassages are a checked summary as a <summary> element, then every passage it points at, each widened by summaryContext lines and given
 // a share of the rows log.passages gives; a passage longer than its share drops its context lines first, then shows the start of the lines
-// pointed at, with a note on the rest. shown counts the passages' rows.
-func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (out []row, shown int) {
+// pointed at, with a note on the rest. The last tail rows of log lines follow at passageColumns, as no passage's share. shown counts the rows.
+func summaryPassages(rows []row, s decider.Summary, log saved, lines []string, tail int) (out []row, shown int) {
 	taken := make([]bool, len(rows))
 	var passages [][]int
 	var pointed [][2]int
@@ -719,10 +725,20 @@ func summaryPassages(rows []row, s decider.Summary, log saved, lines []string) (
 	}
 	// The passages share the budget, each row as wide as its share; a longer line shows briefly, and the log holds it whole.
 	width := min(passageColumns, max(passageLeast, budget/max(1, shown)))
+	widths := map[int]int{}
+	for i := len(rows) - 1; i >= 0 && tail > 0; i-- {
+		if rows[i].first > 0 {
+			if !keep[i] {
+				keep[i], widths[i] = true, passageColumns
+				shown++
+			}
+			tail--
+		}
+	}
 	brief := slices.Clone(rows)
 	for i, r := range brief {
 		if keep[i] && r.plain && r.first > 0 && r.first == r.last && r.first <= len(lines) {
-			brief[i] = briefRow(r, lines[r.first-1], log.base+r.first, width)
+			brief[i] = briefRow(r, lines[r.first-1], log.base+r.first, cmp.Or(widths[i], width))
 		}
 	}
 	out = append([]row{{text: "<summary>" + summaryText(s.Text) + "</summary>", header: -1}}, gapped(brief, keep, notes, log, true)...)
