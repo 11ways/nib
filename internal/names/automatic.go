@@ -101,7 +101,8 @@ func (d *Defined) Announced(agent string) []string {
 }
 
 // Forget marks every name agent got before moment as no longer told, as its harness compacted or cleared its context then: a path printed
-// under one tells of it again, and the next note is told in full. Call it once per moment, as Store.Forget reports.
+// under one tells of it again, and the next note is told in full. Call it once per moment, as Store.Forget reports; the moment is saved with
+// the agent's names, as the harness reports it only once.
 func (d *Defined) Forget(agent string, moment time.Time) {
 	if d == nil {
 		return
@@ -112,19 +113,25 @@ func (d *Defined) Forget(agent string, moment time.Time) {
 	if names == nil {
 		return
 	}
-	names.full = 0
+	names.forget(moment.UnixNano())
+	d.saveLocked(agent)
+}
+
+// forget marks the names last told before at as untold, and keeps at as the latest drop.
+func (n *defined) forget(at int64) {
+	n.full = 0
+	n.dropped = max(n.dropped, at)
 	// The latest definition of a name is the one the agent works with; one told since the moment is still told.
 	latest := map[string]int64{}
-	for _, entry := range names.list {
+	for _, entry := range n.list {
 		latest[entry.Name] = entry.told
 	}
-	at := moment.UnixNano()
 	for name, told := range latest {
 		if told < at {
-			if names.untold == nil {
-				names.untold = map[string]bool{}
+			if n.untold == nil {
+				n.untold = map[string]bool{}
 			}
-			names.untold[name] = true
+			n.untold[name] = true
 		}
 	}
 }

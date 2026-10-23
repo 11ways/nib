@@ -22,8 +22,10 @@ type kept struct {
 	keys map[string]string
 }
 
+// keptFile is one agent's saved names and the latest moment its context was dropped, which the harness reports only once.
 type keptFile struct {
-	Names []keptName `json:"names"`
+	Names   []keptName `json:"names"`
+	Dropped int64      `json:"dropped,omitempty"`
 }
 
 type keptName struct {
@@ -53,8 +55,8 @@ func (d *Defined) Keep(dir string) {
 }
 
 // Persist gives agent a lasting key, a harness's own id for it, under which its names are saved from now on; an agent with no names yet in
-// this server gets those saved under key, as told when it was last told of each, so a later drop of its context still retells them. Call it
-// before the agent inherits its parent's names.
+// this server gets those saved under key, as told when it was last told of each, and those a saved drop took since as untold. Call it before
+// the agent inherits its parent's names.
 func (d *Defined) Persist(agent, key string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -67,7 +69,8 @@ func (d *Defined) Persist(agent, key string) {
 		return
 	}
 	restored := &defined{}
-	for _, saved := range loadKept(k.file(key)).Names {
+	file := loadKept(k.file(key))
+	for _, saved := range file.Names {
 		if !valid.MatchString(saved.Name) || !filepath.IsAbs(saved.Directory) {
 			continue
 		}
@@ -80,6 +83,9 @@ func (d *Defined) Persist(agent, key string) {
 		}
 	}
 	if len(restored.list) > 0 {
+		if file.Dropped > 0 {
+			restored.forget(file.Dropped)
+		}
 		d.agents[agent] = restored
 	}
 }
@@ -95,7 +101,7 @@ func (d *Defined) saveLocked(agent string) {
 	if !ok || names == nil {
 		return
 	}
-	var file keptFile
+	file := keptFile{Dropped: names.dropped}
 	for _, entry := range names.list {
 		file.Names = append(file.Names, keptName{entry.Name, entry.Directory, entry.at, entry.told, entry.kind})
 	}

@@ -60,6 +60,8 @@ type defined struct {
 	observed  bool
 	untold    map[string]bool
 	retell    []made
+	// dropped is the latest moment the agent's context was dropped, saved with its names.
+	dropped int64
 }
 
 // made is a name nib made and has not told of yet, with the shown paths that ran through its directory.

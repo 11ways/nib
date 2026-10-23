@@ -85,7 +85,7 @@ func TestARestoredNameIsToldAgainOnlyWhenADropTookItAfterItWasLastTold(t *testin
 	}
 	second := restarted(t, dir, learned, root)
 	second.Persist("main", "claude:session")
-	second.Forget("main", dropped)
+	// The harness reports a drop once, so the restarted server learns of it from the saved names alone.
 	again := (&Table{Base: root}).For(second, "main")
 	again.Display(filepath.Join(widgets, "B.java"))
 	again.Display(filepath.Join(gadgets, "C.java"))
