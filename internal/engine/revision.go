@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -90,37 +91,40 @@ func (e *Engine) revisionAt(ctx *Context, path, rev, selector string) (*revision
 	if repository == "" {
 		return nil, nil
 	}
-	hash, err := gitText(ctx, repository, anchor.canonical, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
+	hash, isRange, err := resolveRevision(ctx, repository, anchor.canonical, path, rev)
 	if err != nil {
-		return nil, &noCommit{fmt.Sprintf("%s@%s: %s is no commit in %s", path, rev, rev, directoryDisplay(ctx, repository))}
+		return nil, err
 	}
-	hash = strings.TrimSpace(hash)
+	// A file's path goes through the canonical folder that holds it, as it may not exist now.
+	canonical := anchor.canonical
 	if !isDirectory {
 		relative, err := filepath.Rel(directory, requested)
 		if err != nil {
 			return nil, err
 		}
-		canonical := filepath.Join(anchor.canonical, relative)
-		inRepository, err := filepath.Rel(repository, canonical)
-		if err != nil {
-			return nil, err
-		}
-		t := &target{canonical: canonical, display: ctx.display(canonical), rev: "@" + rev}
-		content, err := gitOutput(ctx, repository, repository, "cat-file", "blob", hash+":"+filepath.ToSlash(inRepository))
-		if err != nil {
-			return nil, &noCommit{fmt.Sprintf("%s@%s: %s holds no file %s", path, rev, rev, filepath.ToSlash(inRepository))}
-		}
-		return &revision{t: t, text: content, selector: selector, key: canonical + "@" + hash}, nil
+		canonical = filepath.Join(anchor.canonical, relative)
 	}
-	t := &target{canonical: anchor.canonical, display: directoryDisplay(ctx, anchor.canonical), rev: "@" + rev, commit: true}
-	r := &revision{t: t, commit: true, key: anchor.canonical + "@" + hash}
-	subtree, err := filepath.Rel(repository, anchor.canonical)
+	subtree, err := filepath.Rel(repository, canonical)
 	if err != nil {
 		return nil, err
 	}
+	if !isDirectory && !isRange {
+		t := &target{canonical: canonical, display: ctx.display(canonical), rev: "@" + rev}
+		content, err := gitOutput(ctx, repository, repository, "cat-file", "blob", hash+":"+filepath.ToSlash(subtree))
+		if err != nil {
+			return nil, &noCommit{fmt.Sprintf("%s@%s: %s holds no file %s", path, rev, rev, filepath.ToSlash(subtree))}
+		}
+		return &revision{t: t, text: content, selector: selector, key: canonical + "@" + hash}, nil
+	}
+	// A directory at a commit is that commit, and a file or directory between two commits is their diff.
+	t := &target{canonical: canonical, display: directoryDisplay(ctx, canonical), rev: "@" + rev, commit: true}
+	if !isDirectory {
+		t.display = ctx.display(canonical)
+	}
+	r := &revision{t: t, commit: true, key: t.canonical + "@" + hash}
 	paths := []string{filepath.ToSlash(subtree)}
-	if selector != "" && !selectorPattern.MatchString("x:"+selector) {
-		if paths, err = changedPaths(ctx, repository, hash, paths[0], selector); err != nil {
+	if isDirectory && selector != "" && !selectorPattern.MatchString("x:"+selector) {
+		if paths, err = changedPaths(ctx, repository, hash, isRange, paths[0], selector); err != nil {
 			return nil, err
 		}
 		if paths == nil {
@@ -131,9 +135,15 @@ func (e *Engine) revisionAt(ctx *Context, path, rev, selector string) (*revision
 	}
 	args := append([]string{"show", "--no-ext-diff", "--no-textconv", "--no-color", "--pretty=medium", "--date=default", "--abbrev-commit",
 		"--stat", "--patch"}, gitform.StatArgs...)
+	if isRange {
+		args = append([]string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--stat", "--patch"}, gitform.StatArgs...)
+	}
 	shown, err := gitOutput(ctx, repository, repository, append(append(args, hash, "--"), paths...)...)
 	if err != nil {
 		return nil, err
+	}
+	if isRange && len(shown) == 0 {
+		return nil, &noCommit{fmt.Sprintf("%s@%s: nothing under %s changed in %s", path, rev, path, rev)}
 	}
 	var lines []string
 	lines, r.own = commitLines(splitText(string(shown)), ownEmail(ctx, repository))
@@ -141,10 +151,51 @@ func (e *Engine) revisionAt(ctx *Context, path, rev, selector string) (*revision
 	return r, nil
 }
 
-// changedPaths are the files commit changed under subtree that selector names: the path itself, or a file it ends, as Foo.java names
-// src/Foo.java.
-func changedPaths(ctx *Context, repository, commit, subtree, selector string) ([]string, error) {
-	listed, err := gitText(ctx, repository, repository, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", commit, "--", subtree)
+// resolveRevision is rev's commit as a full hash, or for a range A..B or A...B, as git diff reads one, the range between the full hashes
+// of its ends, an empty end standing for HEAD.
+func resolveRevision(ctx *Context, repository, directory, path, rev string) (hash string, isRange bool, err error) {
+	ends, dots := []string{rev}, rangeDots(rev)
+	if dots != "" {
+		from, to, _ := strings.Cut(rev, dots)
+		ends = []string{cmp.Or(from, "HEAD"), cmp.Or(to, "HEAD")}
+	}
+	var hashes []string
+	for _, end := range ends {
+		hash, err := gitText(ctx, repository, directory, "rev-parse", "--verify", "--quiet", "--end-of-options", end+"^{commit}")
+		if err != nil {
+			return "", false, &noCommit{fmt.Sprintf("%s@%s: %s is no commit in %s", path, rev, end, directoryDisplay(ctx, repository))}
+		}
+		hashes = append(hashes, strings.TrimSpace(hash))
+	}
+	return strings.Join(hashes, dots), dots != "", nil
+}
+
+// rangeDots is the dots that make rev a range, "..." or "..", as git diff reads them; "" for one commit.
+func rangeDots(rev string) string {
+	for _, dots := range []string{"...", ".."} {
+		if strings.Contains(rev, dots) {
+			return dots
+		}
+	}
+	return ""
+}
+
+// commitPart is what precedes the diff of what rev names: a commit's header and files, or a range's files alone.
+func commitPart(rev string) string {
+	if rangeDots(rev) != "" {
+		return "files"
+	}
+	return "header and files"
+}
+
+// changedPaths are the files commit, or a range of commits, changed under subtree that selector names: the path itself, or a file it ends,
+// as Foo.java names src/Foo.java.
+func changedPaths(ctx *Context, repository, rev string, isRange bool, subtree, selector string) ([]string, error) {
+	args := []string{"diff-tree", "--no-commit-id", "--name-only", "-r", "--root", rev, "--", subtree}
+	if isRange {
+		args = []string{"diff", "--name-only", "--no-relative", rev, "--", subtree}
+	}
+	listed, err := gitText(ctx, repository, repository, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +346,7 @@ func (e *Engine) revisionBlock(ctx *Context, r *revision, args ReadArgs, maxLine
 		}
 	}
 	if len(r.text) > TextLimit {
-		return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the 2 MiB text limit", name, float64(len(r.text))/1048576)), nil
+		return noteBlock(fmt.Sprintf("[%s] skipped: %.1f MiB, over the %s text limit", name, float64(len(r.text))/1048576, TextLimitName)), nil
 	}
 	source, err := decodeText(r.text)
 	if err != nil {

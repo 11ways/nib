@@ -140,6 +140,41 @@ func TestALargeCommitReadsAsItsHeaderAndFilesFirst(t *testing.T) {
 		!strings.Contains(got, "| big.txt +510\n") || strings.Contains(got, "diff --git") {
 		t.Fatalf("got:\n%s", got)
 	}
+	if got := readText(t, e, ctx, ".@HEAD~1..HEAD"); !strings.Contains(got, "; files only. Read the diff with .@HEAD~1..HEAD:4-, or one file's with .@HEAD~1..HEAD:PATH.\n") {
+		t.Fatalf("range:\n%s", got)
+	}
+}
+
+func TestReadARangeOfCommitsPrintsTheirDiff(t *testing.T) {
+	e, ctx, _ := revisionFixture(t)
+	// A directory between two commits is their diff, its files first; a path after the colon narrows it to one file.
+	got := readText(t, e, ctx, ".@HEAD~1...HEAD")
+	want := "[.@HEAD~1...HEAD]\n1| a.go +1 -1\n2| gone.txt -1\n3| sub/b.txt +1 -1\n4| 3 files changed, 2 insertions(+), 3 deletions(-)\n5|\n6|diff --git a/a.go b/a.go\n"
+	if !strings.HasPrefix(got, want) || strings.Contains(got, "|commit ") {
+		t.Fatalf("got:\n%s\nwant it to start:\n%s", got, want)
+	}
+	if one := readText(t, e, ctx, ".@HEAD~1..:sub/b.txt"); !strings.Contains(one, "|+b2") || strings.Contains(one, "a.go") {
+		t.Fatalf("one file:\n%s", one)
+	}
+	// A file between two commits is its own diff, also once it is gone.
+	if file := readText(t, e, ctx, "a.go@HEAD~1..HEAD"); !strings.HasPrefix(file, "[a.go@HEAD~1..HEAD]\n1| a.go +1 -1\n") || !strings.Contains(file, "|+\treturn 2") {
+		t.Fatalf("file:\n%s", file)
+	}
+	if gone := readText(t, e, ctx, "gone.txt@HEAD~1..HEAD"); !strings.Contains(gone, "|-old") {
+		t.Fatalf("gone:\n%s", gone)
+	}
+	// Each end must resolve, and a range that changed nothing there says so.
+	if _, err := e.Read(ctx, ReadArgs{Paths: []string{".@HEAD...nope"}}); err == nil || err.Error() != ".@HEAD...nope: nope is no commit in ." {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := e.Read(ctx, ReadArgs{Paths: []string{"sub@HEAD..HEAD"}}); err == nil || err.Error() != "sub@HEAD..HEAD: nothing under sub changed in HEAD..HEAD" {
+		t.Fatalf("got %v", err)
+	}
+	// skim reads it as a log.
+	log, err := e.ReadLog(ctx, ".@HEAD~1...HEAD", 1<<20, func(*LogFile) int64 { return 0 })
+	if err != nil || !strings.Contains(string(log.Raw), "-\treturn 1\n") {
+		t.Fatalf("%v\n%s", err, log.Raw)
+	}
 }
 
 func TestSkimReadsARevisionAsALog(t *testing.T) {

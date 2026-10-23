@@ -1612,7 +1612,7 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 					rows[i] = rowFor(i + 1)
 				}
 				return &block{
-					head: fmt.Sprintf("%s %s; header and files only. Read the diff with %s:%d-, or one file's with %s:PATH.", head, sizeText, name, diffAt+1, name),
+					head: fmt.Sprintf("%s %s; %s only. Read the diff with %s:%d-, or one file's with %s:PATH.", head, sizeText, commitPart(t.rev), name, diffAt+1, name),
 					rows: rows,
 					finish: func(shown int) []string {
 						if shown < len(rows) {

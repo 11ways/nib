@@ -114,7 +114,7 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | `path:A`, `path:A-B`, `path:A+N`, `path:A-`, `path:-N`, `path:A-B,C-D` | lines |
 | `path:name`, `path:Type.member`, `path:a,b` | declarations, with their comments and annotations |
 | `path#TAG` | what changed since that version (nib keeps 4 per file) |
-| `path@REV` | the file at a git revision; a folder gives the commit and its diff |
+| `path@REV` | the file at a git revision; a folder gives the commit and its diff; `path@A...B` or `path@A..B` the diff between them, a folder's files first (`.@main...topic:Foo.java` for one file) |
 | `file.db:TABLE`, `file.db:TABLE:-15`, `file.db:SELECT ...` | rows of a SQLite database file, or a read-only query |
 
 Declarations are found with tree-sitter for Java, Kotlin, TypeScript, TSX, JavaScript, Go, Python, Rust, C, C++ and
