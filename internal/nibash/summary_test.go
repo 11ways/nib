@@ -107,6 +107,33 @@ func TestASummaryThatPointsAtNothingShowsItselfAndHowMuchItLeftOut(t *testing.T)
 	}
 }
 
+func TestHelpOutputGetsTheDecidersLinesRatherThanASummary(t *testing.T) {
+	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
+		return decider.Summary{Text: "It has server commands.", Who: "vendor/model"}
+	}}
+	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice {
+		return decider.Choice{Who: "keywords", Picks: []decider.Pick{{Range: decider.Range{Start: 600, End: 601}, Score: 0.5}}}
+	}}
+	for _, command := range []string{"zenit-dev --help", "git help log", "man ls", "cd x && tool --help", "tool sub --help | cat"} {
+		summary.asked = nil
+		out := renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, command: command, purpose: "the server flags"})
+		if len(summary.asked) != 0 || strings.Contains(out, "<summary>") || !strings.Contains(out, "\n631|line 631\n") {
+			t.Errorf("%s: asked %d, out:\n%s", command, len(summary.asked), out)
+		}
+	}
+	// Within the budget, help stays whole; any other command past the summary's limits gets one.
+	if out := renderSink(t, numberedSink(200), decision{decider: choose, summarizer: summary, command: "tool --help", purpose: "the server flags"}); strings.Count(out, "\n") != 199 {
+		t.Errorf("help within the budget:\n%s", out)
+	}
+	for _, command := range []string{"tool build", "ls -h", "tool -h", "grep -h x a b"} {
+		summary.asked = nil
+		renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, command: command, purpose: "the server flags"})
+		if len(summary.asked) != 1 {
+			t.Errorf("%s: asked %d", command, len(summary.asked))
+		}
+	}
+}
+
 func TestAFailedCallsSummaryIsFollowedByTheEndOfItsOutput(t *testing.T) {
 	summary := &fakeSummarizer{summarize: func(decider.SummaryInput) decider.Summary {
 		return decider.Summary{Text: "Step 1000 failed.", Ranges: [][2]int{{500, 500}, {995, 995}}, Who: "vendor/model"}

@@ -5,10 +5,13 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
+
+	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
@@ -22,6 +25,44 @@ const purposeChars = 200
 func purpose(description string) string {
 	runes := []rune(strings.TrimSpace(description))
 	return string(runes[:min(len(runes), purposeChars)])
+}
+
+// summary is the summarizer that condenses the call's output: none for a call asking a program for its help or manual (helps), whose
+// reference text a summary reduces to the fact that its options exist, so the decider's chosen lines serve it instead.
+func (d decision) summary() decider.Summarizer {
+	if d.summarizer == nil || helps(d.command) {
+		return nil
+	}
+	return d.summarizer
+}
+
+// helps says whether a command line asks a program for its help or manual: man, info or bash's help, a help subcommand (git help log) or
+// --help; never -h, which is ls's and sort's human-readable sizes and grep's no file names.
+func helps(command string) bool {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	found := false
+	var words scan
+	syntax.Walk(file, func(n syntax.Node) bool {
+		call, ok := n.(*syntax.CallExpr)
+		if found || !ok || len(call.Args) == 0 {
+			return !found
+		}
+		args := make([]string, len(call.Args))
+		for i, w := range call.Args {
+			args[i], _ = words.word(w)
+		}
+		switch program := filepath.Base(args[0]); {
+		case program == "man" || program == "info" || program == "help":
+			found = true
+		case len(args) > 1 && args[1] == "help", slices.Contains(args[1:], "--help"):
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // shape cuts over-budget rows, or with a summarizer condenses plain output past summaryLines or summaryBytes: the configured decider
@@ -40,7 +81,8 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	var lines []string
 	var entries []decider.Entry
 	var legend decider.Legend
-	if plain && (model || d.summarizer != nil) {
+	summarizer := d.summary()
+	if plain && (model || summarizer != nil) {
 		lines = plainLines([]byte(raw))
 		entries, legend = dedupe(lines)
 	}
@@ -77,7 +119,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		return assemble(rows, *choice, log, d, notes...)
 	}
 	// A summary is not asked for a run that succeeded with no purpose to serve, nor where the decider judged that every line counts.
-	if d.summarizer == nil || d.decider == nil || !plain || d.purpose == "" && d.exit == 0 && !d.timedOut {
+	if summarizer == nil || d.decider == nil || !plain || d.purpose == "" && d.exit == 0 && !d.timedOut {
 		return cut(nil)
 	}
 	ask := func(chosen []decider.Entry) (decider.Summary, bool) {
@@ -89,7 +131,7 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		}
 		in := decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit, TimedOut: d.timedOut, Log: lines,
 			Excerpt: shown, Entries: chosen, Legend: legend, Base: log.base, Heads: files.heads(rows)}
-		s := d.summarizer.Summarize(ctx, in)
+		s := summarizer.Summarize(ctx, in)
 		return s, s.Failure == ""
 	}
 	// A list of the same few problems at many places, short enough to show whole, stays whole: each place is work the agent must do.

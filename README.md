@@ -294,7 +294,9 @@ a gap.
 | `openrouter` | keyword hits plus windows a decision model rates as relevant to the call's `description` and `expect` |
 
 With `NIB_DECIDER_SUMMARY`, output over 150 lines or 12 KB is summarized instead: a `<summary>` of up to 3 sentences,
-then the log lines it points at, and for a failed call its last 20 lines. Summarizers are OpenRouter model ids,
+then the log lines it points at, and for a failed call its last 20 lines. A call asking for help (`--help`, a `help`
+subcommand, `man`, `info`) is never summarized: its reference text stays whole within the budget, and past it gets the
+decider's lines. Summarizers are OpenRouter model ids,
 `claude-p:MODEL` (runs `claude -p` with no tools) or `opencode:PROVIDER/MODEL` (runs OpenCode 2 with an isolated data
 folder). `/nibash summaries off` or `nibash_status`'s `summaries` turns them off for a session. With `openrouter`, output
 and commands are sent to OpenRouter with zero data retention requested.

@@ -341,7 +341,7 @@ func overBudget(rows []row) bool { return len(rows) > budgetLines || size(rows) 
 
 // shapeDue says whether rows go to shape: past the budget, or due a summary.
 func shapeDue(rows []row, raw string, d decision) bool {
-	return overBudget(rows) || d.summarizer != nil && summaryDue(rows, raw)
+	return overBudget(rows) || d.summary() != nil && summaryDue(rows, raw)
 }
 
 // summaryDue says whether output gets a summary: past summaryLines or summaryBytes, or past lower limits the more it shrinks under dedupe.

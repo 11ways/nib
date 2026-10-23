@@ -55,7 +55,8 @@ func (t *tailed) note() string {
 // model that fails leaves the tail as it is, saying so.
 func (t *tailed) check(ctx context.Context, d decision) {
 	model := d.decider != nil && d.decider.Kind() == decider.OpenRouter
-	if d.decider == nil || !model && d.summarizer == nil || d.purpose == "" && d.exit == 0 && !d.timedOut {
+	summarizer := d.summary()
+	if d.decider == nil || !model && summarizer == nil || d.purpose == "" && d.exit == 0 && !d.timedOut {
 		return
 	}
 	lines := plainLines([]byte(t.raw))
@@ -115,7 +116,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 		return
 	}
 	var clauses []string
-	if count > tailAdded && d.summarizer != nil {
+	if count > tailAdded && summarizer != nil {
 		chosen := entries
 		if !wholeFits(entries, legend) {
 			chosen = excerpt(rows, choice, entries, nil)
@@ -126,7 +127,7 @@ func (t *tailed) check(ctx context.Context, d decision) {
 				excerpted = append(excerpted, n)
 			}
 		}
-		s := d.summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit,
+		s := summarizer.Summarize(ctx, decider.SummaryInput{Command: d.command, Purpose: d.purpose, Expect: d.expect, Exit: d.exit,
 			TimedOut: d.timedOut, Log: lines, Excerpt: excerpted, Entries: chosen, Legend: legend})
 		if s.Failure == "" {
 			out, _ := summaryPassages(rows, s, t.log, lines, 0)

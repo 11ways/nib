@@ -369,7 +369,10 @@ return a summary and line ranges. Their ranges covered every needed line in more
 (deepseek-v4.1-flash with reasoning off on the whole output: 19 of 19; gemini-3.1-flash-lite and haiku-5.5 on an excerpt
 of Jev's picks: 18 of 19), in about 7 to 21 lines against Jev's 150 to 300 rows, and every line they quoted with its
 number matched the log. Counts they gave were wrong, so the prompt leaves counts to the shell and no summary is asked
-where the decider judged that every line counts.
+where the decider judged that every line counts. Nor is one asked of a call asking a program for its help or manual
+(`helps`: `man`, `info`, bash's `help`, a `help` subcommand or `--help`, never `-h`, which `ls` and `sort` read as sizes):
+an agent's question of reference text is a flag or a section, which a summary told only exists (`zenit-dev --help`'s
+server flags, 2026-10-23), so it stays whole within the budget and past it gets the decider's cut.
 
 `decider.Summarizer` reads only what nib hands it (the user's design: the decider picks, the summary model condenses the
 picks). In `shape`, outside the gates above, an output of at most 600 deduplicated entries (`excerptLines`), or one
