@@ -36,8 +36,9 @@ func (d decision) summary() decider.Summarizer {
 	return d.summarizer
 }
 
-// helps says whether a command line asks a program for its help or manual: man, info or bash's help, a help subcommand (git help log) or
-// --help; never -h, which is ls's and sort's human-readable sizes and grep's no file names.
+// helps says whether a command line asks a program for its help or manual: man, info or bash's help, a bare help subcommand (go help,
+// make help) or --help before any --. A help subcommand with words after it is not told from a search (git help log, grep help src/), and
+// -h never counts, being ls's and sort's human-readable sizes and grep's no file names.
 func helps(command string) bool {
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
@@ -57,12 +58,20 @@ func helps(command string) bool {
 		switch program := filepath.Base(args[0]); {
 		case program == "man" || program == "info" || program == "help":
 			found = true
-		case len(args) > 1 && args[1] == "help", slices.Contains(args[1:], "--help"):
+		case len(args) == 2 && args[1] == "help", slices.Contains(beforeOperands(args[1:]), "--help"):
 			found = true
 		}
 		return !found
 	})
 	return found
+}
+
+// beforeOperands are args up to a --, after which every word is an operand.
+func beforeOperands(args []string) []string {
+	if end := slices.Index(args, "--"); end >= 0 {
+		return args[:end]
+	}
+	return args
 }
 
 // shape cuts over-budget rows, or with a summarizer condenses plain output past summaryLines or summaryBytes: the configured decider

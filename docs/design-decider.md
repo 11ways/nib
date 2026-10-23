@@ -370,7 +370,8 @@ return a summary and line ranges. Their ranges covered every needed line in more
 of Jev's picks: 18 of 19), in about 7 to 21 lines against Jev's 150 to 300 rows, and every line they quoted with its
 number matched the log. Counts they gave were wrong, so the prompt leaves counts to the shell and no summary is asked
 where the decider judged that every line counts. Nor is one asked of a call asking a program for its help or manual
-(`helps`: `man`, `info`, bash's `help`, a `help` subcommand or `--help`, never `-h`, which `ls` and `sort` read as sizes):
+(`helps`: `man`, `info`, bash's `help`, a bare `help` subcommand or `--help` before any `--`; never `-h`, which `ls` and
+`sort` read as sizes, nor `help` with words after it, which `grep help src/` writes too):
 an agent's question of reference text is a flag or a section, which a summary told only exists (`zenit-dev --help`'s
 server flags, 2026-10-23), so it stays whole within the budget and past it gets the decider's cut.
 

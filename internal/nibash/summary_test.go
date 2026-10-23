@@ -114,7 +114,7 @@ func TestHelpOutputGetsTheDecidersLinesRatherThanASummary(t *testing.T) {
 	choose := &fakeDecider{kind: decider.Keywords, choose: func(decider.Input) decider.Choice {
 		return decider.Choice{Who: "keywords", Picks: []decider.Pick{{Range: decider.Range{Start: 600, End: 601}, Score: 0.5}}}
 	}}
-	for _, command := range []string{"zenit-dev --help", "git help log", "man ls", "cd x && tool --help", "tool sub --help | cat"} {
+	for _, command := range []string{"zenit-dev --help", "go help", "man ls", "cd x && tool --help", "tool sub --help | cat"} {
 		summary.asked = nil
 		out := renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, command: command, purpose: "the server flags"})
 		if len(summary.asked) != 0 || strings.Contains(out, "<summary>") || !strings.Contains(out, "\n631|line 631\n") {
@@ -125,7 +125,7 @@ func TestHelpOutputGetsTheDecidersLinesRatherThanASummary(t *testing.T) {
 	if out := renderSink(t, numberedSink(200), decision{decider: choose, summarizer: summary, command: "tool --help", purpose: "the server flags"}); strings.Count(out, "\n") != 199 {
 		t.Errorf("help within the budget:\n%s", out)
 	}
-	for _, command := range []string{"tool build", "ls -h", "tool -h", "grep -h x a b"} {
+	for _, command := range []string{"tool build", "ls -h", "tool -h", "grep -h x a b", "grep help src/", "rg -n -- --help internal/", "git help log"} {
 		summary.asked = nil
 		renderSink(t, numberedSink(1000), decision{decider: choose, summarizer: summary, command: command, purpose: "the server flags"})
 		if len(summary.asked) != 1 {
