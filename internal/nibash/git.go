@@ -2,6 +2,7 @@ package nibash
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -42,8 +43,9 @@ type gitPlan struct {
 	// columns runs git with COLUMNS wide enough that a diffstat it prints on its own, as merge and pull do, holds every path whole and bars
 	// that draw every changed line; tidy hides what git prints for a person at a terminal (see gitTidier).
 	columns, tidy bool
-	// target is what a merge or pull joins HEAD with, whose divergence from HEAD a failed fast-forward is told with; "" for none.
-	target string
+	// target is what a merge, pull or rebase joins HEAD with, whose divergence from HEAD a failed fast-forward is told with, and whose
+	// changes since they parted are set beside HEAD's own after the join; "" for none. ours is the branch a rebase names, "" for HEAD.
+	target, ours string
 }
 
 // gitOptions are the options of a subcommand nib's git handles: names that take no value, names whose value follows "=", and names whose value
@@ -84,8 +86,14 @@ var gitSubcommands = map[string]gitOptions{
 	"stash":       {open: true, foreign: []string{"-p", "--patch"}},
 }
 
-// mergeValues are merge's options whose value is the next word, so that word is not taken for what it merges.
-var mergeValues = []string{"-m", "-F", "-s", "-X", "--file", "--strategy", "--strategy-option", "--into-name"}
+// valueOptions are the options of an open subcommand whose value is the next word, so that word is not taken for an operand.
+var valueOptions = map[string][]string{
+	"merge":  {"-m", "-F", "-s", "-X", "--file", "--strategy", "--strategy-option", "--into-name"},
+	"rebase": {"--onto", "-s", "-X", "-x", "--strategy", "--strategy-option", "--exec"},
+}
+
+// rebaseResumes are rebase's options that act on a rebase already under way, or on none, rather than start one.
+var rebaseResumes = []string{"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch", "--root"}
 
 // The forms of the lines naming a path that the subcommands changing a repository print: a commit's summary of created and deleted files and
 // changed modes, a conflict, a file merged on both sides; status lines, as a commit with nothing to commit prints; checkout's and reset's
@@ -138,7 +146,8 @@ subcommand:
 	if !ok {
 		return nil, errForeign
 	}
-	verbose, shapes, sized, formatted := false, false, false, false
+	verbose, shapes, sized, formatted, resumed := false, false, false, false, false
+	onto := ""
 	var operands []string
 	rest := args[i+1:]
 	for k := 0; k < len(rest); k++ {
@@ -155,12 +164,20 @@ subcommand:
 			continue
 		}
 		if spec.open {
-			name, _, _ := strings.Cut(a, "=")
+			name, value, _ := strings.Cut(a, "=")
 			if slices.Contains(spec.foreign, name) {
 				return nil, errForeign
 			}
-			if p.subcommand == "merge" && slices.Contains(mergeValues, a) {
+			switch {
+			case slices.Contains(valueOptions[p.subcommand], a):
+				if a == "--onto" && k+1 < len(rest) {
+					onto = rest[k+1]
+				}
 				k++
+			case name == "--onto":
+				onto = value
+			case slices.Contains(rebaseResumes, a):
+				resumed = true
 			}
 			continue
 		}
@@ -253,6 +270,11 @@ subcommand:
 			p.target = "FETCH_HEAD"
 		case p.subcommand == "merge" && len(operands) == 1:
 			p.target = operands[0]
+		case p.subcommand == "rebase" && !resumed && len(operands) <= 2:
+			p.target = cmp.Or(onto, slices.Concat(operands, []string{"@{upstream}"})[0])
+			if len(operands) == 2 {
+				p.ours = operands[1]
+			}
 		}
 	}
 	return p, nil
@@ -330,6 +352,12 @@ func (p *gitPlan) run(inv *invocation) int {
 			}}
 			inv.stderr = tidied
 		}
+		// The tip a join starts from, read before the join moves it.
+		before := ""
+		if p.target != "" {
+			before, _ = p.helper(inv, "rev-parse", "-q", "--verify", cmp.Or(p.ours, "HEAD")+"^{commit}")
+			before = strings.TrimSpace(before)
+		}
 		w := &lineWriter{each: shaper.line}
 		status := runInto(inv, p.command(p.wide), w, false)
 		w.flush()
@@ -338,8 +366,8 @@ func (p *gitPlan) run(inv *invocation) int {
 			inv.stderr = stderr
 		}
 		shaper.flush()
-		if status != 0 && p.target != "" && shaper.tidier.diverged {
-			if note := p.divergence(inv); note != "" {
+		if before != "" {
+			if note := p.parted(inv, before, status != 0 && shaper.tidier.diverged); note != "" {
 				shaper.emit(record{text: note})
 			}
 		}
@@ -378,18 +406,84 @@ func (p *gitPlan) command(wide bool) []string {
 	return append(append(append(append([]string{"git"}, globals...), p.args[p.at]), extra...), p.args[p.at+1:]...)
 }
 
-// divergence tells how HEAD and target diverged, for a merge or pull that could not fast-forward; "" when git cannot say.
-func (p *gitPlan) divergence(inv *invocation) string {
-	var out bytes.Buffer
-	args := append(append([]string{"git"}, p.globals...), "rev-list", "--left-right", "--count", "HEAD..."+p.target)
-	if inv.call.runProgramTo(inv.ctx, args, &out, io.Discard, nil) != nil {
+// helper is what a helper run of git with args prints; ok is false when it fails.
+func (p *gitPlan) helper(inv *invocation, args ...string) (out string, ok bool) {
+	var b bytes.Buffer
+	if inv.call.runProgramTo(inv.ctx, slices.Concat([]string{"git"}, p.globals, args), &b, io.Discard, nil) != nil {
+		return "", false
+	}
+	return b.String(), true
+}
+
+// partedFiles is how many of the files both sides changed a note names.
+const partedFiles = 10
+
+// parted tells how before, the tip a join started from, and the target went apart: for a merge or pull that could not fast-forward
+// (diverged), the commits only on each; after a join, the files the target's commits changed that the branch's own changed too, so an agent
+// knows which to check; "" when nothing came in, the branch had no commits of its own, or git cannot say.
+func (p *gitPlan) parted(inv *invocation, before string, diverged bool) string {
+	tip, ok := p.helper(inv, "rev-parse", "-q", "--verify", p.target+"^{commit}")
+	if !ok {
 		return ""
 	}
-	fields := strings.Fields(out.String())
+	tip = strings.TrimSpace(tip)
+	counts, _ := p.helper(inv, "rev-list", "--left-right", "--count", before+"..."+tip)
+	fields := strings.Fields(counts)
 	if len(fields) != 2 {
 		return ""
 	}
-	return fmt.Sprintf("[nibash: HEAD and %s have diverged: %s only on HEAD, %s only on %[1]s]", p.target, commits(fields[0]), commits(fields[1]))
+	own, incoming := fields[0], fields[1]
+	var both []string
+	known := false
+	if own != "0" && incoming != "0" {
+		if base, ok := p.helper(inv, "merge-base", before, tip); ok {
+			ours, okOurs := p.changed(inv, strings.TrimSpace(base), before)
+			theirs, okTheirs := p.changed(inv, strings.TrimSpace(base), tip)
+			known = okOurs && okTheirs
+			for _, path := range theirs {
+				if slices.Contains(ours, path) {
+					both = append(both, path)
+				}
+			}
+		}
+	}
+	files := ""
+	if len(both) > partedFiles {
+		files = strings.Join(both[:partedFiles], ", ") + fmt.Sprintf(", and %d more", len(both)-partedFiles)
+	} else {
+		files = strings.Join(both, ", ")
+	}
+	if diverged {
+		note := fmt.Sprintf("[nibash: HEAD and %s have diverged: %s only on HEAD, %s only on %[1]s", p.target, commits(own), commits(incoming))
+		if len(both) > 0 {
+			note += "; both changed " + files
+		}
+		return note + "]"
+	}
+	if own == "0" || incoming == "0" || !known {
+		return ""
+	}
+	name := p.target
+	if name == "@{upstream}" {
+		if resolved, ok := p.helper(inv, "rev-parse", "--abbrev-ref", "@{upstream}"); ok {
+			name = strings.TrimSpace(resolved)
+		}
+	}
+	ours := cmp.Or(p.ours, "HEAD")
+	if len(both) == 0 {
+		return fmt.Sprintf("[nibash: the %s from %s changed no file the %s of %s's own did]", commits(incoming), name, commits(own), ours)
+	}
+	return fmt.Sprintf("[nibash: the %s from %s changed %s the %s of %s's own did too: %s]", commits(incoming), name, countOf(len(both), "file"),
+		commits(own), ours, files)
+}
+
+// changed are the paths the commits from one commit to another changed, a renamed file's old path and new one both, in path order.
+func (p *gitPlan) changed(inv *invocation, from, to string) ([]string, bool) {
+	out, ok := p.helper(inv, "diff", "--name-only", "--no-renames", "--no-relative", "--no-color", "--no-ext-diff", "-z", from, to)
+	if !ok {
+		return nil, false
+	}
+	return slices.DeleteFunc(strings.Split(out, "\x00"), func(path string) bool { return path == "" }), true
 }
 
 // commits is a count of commits in words.

@@ -102,10 +102,10 @@ func TestGitHidesHintsAndTellsHowBranchesDiverged(t *testing.T) {
 	f := diverged(t)
 	f.git("fetch", "-q")
 	out := f.run("git merge --ff-only origin/main")
-	expect(t, out, "fatal: Not possible to fast-forward, aborting.\n[nibash: HEAD and origin/main have diverged: 1 commit only on HEAD, 1 commit only on origin/main]\n[exit 128]")
+	expect(t, out, "fatal: Not possible to fast-forward, aborting.\n[nibash: HEAD and origin/main have diverged: 1 commit only on HEAD, 1 commit only on origin/main; both changed a.txt]\n[exit 128]")
 	// The hint pull prints whatever GIT_ADVICE says is hidden too.
 	out = f.run("git pull")
-	if strings.Contains(out, "hint:") || !strings.HasSuffix(out, "fatal: Need to specify how to reconcile divergent branches.\n[nibash: HEAD and @{upstream} have diverged: 1 commit only on HEAD, 1 commit only on @{upstream}]\n[exit 128]") {
+	if strings.Contains(out, "hint:") || !strings.HasSuffix(out, "fatal: Need to specify how to reconcile divergent branches.\n[nibash: HEAD and @{upstream} have diverged: 1 commit only on HEAD, 1 commit only on @{upstream}; both changed a.txt]\n[exit 128]") {
 		t.Errorf("pull:\n%s", out)
 	}
 	// What goes to a file is git's own.
@@ -120,6 +120,57 @@ func TestGitHidesProgressACarriageReturnWritesOver(t *testing.T) {
 	out := f.run("git pull --rebase 2>&1")
 	if strings.Contains(out, "Rebasing") || strings.Contains(out, "hint:") || !strings.Contains(out, "\nAuto-merging a.txt\nCONFLICT (content): Merge conflict in a.txt\n") {
 		t.Errorf("rebase:\n%s", out)
+	}
+}
+
+func TestARebaseSaysWhichFilesTheIncomingCommitsChangedThatTheBranchDidToo(t *testing.T) {
+	lines := strings.Repeat("line\n", 20)
+	f, other := remoteFixture(t, map[string]string{"a.txt": "top\n" + lines + "bottom\n", "b.txt": "b\n", "c.txt": "c\n"})
+	// Upstream changes a.txt's first line and b.txt; the branch a.txt's last line and c.txt, so the rebase replays cleanly.
+	writeAt(t, other, "a.txt", "TOP\n"+lines+"bottom\n")
+	writeAt(t, other, "b.txt", "B\n")
+	gitAt(t, other, "commit", "-qam", "theirs")
+	gitAt(t, other, "push", "-q")
+	f.write("a.txt", "top\n"+lines+"BOTTOM\n")
+	f.write("c.txt", "C\n")
+	f.git("commit", "-qam", "ours")
+	f.git("fetch", "-q")
+	out := f.run("git rebase")
+	if !strings.HasSuffix(out, "\n[nibash: the 1 commit from origin/main changed 1 file the 1 commit of HEAD's own did too: a.txt]") {
+		t.Errorf("rebase:\n%s", out)
+	}
+	// Nothing more came in: no note.
+	if out := f.run("git rebase origin/main"); strings.Contains(out, "[nibash:") {
+		t.Errorf("up to date:\n%s", out)
+	}
+	// A branch whose files the incoming commits left alone is told so.
+	writeAt(t, other, "b.txt", "BB\n")
+	gitAt(t, other, "commit", "-qam", "theirs again")
+	gitAt(t, other, "push", "-q")
+	f.git("fetch", "-q")
+	if out := f.run("git rebase --onto origin/main origin/main~1"); !strings.HasSuffix(out, "\n[nibash: the 1 commit from origin/main changed no file the 1 commit of HEAD's own did]") {
+		t.Errorf("onto:\n%s", out)
+	}
+}
+
+func TestPrepareGitReadsWhatARebaseJoins(t *testing.T) {
+	for line, want := range map[string]string{
+		"rebase":                           "@{upstream} ",
+		"rebase -X ours origin/main":       "origin/main ",
+		"rebase --onto=next main topic":    "next topic",
+		"rebase --onto next main":          "next ",
+		"rebase -x 'make test' main topic": "main topic",
+		"rebase --continue":                " ",
+		"rebase --root":                    " ",
+		"merge -m 'join' side":             "side ",
+	} {
+		p, err := prepareGit("git", strings.Fields(strings.ReplaceAll(line, "'make test'", "make")))
+		if err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		if got := p.(*gitPlan).target + " " + p.(*gitPlan).ours; got != want {
+			t.Errorf("%s: got %q, want %q", line, got, want)
+		}
 	}
 }
 

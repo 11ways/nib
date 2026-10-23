@@ -254,7 +254,9 @@ program. `type cat` names the system program.
 - **git.** Where its output reaches the model, `status`, `diff`, `show`, `log`, `ls-files` and the subcommands that
   change a repository run the real git and are reformatted: paths grouped by folder, `--stat` with exact counts, diffs
   as anchored rows, commit headers on one line (abbreviated hash, author email unless it is yours, local time to the
-  minute), and hints and progress lines hidden. The full output stays in the log.
+  minute), and hints and progress lines hidden. The full output stays in the log. A rebase, merge or pull that joins
+  incoming commits with the branch's own ends with a note naming the files both sides changed (or none), and one that
+  cannot fast-forward with how the branches diverged.
 - **find and ls** print paths grouped by folder.
 - **git-each ARGS** runs `git ARGS` in every repository below the current directory. `{base}` is the repository's
   `base` in `nib.json`, else `origin/HEAD`.
