@@ -233,32 +233,34 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		return interp.ExitStatus(2)
 	}
 	inv := &invocation{ctx: ctx, call: c, name: name, dir: hc.Dir, stderr: stderrOf(ctx)}
+	inv.out = &output{ctx: ctx, model: model}
 	inv.in = &input{}
 	if file, ok := hc.Stdin.(*os.File); ok && file != nil {
 		if mode == fromLink {
 			inv.in.link = c.links.get(file)
 			inv.inLink = inv.in.link
 		} else {
-			inv.in.reader = bufio.NewReaderSize(file, 1<<16)
+			inv.in.reader = bufio.NewReaderSize(flushingReader{inv.out, file}, 1<<16)
 			inv.in.file = file
 			if mode == fromBand {
 				inv.in.rows = c.band()
 			}
 		}
 	}
-	inv.out = &output{ctx: ctx, model: model}
 	switch out := hc.Stdout.(type) {
 	case *sink:
 		inv.out.sink = out
 	case *os.File:
 		if band {
 			inv.out.rows = c.band()
-			inv.out.writer = out
 		} else if l := c.links.get(out); l != nil {
 			inv.out.link = l
 			inv.outLink = l
-		} else {
-			inv.out.writer = out
+		}
+		if inv.out.link == nil {
+			inv.out.buffer = bufio.NewWriterSize(out, pipeCapacity)
+			inv.out.writer = inv.out.buffer
+			inv.stderr = flushedWriter{inv.out, inv.stderr}
 		}
 	default:
 		inv.out.writer = hc.Stdout
@@ -274,6 +276,9 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 	}()
 	status := p.run(inv)
 	// A command whose reader stopped, as head does, fails as the system program would on SIGPIPE.
+	if !inv.out.flush() {
+		inv.out.stopped = true
+	}
 	if status != 0 && inv.out.stopped {
 		status = sigpipe
 	}

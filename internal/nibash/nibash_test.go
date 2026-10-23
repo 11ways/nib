@@ -210,6 +210,18 @@ func TestStandardErrorMergedIntoAPipeReachesTheNextNibCommand(t *testing.T) {
 	}
 }
 
+func TestANibCommandsBufferedOutputKeepsItsOrderWithItsStandardError(t *testing.T) {
+	f := newFixture(t, map[string]string{"a.txt": "one\ntwo\n", "b.txt": "three\n"})
+	// Into a real program, the rows wait in a buffer and the error does not: it still lands between the files, as cat wrote them.
+	expect(t, f.run("cat a.txt missing.txt b.txt 2>&1 | /usr/bin/cat"), "one\ntwo\ncat: missing.txt: No such file or directory\nthree\n"+
+		"[cat's rows lost their line numbers in cat; read path:A-B,C-D keeps them]\n[nibash: cat a.txt missing.txt b.txt exited 1 before | /usr/bin/cat]")
+	// Into a file, the rows are there for the next command of the call.
+	out := f.run("grep -n o a.txt > out.txt; /usr/bin/cat out.txt")
+	if !strings.HasPrefix(out, "1:one\n2:two\n") {
+		t.Fatalf("got:\n%s", out)
+	}
+}
+
 func TestRecurringBlockMarkersAreExplainedOnce(t *testing.T) {
 	f := newFixture(t, nil)
 	command := `for i in 1 2 3 4 5 6; do echo "step $i"; done; for r in 1 2 3; do printf 'ERROR connection closed by peer\n  at take (queue.go:42)\n  at run (worker.go:17)\nretry %s\n' $r; done; for i in 7 8 9 10 11 12; do echo "step $i"; done`

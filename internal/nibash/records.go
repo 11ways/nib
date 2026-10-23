@@ -50,6 +50,11 @@ type origin struct {
 // linkCapacity bounds a link, so a writer waits for its reader instead of filling memory.
 const linkCapacity = 1024
 
+// pipeCapacity is what a nib command holds of its output for a real pipe or a file before writing it, as a program's buffered output and a
+// pipe's own capacity do: a small output goes in one write, so a reader that stops early, as head does, does not end its writer with
+// SIGPIPE halfway, which the real program writing the same lines in one go would not meet.
+const pipeCapacity = 64 << 10
+
 // link joins two nib stages through one pipe: records go over a channel, and the pipe itself carries nothing.
 type link struct {
 	records chan record
@@ -105,6 +110,9 @@ type output struct {
 	link   *link
 	rows   *rowBand
 	writer io.Writer
+	// buffer holds what goes to writer, a real pipe or a file, until flush; bufMu guards it, as a command's standard error flushes it too.
+	buffer *bufio.Writer
+	bufMu  sync.Mutex
 	// model is whether what the command writes reaches the model through nothing but nib's own commands passing whole lines on.
 	model    bool
 	stopped  bool
@@ -189,13 +197,11 @@ func (o *output) send(r record) bool {
 			return false
 		}
 	case o.rows != nil:
-		if _, err := io.WriteString(o.writer, o.rows.put(r)+"\n"); err != nil {
-			o.stopped = true
+		if !o.write(o.rows.put(r) + "\n") {
 			return false
 		}
 	default:
-		if _, err := io.WriteString(o.writer, r.text+"\n"); err != nil {
-			o.stopped = true
+		if !o.write(r.text + "\n") {
 			return false
 		}
 	}
@@ -203,11 +209,54 @@ func (o *output) send(r record) bool {
 	return true
 }
 
-// close ends the output; a link's reader sees the end of its records.
+// write puts text out to writer; false means nothing reads any more.
+func (o *output) write(text string) bool {
+	o.bufMu.Lock()
+	defer o.bufMu.Unlock()
+	if _, err := io.WriteString(o.writer, text); err != nil {
+		o.stopped = true
+		return false
+	}
+	return true
+}
+
+// flush writes what buffer holds; false means its reader stopped, as a write into a closed pipe tells. It leaves stopped to the command's own
+// goroutine, as a standard error written elsewhere flushes too: the buffer keeps the error for the command's next write.
+func (o *output) flush() bool {
+	o.bufMu.Lock()
+	defer o.bufMu.Unlock()
+	return o.buffer == nil || o.buffer.Flush() == nil
+}
+
+// close ends the output, writing what it holds; a link's reader sees the end of its records.
 func (o *output) close() {
+	o.flush()
 	if o.link != nil {
 		close(o.link.records)
 	}
+}
+
+// flushedWriter is a command's standard error, written after what its output holds, so a 2>&1 pipe keeps the order the command wrote in.
+type flushedWriter struct {
+	out *output
+	w   io.Writer
+}
+
+func (f flushedWriter) Write(p []byte) (int, error) {
+	f.out.flush()
+	return f.w.Write(p)
+}
+
+// flushingReader is a command's input from a pipe or a file: each read first writes what its output holds, so a stage that waits for input
+// has passed on what it made, as a program reading its pipe would have.
+type flushingReader struct {
+	out *output
+	r   io.Reader
+}
+
+func (f flushingReader) Read(p []byte) (int, error) {
+	f.out.flush()
+	return f.r.Read(p)
 }
 
 // input is where a nib command reads standard input from: a link's records, or bytes split into plain records, among which rows a nib writer

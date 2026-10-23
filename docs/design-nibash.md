@@ -209,6 +209,12 @@ and every other line into a plain record. No program can name a row, since only 
 rows in band cannot step aside for the system program, which would read those lines, so it fails as a linked one does.
 The classifier marks such writers with `+` after their reader mode and such readers with the mode `W`.
 
+**Buffered like a program:** a nib command writing to a real pipe or a file holds up to 64 KiB (`pipeCapacity`) and
+writes it when it ends, before each write to its standard error (so `2>&1` keeps their order) and before each read of
+its own input (so a pipeline still streams), as a program's buffered output and a pipe's capacity do. Written row by
+row, a small output met a reader that stopped early (`| head -3`) halfway, and its writer's real exit status was taken
+for SIGPIPE, which the program writing the same lines in one go never meets.
+
 **git for the model through head and tail:** a git command whose output goes on through nothing but nib's own `head`
 and `tail` selecting whole lines by count, or `cat` without `-n`, each reading the one before it by a link, to the model
 (the pipeline's last stage writing to the terminal, or into a loop's or block's pipe that such stages read), gets `>`
