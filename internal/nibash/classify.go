@@ -15,8 +15,8 @@ import (
 const marker = "\x1bnib:"
 
 // Reader modes in a marker: a nib command reading another nib command's records, plain bytes, or bytes among which nib writers send their
-// rows in band; or a command that would be nib's own but for an option or pattern it lacks, which runs the system program and says so, as
-// its output reaches the model.
+// rows in band; or a command that would be nib's own but for an option or pattern it lacks, which runs the system program and, for a row
+// command, says so as its output reaches the model (ranAsSystem).
 const (
 	fromLink  = "L"
 	fromBytes = "B"
@@ -67,9 +67,9 @@ const (
 	// own runs as nib's own.
 	own
 	// later is nib's own if the words its expansions give allow it, which only running it tells; else the system program runs, with a note
-	// when its output reaches the model.
+	// when a row command's output reaches the model (ranAsSystem).
 	later
-	// system runs the system program for a form nib's own lacks, with a note as its output reaches the model.
+	// system runs the system program for a form nib's own lacks, with a note as a row command's output reaches the model (ranAsSystem).
 	system
 )
 
