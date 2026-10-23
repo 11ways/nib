@@ -684,8 +684,9 @@ func likeness(a, b string) float64 {
 }
 
 // offByOne warns about replaced ranges that look one line off: the kept line next to the new rows nearly matches the new edge row. Each warning
-// carries the hunks that undo the slip, since a model told only that a range was off tends to delete the wrong line. Two imports of different
-// names never nearly match, as an import inserted beside its neighbours in order shares most of their text.
+// carries the hunks that undo the slip, since a model told only that a range was off tends to delete the wrong line. An edit whose rows keep
+// every line it replaced only added lines, and two imports of different names beside it never nearly match, as an import added among its
+// neighbours in order shares most of their text; one that overwrote an import still warns.
 func offByOne(path string, source *text, edits []snapshots.LineEdit, result applied) []string {
 	kept := func(index int) (string, bool) {
 		if index < 0 || index >= len(result.rows) || result.rows[index].origin < 0 {
@@ -694,15 +695,19 @@ func offByOne(path string, source *text, edits []snapshots.LineEdit, result appl
 		return lineContent(result.rows[index].raw), true
 	}
 	var warnings []string
-	neighbour := func(kept, row string) float64 {
-		if syntax.DistinctImports(path, kept, row) {
-			return 0
-		}
-		return likeness(kept, row)
-	}
 	for index, edit := range edits {
 		if edit.Operation != snapshots.Replace || len(edit.Content) == 0 || edit.Quoted {
 			continue
+		}
+		added := true
+		for line := edit.Start; line <= edit.End && added; line++ {
+			added = slices.Contains(edit.Content, lineContent(source.lines[line-1]))
+		}
+		neighbour := func(kept, row string) float64 {
+			if added && syntax.DistinctImports(path, kept, row) {
+				return 0
+			}
+			return likeness(kept, row)
 		}
 		at, length := result.runs[index].at, result.runs[index].length
 		first, last := edit.Content[0], edit.Content[len(edit.Content)-1]

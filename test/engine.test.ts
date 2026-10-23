@@ -2679,6 +2679,12 @@ describe("ranges one line off", () => {
     const text = /#([0-9A-F]{4})\]/.exec((await f.read("", { file: path.join(f.directory, "imports.txt") })).text)![1]
     const plain = await f.patch(`[imports.txt#${text}]\n${rows}`)
     expect(plain.text).toContain("Warnings:\nLines 4 and 5 now nearly match")
+    // An edit that overwrote an import, one line late, still warns.
+    const late = path.join(f.directory, "Late.java")
+    await writeFile(late, ["package demo;", "", "import java.util.List;", "import java.util.Map;", "", "class Late {}"].join("\n") + "\n")
+    const lateTag = /#([0-9A-F]{4})\]/.exec((await f.read("", { file: late })).text)![1]
+    const replaced = await f.patch(`[Late.java#${lateTag}]\nPUT 4.=4:\n+import java.util.Set;`)
+    expect(replaced.text).toContain("Warnings:\nLines 3 and 4 now nearly match: line 3 was kept just above an edit")
   })
 
   const shutdown = ["func stop() {", "\tcancel()", "\tc.killAll()", "\tstatus := 0", "\treturn status", "}"].join("\n") + "\n"
