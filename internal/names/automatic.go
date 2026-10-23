@@ -113,14 +113,14 @@ func (d *Defined) Forget(agent string, moment time.Time) {
 		return
 	}
 	names.full = 0
-	// The latest definition of a name is the one the agent works with; one redefined since the moment is still told.
+	// The latest definition of a name is the one the agent works with; one told since the moment is still told.
 	latest := map[string]int64{}
 	for _, entry := range names.list {
-		latest[entry.Name] = entry.at
+		latest[entry.Name] = entry.told
 	}
 	at := moment.UnixNano()
-	for name, defined := range latest {
-		if defined < at {
+	for name, told := range latest {
+		if told < at {
 			if names.untold == nil {
 				names.untold = map[string]bool{}
 			}
@@ -140,9 +140,22 @@ func (d *Defined) Told(agent string, lines []string) {
 	if names == nil {
 		return
 	}
+	now := d.Now().UnixNano()
 	for _, line := range lines {
 		name, _, _ := strings.Cut(strings.TrimPrefix(line, "~"), " = ")
 		delete(names.untold, name)
+		names.tell(name, now)
+	}
+	d.saveLocked(agent)
+}
+
+// tell marks the latest definition of name as told at moment.
+func (n *defined) tell(name string, moment int64) {
+	for i := len(n.list) - 1; i >= 0; i-- {
+		if n.list[i].Name == name {
+			n.list[i].told = moment
+			return
+		}
 	}
 }
 
@@ -165,6 +178,8 @@ func (d *Defined) mention(agent string, table *Table, shown string) {
 	delete(names.untold, name)
 	names.observed = true
 	names.retell = append(names.retell, made{Entry{name, home}, 0})
+	names.tell(name, d.Now().UnixNano())
+	d.saveLocked(agent)
 }
 
 // printed is directory as a path shows it with table: under a name, relative to the table's base inside it, else absolute.
@@ -240,10 +255,12 @@ func (d *Defined) observe(agent string, table *Table, directory string) {
 		return
 	}
 	entry := Entry{name, best}
-	names.list = append(names.list, definition{entry, d.Now().UnixNano(), "automatic"})
+	now := d.Now().UnixNano()
+	names.list = append(names.list, definition{entry, now, "automatic", now})
 	names.made = append(names.made, made{entry, names.counts[best]})
 	names.auto++
 	d.learnLocked(entry)
+	d.saveLocked(agent)
 }
 
 // work notes that agent works in directory, a canonical directory.

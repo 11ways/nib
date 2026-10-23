@@ -1086,6 +1086,42 @@ func TestWhatAnAgentSawOutlivesARestart(t *testing.T) {
 	}
 }
 
+// The names an agent got outlive the server too: a restarted server prints its paths under them at once and does not announce them again.
+func TestAnAgentsNamesOutliveARestart(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	state := t.TempDir()
+	deep := filepath.Join(directory, "modules", "zenit-something-long", "src", "main", "java", "be", "elevenways", "zenit", "orm", "datasource", "backends", "relational", "migrations")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		file(t, filepath.Join(deep, fmt.Sprintf("F%d.java", i)), numbered(3))
+	}
+	r := &records{byUse: map[string]hookstate.Agent{}}
+	d := &drops{known: true, session: "6d0b-1"}
+	serve := func() *client {
+		return connect(t, Options{Directory: directory, Agent: r.take, Dropped: d.take, Engine: engine.New(), Names: &names.Table{Base: directory},
+			NamesFile: filepath.Join(state, "learned.json"), NamesKept: filepath.Join(state, "agents")}, []string{directory}, nil, false)
+	}
+	c := serve()
+	announced := ""
+	for i := range 3 {
+		if out := text(c.call(t, r.as("", readCall(filepath.Join(deep, fmt.Sprintf("F%d.java", i)))))); strings.Contains(out, "[nib named ~") {
+			announced = out
+		}
+	}
+	name := regexp.MustCompile(`\[nib named (~[a-z0-9-]+) = `).FindStringSubmatch(announced)
+	if name == nil {
+		t.Fatalf("no name was made: %q", announced)
+	}
+	c.server.Close()
+	c = serve()
+	out := text(c.call(t, r.as("", readCall(filepath.Join(deep, "F3.java")))))
+	if !strings.Contains(out, "["+name[1]+"/F3.java#") || strings.Contains(out, "nib named") || strings.Contains(out, "= "+filepath.ToSlash(deep)) {
+		t.Fatalf("after the restart: %s", out)
+	}
+}
+
 func numbered(n int) string {
 	var b strings.Builder
 	for i := 1; i <= n; i++ {

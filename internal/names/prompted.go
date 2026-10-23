@@ -97,6 +97,7 @@ func (d *Defined) prompted(agent string, static []Entry, mentioned []string) []t
 		}
 		if directory != "" {
 			delete(names.untold, name)
+			names.tell(name, now.UnixNano())
 			if was := earlier[name]; !held || was != "" && was != directory {
 				told = append(told, toldEntry{Entry{name, directory}, otherThan(was, directory)})
 			}
@@ -107,10 +108,11 @@ func (d *Defined) prompted(agent string, static []Entry, mentioned []string) []t
 			continue
 		}
 		entry := Entry{name, directory}
-		names.list = append(names.list, definition{entry, now.UnixNano(), "message"})
+		names.list = append(names.list, definition{entry, now.UnixNano(), "message", now.UnixNano()})
 		d.learnLocked(entry)
 		told = append(told, toldEntry{Entry: entry})
 	}
+	d.saveLocked(agent)
 	return told
 }
 

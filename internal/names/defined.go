@@ -15,8 +15,8 @@ import (
 // DefinedLimit bounds the definitions one agent makes; a redefinition counts too.
 const DefinedLimit = 64
 
-// Defined are the named directories agents define at runtime, kept per agent in memory for the life of the process. An agent sees the names
-// it defined and those it inherited when it started: the names its parent saw before the agent was spawned.
+// Defined are the named directories agents define at runtime, kept per agent in memory, and for an agent with a lasting key across restarts
+// too (Keep). An agent sees the names it defined and those it inherited when it started: the names its parent saw before the agent was spawned.
 type Defined struct {
 	mu     sync.Mutex
 	agents map[string]*defined
@@ -36,6 +36,8 @@ type Defined struct {
 	uses map[string]map[string]int
 	// ignoredAt keeps what Ignored said of each directory asked.
 	ignoredAt map[string]bool
+	// kept saves the names of agents with a lasting key across restarts (Keep); nil saves none.
+	kept *kept
 }
 
 // defined is one agent's names, oldest first: the inherited ones, then its own; the latest of a name wins. counts are the shown paths per
@@ -66,13 +68,15 @@ type made struct {
 	count int
 }
 
-// definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited.
+// definition is a name with the moment it became visible to the agent's line: when it was defined, kept when it is inherited, and told the
+// moment the agent was last told of it, which a drop of its context before then takes.
 type definition struct {
 	Entry
 	at int64
 	// kind is where the agent got the name: "defined" by itself, "automatic" made by nib, "inherited" from the agent that started it,
 	// "message" with a message the user sent it that used it.
 	kind string
+	told int64
 }
 
 // NewDefined makes an empty set.
@@ -98,6 +102,7 @@ func (d *Defined) Inherit(agent, parent string, asOf time.Time) {
 		}
 	}
 	d.agents[agent] = to
+	d.saveLocked(agent)
 }
 
 // define adds a name for agent.
@@ -113,8 +118,10 @@ func (d *Defined) define(agent string, entry Entry) error {
 		return fmt.Errorf("this agent has made %d definitions, the most nib keeps", DefinedLimit)
 	}
 	names.own++
-	names.list = append(names.list, definition{entry, d.Now().UnixNano(), "defined"})
+	now := d.Now().UnixNano()
+	names.list = append(names.list, definition{entry, now, "defined", now})
 	d.learnLocked(entry)
+	d.saveLocked(agent)
 	return nil
 }
 

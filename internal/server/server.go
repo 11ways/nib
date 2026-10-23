@@ -62,6 +62,8 @@ type Options struct {
 	// NamesFile, when set, turns on naming the directories an agent's paths keep running through, and keeps the names agents get there
 	// for the next server of Names.Base.
 	NamesFile string
+	// NamesKept, when set, is the private folder where the names each agent with a lasting key got are kept across server restarts.
+	NamesKept string
 }
 
 // Shell is the nibash side of the server; nil offers no shell.
@@ -269,6 +271,9 @@ func New(options Options) *Server {
 		s.defined.Automatic(options.NamesFile, options.Names.Base)
 		s.defined.Ignored = engine.Ignored
 	}
+	if options.NamesKept != "" {
+		s.defined.Keep(options.NamesKept)
+	}
 	instructions := Instructions(options)
 	capabilities := &mcp.ServerCapabilities{}
 	var versions []string
@@ -411,6 +416,7 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 		known, dropped, lasting := s.dropped(request, c.agent)
 		if lasting != "" {
 			s.engine.Store.Persist(s.engineSession(c.agent), lasting)
+			s.defined.Persist(s.engineSession(c.agent), lasting)
 		}
 		s.seeding.Lock()
 		s.start(c.key, c.agent, from, originDepth)

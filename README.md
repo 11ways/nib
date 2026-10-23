@@ -337,6 +337,8 @@ programs receive the real path. They come from:
 - `hash -d name=dir` in nibash, for that agent and the subagents it starts afterwards.
 - Directories an agent keeps seeing, which nib names itself and announces in a note. Names used in two sessions are kept
   in `~/.local/state/nib/names/` for later ones. `NIB_AUTO_NAMES=0` turns this off.
+- An agent's names of both kinds survive a restart of nib (kept in `~/.local/state/nib/agents/`), so its paths keep
+  printing under them and it is not told of them again, unless its context was compacted or cleared since.
 
 ## Agents and seen lines
 

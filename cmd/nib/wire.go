@@ -28,6 +28,7 @@ func newServer(options server.Options, choose decider.Decider, summarize decider
 	options.Engine = engine.New()
 	if state := names.StateHome(); state != "" {
 		options.Engine.Store.Keep(filepath.Join(state, "seen"))
+		options.NamesKept = filepath.Join(state, "agents")
 	}
 	options.Agent = hookstate.OpenAgents(hookstate.Directory()).Take
 	options.Dropped = hookstate.OpenDrops(hookstate.Directory()).Take
