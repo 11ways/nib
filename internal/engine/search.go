@@ -413,6 +413,50 @@ func ripgrep(ctx *Context, signal context.Context, roots []string, args []string
 	return ripgrepOutput{stdout.String(), stderr.String(), notes}, nil
 }
 
+// ignoredMatchesTimeout bounds the second search of a grep that found nothing, through files its ignore rules skip, which can be many
+// (dependencies, build output).
+const ignoredMatchesTimeout = 3 * time.Second
+
+// ignoredShown is how many of the ignored files that match the note names.
+const ignoredShown = 3
+
+// ignoredMatches is the note for a search with command over roots that found nothing, where files its ignore rules skip do match; "" for
+// none, or when that search does not end within ignoredMatchesTimeout.
+func ignoredMatches(ctx *Context, roots, command []string) string {
+	signal, cancel := context.WithTimeout(ctx.Ctx, ignoredMatchesTimeout)
+	defer cancel()
+	args := slices.DeleteFunc(slices.Clone(command), func(a string) bool { return a == "--json" })
+	out, err := ripgrep(ctx, signal, roots, append(args, "--no-ignore", "--files-with-matches"))
+	if err != nil {
+		return ""
+	}
+	var found []string
+	for _, file := range strings.Split(out.stdout, "\n") {
+		if file == "" {
+			continue
+		}
+		// In the sandbox a file ripgrep reached by a link is named only when it resolves inside.
+		if ctx.Sandbox {
+			roots, err := workspaceRoots(ctx)
+			real, realErr := realpath(file)
+			if err != nil || realErr != nil || !slices.ContainsFunc(roots, func(root string) bool { return within(root, real) }) {
+				continue
+			}
+		}
+		found = append(found, ctx.display(file))
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	slices.Sort(found)
+	named := strings.Join(found[:min(len(found), ignoredShown)], ", ")
+	if len(found) > ignoredShown {
+		named += fmt.Sprintf(" and %d more", len(found)-ignoredShown)
+	}
+	return fmt.Sprintf("[the ignore rules kept this search from %s that match: %s; grep with noIgnore: true searches them]",
+		plural(len(found), "file"), named)
+}
+
 // countsByFolder is match counts by folder, most first, at the deepest folder level that fits in countRows rows; nil when that saves no rows.
 func countsByFolder(names []string, count func(string) int, display func(string) string) []string {
 	split := func(shown string) []string {
@@ -1007,7 +1051,14 @@ func (e *Engine) Grep(ctx *Context, args GrepArgs) (result Result, err error) {
 		if stderr := js.Trim(out.stderr); stderr != "" {
 			head = fmt.Sprintf("No matches found (rg: %s)", strings.Split(stderr, "\n")[0])
 		}
-		return Result{Text: strings.Join(append([]string{head}, out.notes...), "\n\n")}, nil
+		notes := out.notes
+		// A search the ignore rules kept from files that match would read as the pattern being nowhere.
+		if !args.NoIgnore && !slices.ContainsFunc(slices.Collect(maps.Values(selections)), func(s []selection) bool { return s != nil }) {
+			if note := ignoredMatches(ctx, rootOrder, command); note != "" {
+				notes = append([]string{note}, notes...)
+			}
+		}
+		return Result{Text: strings.Join(append([]string{head}, notes...), "\n\n")}, nil
 	}
 	names := make([]string, 0, len(files))
 	for name := range files {

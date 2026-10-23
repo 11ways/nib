@@ -1083,6 +1083,19 @@ describe("grep", () => {
     await expect(f.engine.grep(f.ctx, { pattern: "(" })).rejects.toThrow("rg failed")
   })
 
+  test("a search that finds nothing names the ignored files that match, and naming an ignored folder searches it", async () => {
+    const f = await fixture("plain\n")
+    await mkdir(path.join(f.directory, ".git"))
+    await writeFile(path.join(f.directory, ".gitignore"), "scratch/\n")
+    await mkdir(path.join(f.directory, "scratch"))
+    for (const name of ["a", "b", "c", "d"]) await writeFile(path.join(f.directory, `scratch/${name}.txt`), "needle\n")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle" })).text).toBe(
+      "No matches found\n\n[the ignore rules kept this search from 4 files that match: scratch/a.txt, scratch/b.txt, scratch/c.txt and 1 more; grep with noIgnore: true searches them]")
+    expect((await f.engine.grep(f.ctx, { pattern: "nowhere" })).text).toBe("No matches found")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", noIgnore: true })).text).toStartWith("4 matches in 4 files")
+    expect((await f.engine.grep(f.ctx, { pattern: "needle", paths: ["scratch"] })).text).toStartWith("4 matches in 4 files")
+  })
+
   test("pages files and caps matches per file", async () => {
     const f = await fixture(Array.from({ length: 30 }, () => "hit").join("\n"))
     for (let index = 0; index < 25; index++) await writeFile(path.join(f.directory, `f${String(index).padStart(2, "0")}.txt`), "hit\n")

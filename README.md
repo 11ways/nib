@@ -162,7 +162,8 @@ shown whole is an edit anchor.
 
 - The search is `rg --hidden` without `.git/`, with ripgrep's `--engine auto`, so look-around runs on PCRE2.
 - Git's ignore rules apply inside repositories; a nested repository its parent ignores is still searched by its own
-  rules. `noIgnore` turns ignore files off.
+  rules. `noIgnore` turns ignore files off. A path named in `paths` is searched even when it is ignored, and a search
+  that finds nothing says which ignored files match, if a search through them ends within 3 seconds.
 - A path may carry a line selector (`app.log:1100-1250`) to search only those lines.
 - `mode: "files"` lists matching paths; `mode: "count"` counts per file.
 - Files over 8 MiB or still being written print `N|TEXT` rows, which are not anchors.
