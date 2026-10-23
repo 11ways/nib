@@ -179,8 +179,9 @@ written literally or reached through an expansion) runs the system program; when
 printed anything, the call ends with one note per such command,
 `[grep ran as the system program: ..., so its lines are plain output, not edit anchors]`, saying whether an option or
 form, or a pattern RE2 cannot run exactly, was the reason. A command written as a path is not noted, as its caller chose
-the system program, nor is one whose lines nib's own would have printed plain as well: `wc`, and a row command none of
-whose arguments names an existing file or directory, which reads only standard input.
+the system program, nor is one whose lines nib's own would have printed plain as well: `wc`, a row command none of
+whose arguments names an existing file or directory, which reads only standard input, and the commands nib's own only
+reshapes (`git`, `find`, `ls`), whose plain output tells the model nothing it would act on.
 
 **Links:** where two nib stages are joined by a pipe, the writer sends **records** to the reader over a bounded Go
 channel and writes no bytes. The link is keyed by the pipe's `(dev, ino)`, which both ends share.

@@ -137,11 +137,12 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 	return args, nil
 }
 
-// ranAsSystem notes once per call that a nib command ran as the system program, whose output reached the model as plain text; a form nib's
-// own never handles gets no note, nor does one whose own lines would have had no rows either: wc's, or those of a command naming no file or
+// ranAsSystem notes once per call that a row command ran as the system program, so its lines reached the model as plain text without anchors.
+// A command that only reshapes output (git, find, ls) gets no note, as its plain output tells the model nothing it would act on; nor does a
+// form nib's own never handles, or one whose own lines would have had no rows either: wc's, or those of a command naming no file or
 // directory, which reads only standard input.
 func (c *call) ranAsSystem(name string, err error, dir string, args []string) {
-	if errors.Is(err, errForeign) || !commands[name].renders && (!commands[name].rows || !namesPath(dir, args)) {
+	if errors.Is(err, errForeign) || !commands[name].rows || !namesPath(dir, args) {
 		return
 	}
 	why := "nib's own does not implement this form of it"
@@ -151,11 +152,7 @@ func (c *call) ranAsSystem(name string, err error, dir string, args []string) {
 	case errors.Is(err, errUncounted):
 		why = "nib could not tell how it counts characters"
 	}
-	so := "its lines are plain output, not edit anchors"
-	if commands[name].renders {
-		so = "its output is as " + name + " printed it"
-	}
-	note := fmt.Sprintf("[%s ran as the system program: %s, so %s]", name, why, so)
+	note := fmt.Sprintf("[%s ran as the system program: %s, so its lines are plain output, not edit anchors]", name, why)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !slices.Contains(c.system, note) {

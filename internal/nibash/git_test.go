@@ -107,12 +107,13 @@ func TestGitOutputGoingElsewhereOrInFormsNibDoesNotReadIsGits(t *testing.T) {
 	if out := f.run("git status --short -uno > out.txt; /usr/bin/cat out.txt"); !strings.HasPrefix(out, raw+"\n[changed by this command: out.txt#") {
 		t.Errorf("into a file: %q", out)
 	}
-	// A form nib's git does not print differently runs the system git, with no note; an option it lacks says so.
+	// A form nib's git does not print differently runs the system git; so does an option it lacks, and neither gets a note, as git's own
+	// output tells the model all it needs.
 	if out := f.run("git log --oneline"); strings.Contains(out, "system program") || !strings.HasSuffix(out, " first") {
 		t.Errorf("log --oneline: %q", out)
 	}
 	out := f.run("git status --porcelain=v2")
-	if !strings.Contains(out, "1 .M N... ") || !strings.HasSuffix(out, "[git ran as the system program: nib's own does not implement this form of it, so its output is as git printed it]") {
+	if !strings.Contains(out, "1 .M N... ") || strings.Contains(out, "system program") {
 		t.Errorf("porcelain v2: %q", out)
 	}
 	// A show of a file's content is not a diff, and lines of a commit's message or a file are never taken for a path list.
@@ -207,8 +208,8 @@ func TestGitLogOfOldCommitsShowsLinesTheFileNoLongerHoldsAsNoAnchors(t *testing.
 		!strings.Contains(out, "+1|two") {
 		t.Errorf("log -p:\n%s", out)
 	}
-	// --word-diff prints lines nib does not read, so the system git runs and says so.
-	if out := f.run("git diff HEAD~1 --word-diff"); !strings.Contains(out, "[git ran as the system program") {
+	// --word-diff prints lines nib does not read, so the system git runs, with no note.
+	if out := f.run("git diff HEAD~1 --word-diff"); !strings.Contains(out, "{+") || strings.Contains(out, "system program") {
 		t.Errorf("word diff: %q", out)
 	}
 }

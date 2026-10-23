@@ -25,11 +25,11 @@ func TestFindPrintsEachFolderOnce(t *testing.T) {
 	if !slices.Equal(rows, []string{"  Alpha.java", "  Beta.java", "  Gamma.java"}) {
 		t.Errorf("rows under the folder: %q", rows)
 	}
-	// Into another command, or with an action nib's find does not run, find's own lines go; the action says so.
+	// Into another command, or with an action nib's find does not run, find's own lines go, with no note.
 	if out := f.run("find src -name '*.java' | sort"); out != "src/main/java/be/elevenways/app/Alpha.java\nsrc/main/java/be/elevenways/app/Beta.java\nsrc/main/java/be/elevenways/app/Gamma.java" {
 		t.Errorf("find into sort: %q", out)
 	}
-	if out := f.run("find src -name 'Alpha.java' -exec echo found {} ';'"); out != "found src/main/java/be/elevenways/app/Alpha.java\n[find ran as the system program: nib's own does not implement this form of it, so its output is as find printed it]" {
+	if out := f.run("find src -name 'Alpha.java' -exec echo found {} ';'"); out != "found src/main/java/be/elevenways/app/Alpha.java" {
 		t.Errorf("find -exec: %q", out)
 	}
 	// Its exit status and standard error are find's.
@@ -48,7 +48,7 @@ func TestLsPrintsEachFolderOfTheNamesItIsGivenOnce(t *testing.T) {
 	}
 	// A directory's own listing names its entries without a folder, so it prints as ls printed it.
 	expect(t, f.run("ls src/main/java/be/elevenways/app"), "Alpha.java\nBeta.java\nGamma.java")
-	if out := f.run("ls --full-time top.txt"); !strings.HasSuffix(out, "[ls ran as the system program: nib's own does not implement this form of it, so its output is as ls printed it]") {
+	if out := f.run("ls --full-time top.txt"); !strings.HasSuffix(out, " top.txt") || strings.Contains(out, "system program") {
 		t.Errorf("ls with an option nib's lacks: %q", out)
 	}
 }

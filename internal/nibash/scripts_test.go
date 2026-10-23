@@ -81,7 +81,7 @@ func TestShellsTheCommandStartsGetTheNamesExpanded(t *testing.T) {
 	expect(t, f.run("bash -o pipefail -c 'cat ~nm/a.txt | cat'"), "x")
 	expect(t, f.run("sh -c 'cat ~nm/a.txt'"), "x")
 	expect(t, f.run("env X=1 bash -c 'echo $X; cat ~nm/a.txt'"), "1\nx")
-	expect(t, f.run(`find d -name a.txt -exec sh -c 'cat ~nm/a.txt' \;`), "x\n[find ran as the system program: nib's own does not implement this form of it, so its output is as find printed it]")
+	expect(t, f.run(`find d -name a.txt -exec sh -c 'cat ~nm/a.txt' \;`), "x")
 	expect(t, f.run("echo a.txt | xargs -I{} sh -c 'cat ~nm/{}'"), "x")
 	// A quoted name stays as written, as nibash leaves it.
 	f.run(`bash -c "printf '%s %s' '~nm/a.txt' ~nm/a.txt > out.txt"`)
