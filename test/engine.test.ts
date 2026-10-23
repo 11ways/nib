@@ -1605,14 +1605,37 @@ describe("SUB", () => {
       expect(message, why).toContain("does not occur on line")
     }
     await doubt("SUB 1: value := compute(1)\n+x", "on two lines of the file")
-    await doubt("SUB 4: somewhere(2)\n+x", "more than 2 lines away")
+    await doubt("SUB 4: somewhere(2)\n+x", "more than 2 lines away, the first time")
     await doubt("SUB 8: x\n+y", "too short to tell")
     await doubt("SUB 7: somewhere(2)\n+x\nPUT 8:\n+y", "on a line another hunk anchors")
     expect(await readFile(f.filePath, "utf8")).toBe(content)
-    // A line the agent was never shown is not taken either.
+    // A line the agent was never shown is not taken either, the first time.
     const g = await fixture(content.replace("\tnote := x", "\tnote := unique(3)"))
     const head = await g.read(":1-7")
     expect(await refusal(g.patch(`[file.txt#${head.tag}]\nSUB 7: unique(3)\n+x`))).toContain("does not occur on line 7")
+  })
+
+  test("an old text far from its line is refused with the one line that holds it, and applies there when sent again", async () => {
+    const content = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\n\tfar := somewhere(2)\n\tnote := unique(3)\n"
+    const f = await fixture(content)
+    const r = await f.read(":1-5")
+    const input = `[file.txt#${r.tag}]\nSUB 2: somewhere(2)\n+elsewhere(2)`
+    const message = await refusal(f.patch(input))
+    expect(message).toContain('SUB 2: "somewhere(2)" does not occur on line 2, but once in the file, on line 8')
+    expect(message).toContain("Sent again unchanged, the patch applies each SUB on the line named.")
+    expect(message).toContain("*8:\tfar := somewhere(2)")
+    expect(await readFile(f.filePath, "utf8")).toBe(content)
+    const applied = await f.patch(input)
+    expect(applied.text).toContain("SUB 2: its old text is not on line 2 but on line 8, the one line of the file that holds it, so it applied there")
+    expect(await readFile(f.filePath, "utf8")).toBe(content.replace("somewhere(2)", "elsewhere(2)"))
+    // The REAPPLY token of the refusal does the same, and a line nearby that the agent was not shown is offered too.
+    const g = await fixture(content)
+    const head = await g.read(":1-7")
+    const offer = await refusal(g.patch(`[file.txt#${head.tag}]\nSUB 7: somewhere(2)\n+x`))
+    expect(offer).toContain('SUB 7: "somewhere(2)" does not occur on line 7, but once in the file, on line 8')
+    const token = /REAPPLY (\S+)/.exec(offer)![1]
+    await g.patch(`REAPPLY ${token}`)
+    expect(await readFile(g.filePath, "utf8")).toBe(content.replace("somewhere(2)", "x"))
   })
 
   test("SUB edits a cut long line without reading it whole, and its result does not become known content", async () => {

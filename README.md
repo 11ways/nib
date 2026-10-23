@@ -223,6 +223,9 @@ REM
   unchanged.
 - A stale tag is rebased when every anchored line maps to an unchanged current line; otherwise the edit is refused with
   the current content.
+- A `SUB` whose old text is not on its line but once in the file applies on that line, with a note, when it is at most
+  2 lines away and seen; further away or unseen, the edit is refused showing that line, and the same patch sent again
+  (or its token) applies it there.
 - Block ends (`N*`) come from tree-sitter in the languages `read` parses, from indentation elsewhere.
 - Diff-style `-` rows that match the replaced lines are accepted.
 - Every section is checked before anything is written. Each file is written atomically, keeping its BOM, line endings,
