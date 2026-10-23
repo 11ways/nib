@@ -21,6 +21,7 @@ import (
 	"github.com/11ways/nib/internal/patch"
 	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/snapshots"
+	"github.com/11ways/nib/internal/syntax"
 	"github.com/11ways/nib/internal/trash"
 )
 
@@ -683,8 +684,9 @@ func likeness(a, b string) float64 {
 }
 
 // offByOne warns about replaced ranges that look one line off: the kept line next to the new rows nearly matches the new edge row. Each warning
-// carries the hunks that undo the slip, since a model told only that a range was off tends to delete the wrong line.
-func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string {
+// carries the hunks that undo the slip, since a model told only that a range was off tends to delete the wrong line. Two imports of different
+// names never nearly match, as an import inserted beside its neighbours in order shares most of their text.
+func offByOne(path string, source *text, edits []snapshots.LineEdit, result applied) []string {
 	kept := func(index int) (string, bool) {
 		if index < 0 || index >= len(result.rows) || result.rows[index].origin < 0 {
 			return "", false
@@ -692,18 +694,24 @@ func offByOne(source *text, edits []snapshots.LineEdit, result applied) []string
 		return lineContent(result.rows[index].raw), true
 	}
 	var warnings []string
+	neighbour := func(kept, row string) float64 {
+		if syntax.DistinctImports(path, kept, row) {
+			return 0
+		}
+		return likeness(kept, row)
+	}
 	for index, edit := range edits {
 		if edit.Operation != snapshots.Replace || len(edit.Content) == 0 || edit.Quoted {
 			continue
 		}
 		at, length := result.runs[index].at, result.runs[index].length
 		first, last := edit.Content[0], edit.Content[len(edit.Content)-1]
-		if above, ok := kept(at - 1); ok && likeness(above, first) >= alikeThreshold && likeness(above, first) > likeness(lineContent(source.lines[edit.Start-1]), first) {
+		if above, ok := kept(at - 1); ok && neighbour(above, first) >= alikeThreshold && neighbour(above, first) > likeness(lineContent(source.lines[edit.Start-1]), first) {
 			// Shifted down by one, the range kept the line it meant to replace and overwrote the line after its end.
 			overwritten := lineContent(source.lines[edit.End-1])
 			warnings = append(warnings, fmt.Sprintf("Lines %d and %d now nearly match: line %d was kept just above an edit and line %d is the edit's first new line. If the edit was meant to replace line %d, its range started one line late and overwrote the line below it instead; these hunks, with the new tag, delete line %d and put that line back:\nCUT %d\nPUT >%d:\n+%s", at, at+1, at, at+1, at, at, at, at+length, overwritten))
 		}
-		if below, ok := kept(at + length); ok && likeness(below, last) >= alikeThreshold && likeness(below, last) > likeness(lineContent(source.lines[edit.End-1]), last) {
+		if below, ok := kept(at + length); ok && neighbour(below, last) >= alikeThreshold && neighbour(below, last) > likeness(lineContent(source.lines[edit.End-1]), last) {
 			warnings = append(warnings, fmt.Sprintf("Lines %d and %d now nearly match: line %d is an edit's last new line and line %d was kept just below it. If the edit was meant to replace line %d, its range ended one line early; this hunk, with the new tag, deletes it:\nCUT %d", at+length, at+length+1, at+length, at+length+1, at+length+1, at+length+1))
 		}
 	}
@@ -1582,7 +1590,7 @@ func stageEdit(ctx *Context, store *snapshots.Store, h *handle) (*staged, error)
 		}
 		brackets := unbalanced(h.target.canonical, source, edits, result)
 		return &staged{kind: stagedEdit, handle: h, current: current, source: source, live: live, prior: prior, applied: result, result: decoded, notes: notes,
-			warnings: slices.Concat(warnings, offByOne(source, edits, result), swallowed(source, edits, result), brackets,
+			warnings: slices.Concat(warnings, offByOne(h.target.canonical, source, edits, result), swallowed(source, edits, result), brackets,
 				dataWarnings(ctx, store, h.target.canonical, sourceLines(source), appliedLines(result)), codeWarnings(ctx, store, t, source, result, len(brackets) > 0))}, nil
 	}
 	// A tagless section only appends, which depends on nothing but where the file ends, and IMPORTs alone on nothing at all.

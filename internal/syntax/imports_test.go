@@ -52,6 +52,25 @@ func TestImportsReadsEachFormOnItsLine(t *testing.T) {
 	}
 }
 
+func TestDistinctImportsTellsTwoImportsFromOneEdited(t *testing.T) {
+	cases := []struct {
+		path, a, b string
+		want       bool
+	}{
+		{"A.java", "import a.b.Datasource;", "  import a.b.DatasourceLane;", true},
+		{"A.java", "import a.b.C;", "import static a.b.C;", true},
+		{"A.java", "import a.b.C;", "import a.b.C;", false},
+		{"A.java", "import a.b.C;", "C c = new C();", false},
+		{"A.kt", "import a.b.C as D", "import a.b.C", true},
+		{"a.ts", `import { A } from "./a"`, `import { B } from "./a"`, false},
+	}
+	for _, c := range cases {
+		if got := DistinctImports(c.path, c.a, c.b); got != c.want {
+			t.Errorf("%s %q %q: %v", c.path, c.a, c.b, got)
+		}
+	}
+}
+
 func TestImportTreeShowsEachPackageOnceUnderItsParent(t *testing.T) {
 	found, _ := Imports("Store.java", strings.Split(javaImports, "\n"))
 	want := []string{

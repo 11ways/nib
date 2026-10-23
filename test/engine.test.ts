@@ -2664,6 +2664,23 @@ describe("ranges one line off", () => {
     expect((await g.patch(`[file.txt#${s.tag}]\nPUT 2.=2:\n+repeated line of some length\n+an added line below it`)).text).not.toContain("Warnings:")
   })
 
+  test("an import added beside its neighbours in order is no slip, though its text nearly matches theirs", async () => {
+    const f = await fixture()
+    const file = path.join(f.directory, "Imports.java")
+    const java = ["package demo;", "", "import be.elevenways.zenit.orm.Column;", "import be.elevenways.zenit.orm.DatasourceLane;", "", "class Imports {}"].join("\n") + "\n"
+    const rows = "PUT 3.=3:\n+import be.elevenways.zenit.orm.Column;\n+import be.elevenways.zenit.orm.DatasourceKind;"
+    await writeFile(file, java)
+    const tag = /#([0-9A-F]{4})\]/.exec((await f.read("", { file })).text)![1]
+    const result = await f.patch(`[Imports.java#${tag}]\n${rows}`)
+    expect(await readFile(file, "utf8")).toBe(java.replace("Column;\n", "Column;\nimport be.elevenways.zenit.orm.DatasourceKind;\n"))
+    expect(result.text).not.toContain("Warnings:")
+    // The same lines in a file whose imports nib does not read still warn.
+    await writeFile(path.join(f.directory, "imports.txt"), java)
+    const text = /#([0-9A-F]{4})\]/.exec((await f.read("", { file: path.join(f.directory, "imports.txt") })).text)![1]
+    const plain = await f.patch(`[imports.txt#${text}]\n${rows}`)
+    expect(plain.text).toContain("Warnings:\nLines 4 and 5 now nearly match")
+  })
+
   const shutdown = ["func stop() {", "\tcancel()", "\tc.killAll()", "\tstatus := 0", "\treturn status", "}"].join("\n") + "\n"
 
   test("rows copied from one line too far, a short statement first, take that line into the range, with a note", async () => {

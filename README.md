@@ -234,7 +234,8 @@ REM
   `[lines 40-46 as you sent them]`.
 - The edit applies but warns when a range looks one line off, brackets stop balancing, the file stops parsing, a Java
   class is used without an import (giving the `IMPORT` hunk), a JSON file becomes invalid or repeats a key, or a YAML or
-  TOML file stops parsing (with the line of its first error).
+  TOML file stops parsing (with the line of its first error). Two Java or Kotlin imports of different names never look
+  like one line off, however alike their text.
 
 ### write
 

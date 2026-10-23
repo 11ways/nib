@@ -164,6 +164,21 @@ func Imports(path string, lines []string) (found []Import, ok bool) {
 	return found, true
 }
 
+// DistinctImports says whether a and b are both import declarations of the file at path that import different things, which however alike
+// their text is are two lines, never one line and its edited copy.
+func DistinctImports(path, a, b string) bool {
+	style := importsOf(path)
+	if style == nil {
+		return false
+	}
+	x, ok := style.read(strings.TrimSpace(a))
+	if !ok {
+		return false
+	}
+	y, ok := style.read(strings.TrimSpace(b))
+	return ok && x != y
+}
+
 // ImportTree is imports as a package tree, one row per package with the names imported from it, a space between them as no name holds one:
 // `java.util: ArrayList List`, then its sub-packages two spaces deeper by their own segments (`  concurrent: ConcurrentHashMap`). A package
 // that imports nothing itself and holds one sub-package shares its row (`com.couchbase.client:`). A wildcard shows as `*` and a Kotlin alias
