@@ -498,6 +498,36 @@ func TestBlockEndsWhereTheTreeSays(t *testing.T) {
 	}
 }
 
+func TestDataFormatsParseOnlyForTheEditCheck(t *testing.T) {
+	for _, c := range []struct {
+		file, good, bad string
+		line            int
+	}{
+		// YAML's grammar recovers from the document's start; the fault is the error inside, or where its tokens stop.
+		{"a.yaml", "a:\n  - 1\n  - 2\nb:\n  c: null\n", "a:\n  - 1\n  - 2\nb: [c\n", 4},
+		{"a.yml", "a: 1\nb:\n  c: 2\n  d: 3\ne: 5\n", "a: 1\nb:\n  c: 2\n d: 3\ne: 5\n", 4},
+		{"a.yml", "a: 1\nb: 2\nc: 3\n", "a: 1\nb: 2\n- c\n", 3},
+		{"a.toml", "[a]\nb = 1\nc = \"x\"\n", "[a]\nb = 1\nc = \"x\n", 3},
+		{"a.toml", "[a]\nb = [1, 2]\nd = 2\n", "[a]\nb = [1, 2\nd = 2\n", 2},
+	} {
+		if found, err := Inspect(c.file, []byte(c.good)); err != nil || found.ErrorLine != 0 || found.Types {
+			t.Errorf("%s: got %+v %v", c.file, found, err)
+		}
+		if found, err := Inspect(c.file, []byte(c.bad)); err != nil || found.ErrorLine != c.line {
+			t.Errorf("%s %q: got error line %d %v, want %d", c.file, c.bad, found.ErrorLine, err, c.line)
+		}
+		if _, err := Find(c.file, []byte(c.good), "a"); err != ErrNoGrammar {
+			t.Errorf("%s: a data format declares nothing, got %v", c.file, err)
+		}
+		if _, err := Block(c.file, []byte(c.good), 1); err != ErrNoGrammar {
+			t.Errorf("%s: a data format's blocks are the indentation rule's, got %v", c.file, err)
+		}
+	}
+	if Language("a.yml") != "YAML" || Language("A.TOML") != "TOML" || Supported("a.yaml") || !DataFormat("a.yaml") || DataFormat("a.go") {
+		t.Error("each data format is named by its extensions, and is no code")
+	}
+}
+
 func TestAtMostTwoGrammarsStayDecoded(t *testing.T) {
 	for _, file := range []string{"a.go", "a.py", "a.zig", "A.java"} {
 		if _, err := Find(file, []byte("x\n"), "x"); err == ErrNoGrammar {

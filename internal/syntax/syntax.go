@@ -63,8 +63,25 @@ func parse(path string, src []byte) (*tree, error) {
 	return &tree{language: l, grammar: grammar, root: parsed.RootNode(), tree: parsed, src: src}, nil
 }
 
-// Supported reports whether nib has a grammar for the file at path.
-func Supported(path string) bool { return languageOf(path) != nil }
+// parseDeclaring is parse for what a file declares; a data format, which declares nothing, has no grammar for that.
+func parseDeclaring(path string, src []byte) (*tree, error) {
+	if l := languageOf(path); l != nil && l.data {
+		return nil, ErrNoGrammar
+	}
+	return parse(path, src)
+}
+
+// Supported reports whether nib has a grammar for the code in the file at path; a data format's is DataFormat.
+func Supported(path string) bool {
+	l := languageOf(path)
+	return l != nil && !l.data
+}
+
+// DataFormat reports whether the file at path is in a data format nib parses, which declares nothing.
+func DataFormat(path string) bool {
+	l := languageOf(path)
+	return l != nil && l.data
+}
 
 // Language is the name of the language of the file at path, "" when nib has no grammar for it.
 func Language(path string) string {
@@ -77,7 +94,7 @@ func Language(path string) string {
 // Find is the lines of each declaration of symbol in src, the file at path, where Outer.inner names inner declared directly inside Outer (or
 // belonging to it, as a Go method to its receiver's type); a bare name takes the declarations at the least depth, so overloads come together.
 func Find(path string, src []byte, symbol string) ([]Range, error) {
-	t, err := parse(path, src)
+	t, err := parseDeclaring(path, src)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +150,7 @@ func Find(path string, src []byte, symbol string) ([]Range, error) {
 	}
 	if len(found) == 0 {
 		if t.root.HasError() {
-			return nil, fmt.Errorf("nib found no declaration of %s, but the file has lines that did not parse (from line %d), so it may be there", symbol, firstError(t.root)+1)
+			return nil, fmt.Errorf("nib found no declaration of %s, but the file has lines that did not parse (from line %d), so it may be there", symbol, firstError(t.root, t.language.fromStart)+1)
 		}
 		return nil, fmt.Errorf("nib found no declaration of %s", symbol)
 	}
@@ -230,14 +247,19 @@ func endRow(n *ts.Node) int {
 	return int(end.Row)
 }
 
-func firstError(n *ts.Node) int {
-	if n.IsError() || n.IsMissing() {
+// firstError is the row of the first error in n. A grammar that recovers from the document's start (fromStart) puts the fault at the
+// innermost error node, or, in one holding none, at its last token, where its tokens stop making sense.
+func firstError(n *ts.Node, fromStart bool) int {
+	if (n.IsError() || n.IsMissing()) && !fromStart {
 		return int(n.StartPoint().Row)
 	}
 	for i := 0; i < n.ChildCount(); i++ {
 		if c := n.Child(i); c.HasError() || c.IsError() || c.IsMissing() {
-			return firstError(c)
+			return firstError(c, fromStart)
 		}
+	}
+	if n.IsError() && n.ChildCount() > 0 {
+		return int(n.Child(n.ChildCount() - 1).StartPoint().Row)
 	}
 	return int(n.StartPoint().Row)
 }
@@ -250,7 +272,7 @@ var leading = map[string]bool{"modifiers": true, "annotation": true, "marker_ann
 // comment or attribute line, through the declaration they stand above. ErrNoGrammar leaves the caller to its own rule; ErrNotABlock when
 // it spans only that line.
 func Block(path string, src []byte, line int) (int, error) {
-	t, err := parse(path, src)
+	t, err := parseDeclaring(path, src)
 	if err != nil {
 		return 0, err
 	}

@@ -229,13 +229,14 @@ REM
 - The response gives the new tag and one unchanged row on each side of every change; rows the agent sent print as
   `[lines 40-46 as you sent them]`.
 - The edit applies but warns when a range looks one line off, brackets stop balancing, the file stops parsing, a Java
-  class is used without an import (giving the `IMPORT` hunk), or a JSON file becomes invalid or repeats a key.
+  class is used without an import (giving the `IMPORT` hunk), a JSON file becomes invalid or repeats a key, or a YAML or
+  TOML file stops parsing (with the line of its first error).
 
 ### write
 
 Creates a file with its parents, or overwrites one given its current tag. Overwriting keeps a CRLF file's line endings
 and its BOM. The response is a sparse map of `N~TEXT` rows; every written line counts as seen, so it can be edited
-right away.
+right away. A JSON, YAML or TOML file that was sound, or is new, is checked as an edit's is.
 
 ## nibash
 

@@ -7,6 +7,9 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+
+	"github.com/11ways/nib/internal/snapshots"
+	"github.com/11ways/nib/internal/syntax"
 )
 
 // jsonProblem is the first way text fails as JSON: a syntax error, or a key that repeats within one object, which parsers resolve silently by
@@ -69,15 +72,38 @@ func jsonProblem(text string) string {
 	}
 }
 
-// jsonWarnings warns when a .json file that was sound JSON, or is new (before nil), is no longer: a file that never parsed, like one with
-// comments, is left alone.
-func jsonWarnings(file string, before, after []string) []string {
-	if !strings.EqualFold(filepath.Ext(file), ".json") {
+// dataWarnings warns when a data file (.json, or a format nib has a grammar for) that was sound, or is new (before nil), is no longer: a file
+// that never parsed, like JSON with comments, is left alone. One too big to parse on every change says so once.
+func dataWarnings(ctx *Context, store *snapshots.Store, file string, before, after []string) []string {
+	if !strings.EqualFold(filepath.Ext(file), ".json") && !syntax.DataFormat(file) {
 		return nil
 	}
-	problem := jsonProblem(strings.Join(after, "\n"))
-	if problem == "" || (before != nil && jsonProblem(strings.Join(before, "\n")) != "") {
+	text := strings.Join(after, "\n")
+	format := "JSON"
+	if syntax.DataFormat(file) {
+		format = syntax.Language(file)
+		if len(text) > checkBytes {
+			if store.Teach(ctx.Session, "unchecked-size:"+file) {
+				return []string{fmt.Sprintf("Changes to this file get no %s check: it is over %d KiB, too big to parse on every change.", format, checkBytes>>10)}
+			}
+			return nil
+		}
+	}
+	problem := dataProblem(file, text)
+	if problem == "" || (before != nil && dataProblem(file, strings.Join(before, "\n")) != "") {
 		return nil
 	}
-	return []string{fmt.Sprintf("The file is not valid JSON now: %s.", problem)}
+	return []string{fmt.Sprintf("The file is not valid %s now: %s.", format, problem)}
+}
+
+// dataProblem is the first way text fails as the data format of file, "" when it is sound.
+func dataProblem(file, text string) string {
+	if !syntax.DataFormat(file) {
+		return jsonProblem(text)
+	}
+	found, err := syntax.Inspect(file, []byte(text))
+	if err != nil || found.ErrorLine == 0 {
+		return ""
+	}
+	return fmt.Sprintf("line %d holds its first error", found.ErrorLine)
 }

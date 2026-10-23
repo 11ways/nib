@@ -214,6 +214,25 @@ func TestAnEditThatBreaksTheParseSaysWhere(t *testing.T) {
 	}
 }
 
+func TestAnEditThatBreaksADataFileSaysWhere(t *testing.T) {
+	e := New()
+	ctx := &Context{Ctx: context.Background(), Directory: t.TempDir(), Session: "s"}
+	file := filepath.Join(ctx.Directory, "ci.yml")
+	if err := os.WriteFile(file, []byte("a: 1\nb:\n  c: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	read, err := e.Read(ctx, ReadArgs{Paths: []string{file}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := read.Text[strings.Index(read.Text, "#")+1 : strings.Index(read.Text, "]")]
+	// One space short of its siblings' indent, with every bracket balanced: only the parse tells, and only once.
+	out, err := e.Patch(ctx, "["+file+"#"+tag+"]\nPUT >3:\n+ d: 3")
+	if err != nil || !strings.HasSuffix(out.Text, "Warnings:\nThe file is not valid YAML now: line 4 holds its first error.") {
+		t.Fatalf("%v\n%s", err, out.Text)
+	}
+}
+
 func TestALibraryWildcardKeepsTheImportCheckQuietAndAJDKOneDoesNot(t *testing.T) {
 	for wildcard, warned := range map[string]bool{"org.library.*": false, "java.util.concurrent.*": true} {
 		e, ctx, file := javaWorkspace(t)

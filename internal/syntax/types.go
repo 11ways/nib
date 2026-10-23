@@ -39,7 +39,7 @@ func Inspect(path string, src []byte) (Inspection, error) {
 	defer t.tree.Release()
 	var found Inspection
 	if t.root.HasError() {
-		found.ErrorLine = firstError(t.root) + 1
+		found.ErrorLine = firstError(t.root, t.language.fromStart) + 1
 	}
 	nodes := t.language.types
 	if nodes == nil {

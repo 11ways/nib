@@ -13,8 +13,10 @@ import (
 	"github.com/odvcencio/gotreesitter/grammars/kotlin"
 	"github.com/odvcencio/gotreesitter/grammars/python"
 	"github.com/odvcencio/gotreesitter/grammars/rust"
+	"github.com/odvcencio/gotreesitter/grammars/toml"
 	"github.com/odvcencio/gotreesitter/grammars/tsx"
 	"github.com/odvcencio/gotreesitter/grammars/typescript"
+	"github.com/odvcencio/gotreesitter/grammars/yaml"
 	"github.com/odvcencio/gotreesitter/grammars/zig"
 )
 
@@ -37,15 +39,18 @@ type rule struct {
 // language is one grammar and what its trees declare. above are node types that belong to the declaration below them (comments,
 // attributes, decorators); wrappers are node types that wrap one declaration with lines of their own (export, decorators, template<>).
 // imports is how its import declarations read, nil where nib reads none, and types the node types that name a type, nil where nib does
-// not tell type names apart.
+// not tell type names apart. A data format (data) declares nothing: nib parses it only to tell whether an edit left it parsing. fromStart
+// marks a grammar that recovers from an error with one error node from the document's start, so the fault is found inside it.
 type language struct {
-	name     string
-	grammar  func() *ts.Language
-	rules    map[string]rule
-	above    map[string]bool
-	wrappers map[string]bool
-	imports  *imports
-	types    *typeNodes
+	name      string
+	grammar   func() *ts.Language
+	rules     map[string]rule
+	above     map[string]bool
+	wrappers  map[string]bool
+	imports   *imports
+	types     *typeNodes
+	data      bool
+	fromStart bool
 }
 
 // languages are the grammars nib parses, by file extension: the one home of that mapping.
@@ -154,16 +159,24 @@ var languages = func() map[string]*language {
 	}}
 	typeScript, tsxLike, js := script("TypeScript", typescript.Language), script("TSX", tsx.Language), script("JavaScript", javascript.Language)
 	cOnly, cPlus := cLike("C", c.Language), cLike("C++", cpp.Language)
+	yamlLike := dataFormat("YAML", yaml.Language)
+	yamlLike.fromStart = true
 	return map[string]*language{
 		".java": javaLike, ".kt": kotlinLike, ".kts": kotlinLike,
 		".ts": typeScript, ".mts": typeScript, ".cts": typeScript, ".tsx": tsxLike, ".js": js, ".jsx": js, ".mjs": js, ".cjs": js,
 		".go": goLike, ".py": pythonLike, ".pyi": pythonLike, ".rs": rustLike, ".zig": zigLike,
 		".c": cOnly, ".h": cOnly, ".cpp": cPlus, ".cc": cPlus, ".cxx": cPlus, ".hpp": cPlus, ".hh": cPlus, ".hxx": cPlus,
+		".yaml": yamlLike, ".yml": yamlLike, ".toml": dataFormat("TOML", toml.Language),
 	}
 }()
 
 // languageOf is the language of a file by its extension; nil when nib has no grammar for it.
 func languageOf(path string) *language { return languages[strings.ToLower(filepath.Ext(path))] }
+
+// dataFormat is a data format's language, which declares nothing.
+func dataFormat(name string, grammar func() *ts.Language) *language {
+	return &language{name: name, grammar: grammar, data: true}
+}
 
 func set(types ...string) map[string]bool {
 	m := map[string]bool{}
