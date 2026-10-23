@@ -1780,7 +1780,7 @@ describe("grep options", () => {
     expect((await f.engine.grep(f.ctx, { pattern: "formatSize", paths: ["size.ts"], before: 3, after: 12 })).text).toBe([
       "4 matches in 1 files",
       [`[size.ts#${fileTag(source)}]`, row(1), ...rows(18, 33), row(56), row(80)].join("\n"),
-      "[all 4 match rows shown, context lines only around the definition at size.ts:21: around all 4 they would be 57 lines, over grep's budget of 40; for another match's, read a range like size.ts:1-13]",
+      "[all 4 match rows shown, context lines only around the definition at size.ts:21: around all 4 they would be 57 lines, over grep's budget of 40; for the others', read size.ts:1-13,53-68,77-92]",
     ].join("\n\n"))
     await f.patch(`[size.ts#${fileTag(source)}]\nPUT 56:\n+const half = formatSize(1024)`)
     expect(await readFile(path.join(f.directory, "size.ts"), "utf8")).toBe(source.replace("formatSize(512)", "formatSize(1024)"))
@@ -1791,12 +1791,12 @@ describe("grep options", () => {
     const f = await fixture(Array.from({ length: 100 }, (_, index) => (index + 1) % 5 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const asked = (await f.engine.grep(f.ctx, { pattern: "hit", before: 0, after: 5 })).text
     expect(asked).toContain("\n*50:hit 50\n 51:miss 51\n 52:miss 52\n 53:miss 53\n 54:miss 54\n*55:hit 55\n*60:hit 60\n")
-    expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines only around the first 10: around all 20 they would be 76 lines, over grep's budget of 40; for another match's, read a range like file.txt:55-60]")
+    expect(asked).toEndWith("\n\n[all 20 match rows shown, context lines only around the first 10: around all 20 they would be 76 lines, over grep's budget of 40; for the others', read file.txt:55-100]")
     // The default context goes to none of them once it would pass the budget: a hit every third line is 50 matches.
     const g = await fixture(Array.from({ length: 150 }, (_, index) => (index + 1) % 3 ? `miss ${index + 1}` : `hit ${index + 1}`).join("\n") + "\n")
     const plain = (await g.engine.grep(g.ctx, { pattern: "hit" })).text
     expect(plain).not.toContain("miss")
-    expect(plain).toEndWith("\n\n[all 50 match rows shown, without context lines: around all 50 they would be 99 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read a range like file.txt:2-4]")
+    expect(plain).toEndWith("\n\n[all 50 match rows shown, without context lines: around all 50 they would be 99 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read file.txt:2-150]")
     // hit 5 to hit 25 of the first file: few enough for the default context.
     expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n 9:miss 9\n*10:hit 10\n")
   })
@@ -1844,7 +1844,7 @@ describe("grep options", () => {
     const text = (await f.engine.grep(f.ctx, { pattern: "^function ", paths: ["fns.ts"] })).text
     // One line before and one after: each definition comes to 2 lines, so 20 fit in 40.
     expect(text).toContain("\n*50:function f12() {\n 51:  return 12\n 53:/** Doc 13. */\n*54:function f13() {\n")
-    expect(text).toEndWith("\n\n[all 30 match rows shown, context lines only around the first 20 of 30 definitions: around all 30 they would be 60 lines, over grep's budget of 40; for another match's, read a range like fns.ts:81-83]")
+    expect(text).toEndWith("\n\n[all 30 match rows shown, context lines only around the first 20 of 30 definitions: around all 30 they would be 60 lines, over grep's budget of 40; for the others', read fns.ts:81-83,85-87,89-91,93-95,97-99,101-103,105-107,109-111,113-115,117-119]")
   })
 
   test("one file shows its first 100 matches, like a harness's own grep", async () => {

@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -629,20 +631,19 @@ func frameMatches(files []*grepFile, before, after int, asked bool) string {
 			}
 		}
 	}
-	var bare *matchRef
-	for i := range all {
-		if !given[all[i]] {
-			bare = &all[i]
-			break
+	var bare []matchRef
+	for _, m := range all {
+		if !given[m] {
+			bare = append(bare, m)
 		}
 	}
-	if bare == nil {
+	if len(bare) == 0 {
 		return ""
 	}
 	over := fmt.Sprintf("around all %d they would be %d lines, over grep's budget of %d", len(all), wanted, GrepContextLines)
-	rangeText := fmt.Sprintf("%s:%d-%d", bare.file.target.display, max(1, bare.line-before), bare.line+after)
+	selector := contextSelector(bare, around)
 	if len(givenOrder) == 0 {
-		return fmt.Sprintf("[all %d match rows shown, without context lines: %s; ask with before or after for some around the first matches, or read a range like %s]", len(all), over, rangeText)
+		return fmt.Sprintf("[all %d match rows shown, without context lines: %s; ask with before or after for some around the first matches, or read %s]", len(all), over, selector)
 	}
 	first := givenOrder[0]
 	var which string
@@ -656,7 +657,70 @@ func frameMatches(files []*grepFile, before, after int, asked bool) string {
 	default:
 		which = fmt.Sprintf("the %d definitions", len(givenOrder))
 	}
-	return fmt.Sprintf("[all %d match rows shown, context lines only around %s: %s; for another match's, read a range like %s]", len(all), which, over, rangeText)
+	return fmt.Sprintf("[all %d match rows shown, context lines only around %s: %s; for the others', read %s]", len(all), which, over, selector)
+}
+
+// selectorRanges caps the ranges a context selector lists, so a page of hundreds of matches does not make a note longer than its rows.
+const selectorRanges = 20
+
+// contextSelector is the read selectors, one per file, of the lines around bare matches, their own rows included so neighbouring
+// matches join one range; past selectorRanges ranges it names the matches it covers.
+func contextSelector(bare []matchRef, around func(*grepFile, int) []int) string {
+	var order []*grepFile
+	lines := map[*grepFile]map[int]bool{}
+	ranges := 0
+	covered := 0
+	for _, m := range bare {
+		set := lines[m.file]
+		if set == nil {
+			set = map[int]bool{}
+		}
+		added := append(around(m.file, m.line), m.line)
+		trial := maps.Clone(set)
+		for _, line := range added {
+			trial[line] = true
+		}
+		count := ranges - len(runs(set)) + len(runs(trial))
+		if count > selectorRanges && covered > 0 {
+			break
+		}
+		if lines[m.file] == nil {
+			order = append(order, m.file)
+		}
+		lines[m.file], ranges = trial, count
+		covered++
+	}
+	var selectors []string
+	for _, f := range order {
+		var spans []string
+		for _, r := range runs(lines[f]) {
+			if r[0] == r[1] {
+				spans = append(spans, strconv.Itoa(r[0]))
+			} else {
+				spans = append(spans, fmt.Sprintf("%d-%d", r[0], r[1]))
+			}
+		}
+		selectors = append(selectors, f.target.display+":"+strings.Join(spans, ","))
+	}
+	text := strings.Join(selectors, " and ")
+	if covered < len(bare) {
+		return fmt.Sprintf("%s for the next %d of %d", text, covered, len(bare))
+	}
+	return text
+}
+
+// runs are the sorted runs of consecutive lines in set, each as its first and last line.
+func runs(set map[int]bool) [][2]int {
+	sorted := slices.Sorted(maps.Keys(set))
+	var found [][2]int
+	for _, line := range sorted {
+		if n := len(found); n > 0 && found[n-1][1] == line-1 {
+			found[n-1][1] = line
+		} else {
+			found = append(found, [2]int{line, line})
+		}
+	}
+	return found
 }
 
 // replaceLine swaps a line's submatches for ripgrep's replacements; ripgrep reports UTF-8 byte offsets.

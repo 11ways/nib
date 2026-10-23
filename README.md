@@ -155,9 +155,10 @@ with the same `expect` shows only lines added since; with another `expect`, the 
  6:  const token = session.create(user)
 ```
 
-`*` marks matches; context rows default to 1 before and 1 after, at most 40 per page, given first to definitions. Pages
-hold 20 files (`skip` for more) and 20 matches per file (100 when one file matches). Every row shown whole is an edit
-anchor.
+`*` marks matches; context rows default to 1 before and 1 after, at most 40 per page, given first to definitions; the
+note under a page past that budget gives the read selectors of the other matches' context, one per file, as in
+`a.go:12-20,45-50`. Pages hold 20 files (`skip` for more) and 20 matches per file (100 when one file matches). Every row
+shown whole is an edit anchor.
 
 - The search is `rg --hidden` without `.git/`, with ripgrep's `--engine auto`, so look-around runs on PCRE2.
 - Git's ignore rules apply inside repositories; a nested repository its parent ignores is still searched by its own
