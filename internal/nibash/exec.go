@@ -46,13 +46,15 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 				err = interp.ExitStatus(2)
 			}
 		}()
-		// A watched command's failure is recorded for the notes that close the call.
+		// A watched command's failure is recorded for the notes that close the call, with the first line of a standard error that went to
+		// /dev/null.
+		ctx, kept := keepDiscarded(ctx)
 		defer func() {
 			name := args[0]
 			if _, marked, ok := parseMarker(name); ok {
 				name = marked
 			}
-			c.recordStep(interp.HandlerCtx(ctx).Env, name, err)
+			c.recordStep(interp.HandlerCtx(ctx).Env, name, err, kept.line())
 		}()
 		c.reachIn(interp.HandlerCtx(ctx).Dir, args[1:])
 		name := args[0]
@@ -219,7 +221,7 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		if mode != fromLink && mode != fromBand && (band || !(isFile && c.links.get(out) != nil)) {
 			return c.runProgram(ctx, args, func() { c.ranAsSystem(name, err, hc.Dir, args[1:]) })
 		}
-		fmt.Fprintf(hc.Stderr, "%s: %s\n", name, because)
+		fmt.Fprintf(stderrOf(ctx), "%s: %s\n", name, because)
 		// The stages it was joined to must still see it end, or they would wait for it.
 		if isFile && !band {
 			if l := c.links.get(out); l != nil {
@@ -233,7 +235,7 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		}
 		return interp.ExitStatus(2)
 	}
-	inv := &invocation{ctx: ctx, call: c, name: name, dir: hc.Dir, stderr: hc.Stderr}
+	inv := &invocation{ctx: ctx, call: c, name: name, dir: hc.Dir, stderr: stderrOf(ctx)}
 	inv.in = &input{}
 	if file, ok := hc.Stdin.(*os.File); ok && file != nil {
 		if mode == fromLink {
@@ -314,8 +316,7 @@ func (c *call) runReal(ctx context.Context, args []string) error {
 
 // runProgram is runReal calling printed, when not nil, once the program's standard output brings the sink anything.
 func (c *call) runProgram(ctx context.Context, args []string, printed func()) error {
-	hc := interp.HandlerCtx(ctx)
-	return c.runProgramTo(ctx, args, hc.Stdout, hc.Stderr, printed)
+	return c.runProgramTo(ctx, args, interp.HandlerCtx(ctx).Stdout, stderrOf(ctx), printed)
 }
 
 // runProgramTo is runProgram with its standard output and error going to stdout and stderr, which a nib command that renders a real program's
@@ -331,19 +332,19 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 	args = namedScripts(hc.Env, args)
 	path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
 	if err != nil {
-		fmt.Fprintln(hc.Stderr, err)
+		fmt.Fprintln(stderrOf(ctx), err)
 		return interp.ExitStatus(127)
 	}
 	// A new process cannot start in a directory that is gone, where bash's child would inherit it; say so rather than a bare ENOENT.
 	if info, err := os.Stat(hc.Dir); err != nil || !info.IsDir() {
-		fmt.Fprintf(hc.Stderr, "nibash: %s: not run, since the working directory %s no longer exists; cd to one that does\n", args[0], hc.Dir)
+		fmt.Fprintf(stderrOf(ctx), "nibash: %s: not run, since the working directory %s no longer exists; cd to one that does\n", args[0], hc.Dir)
 		return interp.ExitStatus(126)
 	}
 	argv := append([]string{path}, args[1:]...)
 	if c.tools.Sandbox {
 		wrapped, err := c.sandboxed(hc.Dir, argv)
 		if err != nil {
-			fmt.Fprintf(hc.Stderr, "%s: %v\n", args[0], err)
+			fmt.Fprintf(stderrOf(ctx), "%s: %v\n", args[0], err)
 			return interp.ExitStatus(126)
 		}
 		argv = wrapped
@@ -359,11 +360,15 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 	if hc.Stdin != nil {
 		cmd.Stdin = hc.Stdin
 	}
-	var drains sync.WaitGroup
+	// kept counts the reading of a kept standard error, whose first line only a failure needs, so a success does not wait for it.
+	var drains, kept sync.WaitGroup
 	var pipes []*os.File
+	// A sink, or a kept standard error, is read through a pipe the program holds as a file, so a daemon it leaves holding it keeps writing
+	// without the wait waiting for it.
 	attach := func(w io.Writer, printed func()) (io.Writer, error) {
-		s, ok := w.(*sink)
-		if !ok {
+		switch w.(type) {
+		case *sink, *keptStderr:
+		default:
 			return w, nil
 		}
 		reader, writer, err := os.Pipe()
@@ -371,9 +376,13 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 			return nil, err
 		}
 		pipes = append(pipes, writer)
-		drains.Add(1)
+		group := &drains
+		if _, ok := w.(*keptStderr); ok {
+			group = &kept
+		}
+		group.Add(1)
 		go func() {
-			defer drains.Done()
+			defer group.Done()
 			defer reader.Close()
 			buffer := make([]byte, 64*1024)
 			for {
@@ -383,7 +392,7 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 						printed()
 						printed = nil
 					}
-					s.Write(buffer[:n])
+					w.Write(buffer[:n])
 				}
 				if err != nil {
 					return
@@ -407,7 +416,7 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 		for _, p := range pipes {
 			p.Close()
 		}
-		fmt.Fprintf(hc.Stderr, "%s: %v\n", args[0], unwrapStart(err))
+		fmt.Fprintf(stderrOf(ctx), "%s: %v\n", args[0], unwrapStart(err))
 		return interp.ExitStatus(126)
 	}
 	// The child holds its own ends now; closing ours lets the drains end when it does.
@@ -419,7 +428,7 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 	if err := platform.Join(cmd); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		fmt.Fprintf(hc.Stderr, "%s: %v\n", args[0], err)
+		fmt.Fprintf(stderrOf(ctx), "%s: %v\n", args[0], err)
 		return interp.ExitStatus(126)
 	}
 	defer platform.Release(pgid)
@@ -437,6 +446,9 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 	finished := make(chan struct{})
 	go func() {
 		drains.Wait()
+		if waitErr != nil {
+			kept.Wait()
+		}
 		close(finished)
 	}()
 	select {

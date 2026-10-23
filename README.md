@@ -267,7 +267,8 @@ program. `type cat` names the system program.
 - **Changed files** are listed with their new tags after the command; small changes to files the agent saw print as
   rows.
 - **Failures** that the exit status hides (stderr sent to `/dev/null`, an earlier pipeline stage) are named in a closing
-  line.
+  line. A failed command whose stderr went to `/dev/null` has its first line quoted there, as in
+  `[exit 2, its stderr discarded: "cat: x: No such file or directory"]`; the output itself stays without it.
 - `hash -d name=dir` defines a named directory; bare `hash -d` lists them. A pipeline's last stage runs in the shell, so
   `... | read v` sets `v`.
 

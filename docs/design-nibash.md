@@ -369,7 +369,9 @@ When the command finishes or its time runs out, the sink is rendered once:
   `/dev/null`, what an `&&` chain skips when it fails and whether what follows handles that; after classify each gets
   `NIBASH_STEP=N` for itself, which the exec handler reads to record a failure and `environ` keeps from programs. A
   failure the exit status does not tell, whose message went nowhere or whose chain stopped unhandled, is named in a
-  closing `[nibash: ...]` line.
+  closing `[nibash: ...]` line. A command whose standard error is `/dev/null` writes it to a stand-in that discards it
+  as `/dev/null` would but keeps the first line, which the closing line of its failure quotes (`[exit 2, its stderr
+  discarded: "rg: x: No such file or directory"]`), so the agent learns why without running it again.
 - **Files changed by the command** [missing]:
   - Before the call, nibash notes size and mtime of every file the session's store holds. Every file a redirect opens
     for writing is noted through `OpenHandler`.

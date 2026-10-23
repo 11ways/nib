@@ -1,6 +1,9 @@
 package nibash
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAFailureTheExitStatusDoesNotTellIsNamedWhereItCouldGoUnseen(t *testing.T) {
 	f := newFixture(t, map[string]string{"a.txt": "a\n"})
@@ -14,6 +17,14 @@ func TestAFailureTheExitStatusDoesNotTellIsNamedWhereItCouldGoUnseen(t *testing.
 		{"sh -c 'exit 4' && echo never && echo nor; echo after", "after\n[nibash: sh -c 'exit 4' exited 4, so echo never && echo nor did not run]"},
 		// A loop names a command once.
 		{"for i in 1 2; do sh -c 'exit 2' 2>/dev/null; done; echo end", "end\n[nibash: sh -c 'exit 2' exited 2 (2 times), its stderr discarded]"},
+		// What it wrote there is gone from the output, but its first line is quoted, also by the closing line and for a pipeline's stage.
+		{"sh -c 'printf \"\\n  first  \\nsecond\\n\" >&2; exit 3' 2>/dev/null; echo done", "done\n[nibash: sh -c 'printf \"\\n  first  \\nsecond\\n\" >&2; exit 3' exited 3, its stderr discarded: \"first\"]"},
+		{"sh -c 'echo gone >&2; exit 2' 2>/dev/null", "[exit 2, its stderr discarded: \"gone\"]"},
+		{"echo a && sh -c 'echo gone >&2; exit 2' 2>/dev/null", "a\n[exit 2: sh -c 'echo gone >&2; exit 2', its stderr discarded: \"gone\"]"},
+		{"sh -c 'echo bad >&2; exit 2' 2>/dev/null | cat", "[nibash: sh -c 'echo bad >&2; exit 2' exited 2 before | cat, its stderr discarded: \"bad\"]"},
+		// nib's own cat writes its error where the system program would.
+		{"cat nosuch 2>/dev/null | head -1", "[nibash: cat nosuch exited 1 before | head -1, its stderr discarded: \"cat: nosuch: No such file or directory\"]"},
+		{"nosuchprogram 2>/dev/null; echo after", "after\n[nibash: nosuchprogram exited 127, its stderr discarded: \"\\\"nosuchprogram\\\": executable file not found in $PATH\"]"},
 		// Anything else after ||, or a command reading $?, handles the failure.
 		{"sh -c 'exit 6' 2>/dev/null || echo handled", "handled"},
 		{"sh -c 'exit 8' 2>/dev/null; echo status=$?", "status=8"},
@@ -32,5 +43,15 @@ func TestAFailureTheExitStatusDoesNotTellIsNamedWhereItCouldGoUnseen(t *testing.
 		{"if sh -c 'exit 3' | grep -q x; then echo y; fi; echo n", "n"},
 	} {
 		expect(t, f.run(c.command), c.want)
+	}
+}
+
+func TestAKeptStandardErrorDoesNotHoldUpASuccess(t *testing.T) {
+	f := newFixture(t, nil)
+	// A child left holding the discarded standard error keeps it open past the program's end; only a failure waits for its first line.
+	start := time.Now()
+	expect(t, f.run("sh -c 'sleep 3 & exit 0' >/dev/null 2>/dev/null; echo ok"), "ok")
+	if elapsed := time.Since(start); elapsed > drainDelay {
+		t.Fatalf("took %v", elapsed)
 	}
 }

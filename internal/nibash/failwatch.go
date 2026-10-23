@@ -1,14 +1,20 @@
 package nibash
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/11ways/nib/internal/engine"
 )
 
 // stepVariable is assigned for one command only, as NIBASH_STEP=3 git push, to each command a call watches for failing, so the exec handler
@@ -26,8 +32,12 @@ type step struct {
 	piped      string
 }
 
-// failedStep is a watched command that failed, by its step, and its exit status.
-type failedStep struct{ step, status int }
+// failedStep is a watched command that failed, by its step, its exit status and, when its standard error went to /dev/null, the first line
+// it wrote there.
+type failedStep struct {
+	step, status int
+	stderr       string
+}
 
 // predicates are the programs whose exit status 1 answers a question rather than reports a failure: no match, files that differ, a name
 // that is no command.
@@ -262,8 +272,9 @@ func (w *watch) mark() {
 	}
 }
 
-// recordStep records that the command name ran as the step env names, when it is that step's and exited with a status other than 0.
-func (c *call) recordStep(env expand.Environ, name string, err error) {
+// recordStep records that the command name ran as the step env names, when it is that step's and exited with a status other than 0; stderr is
+// the first line it wrote to a standard error that went to /dev/null.
+func (c *call) recordStep(env expand.Environ, name string, err error, stderr string) {
 	status, ok := err.(interp.ExitStatus)
 	if !ok || status == 0 {
 		return
@@ -278,7 +289,7 @@ func (c *call) recordStep(env expand.Environ, name string, err error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.failures = append(c.failures, failedStep{step: id, status: int(status)})
+	c.failures = append(c.failures, failedStep{step: id, status: int(status), stderr: stderr})
 }
 
 // told is the failure the call's exit status tells: the last one of a command whose status can be the call's, when it failed with that
@@ -296,14 +307,25 @@ func (c *call) told(status int) int {
 	return -1
 }
 
-// exitLabel is the closing line of a call that exited with status: [exit N], naming the command that failed with it among several watched.
+// exitLabel is the closing line of a call that exited with status: [exit N], naming the command that failed with it among several watched,
+// and quoting the first line of its standard error when that went to /dev/null.
 func (c *call) exitLabel(status int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if told := c.told(status); told >= 0 && c.commands > 1 {
-		return fmt.Sprintf("[exit %d: %s]", status, c.steps[c.failures[told].step].text)
+	told := c.told(status)
+	label := fmt.Sprintf("exit %d", status)
+	if told >= 0 && c.commands > 1 {
+		label += ": " + c.steps[c.failures[told].step].text
 	}
-	return fmt.Sprintf("[exit %d]", status)
+	if told >= 0 && c.failures[told].stderr != "" {
+		label += discardedLine(c.failures[told].stderr)
+	}
+	return "[" + label + "]"
+}
+
+// discardedLine is the clause that quotes the first line a command wrote to a standard error that went to /dev/null.
+func discardedLine(line string) string {
+	return fmt.Sprintf(", its stderr discarded: %q", line)
 }
 
 // failureNote names the commands that failed where the call's exit status does not say so and nothing after them handles it, while the
@@ -316,6 +338,7 @@ func (c *call) failureNote(status int) string {
 	told := c.told(status)
 	counts := map[int]int{}
 	statuses := map[int]int{}
+	lines := map[int]string{}
 	var order []int
 	for i, f := range c.failures {
 		s := c.steps[f.step]
@@ -326,6 +349,7 @@ func (c *call) failureNote(status int) string {
 		if counts[f.step] == 0 {
 			order = append(order, f.step)
 			statuses[f.step] = f.status
+			lines[f.step] = f.stderr
 		}
 		counts[f.step]++
 	}
@@ -339,7 +363,10 @@ func (c *call) failureNote(status int) string {
 		if counts[id] > 1 {
 			clause += fmt.Sprintf(" (%d times)", counts[id])
 		}
-		if s.discarded {
+		switch {
+		case lines[id] != "":
+			clause += discardedLine(lines[id])
+		case s.discarded:
 			clause += ", its stderr discarded"
 		}
 		if len(s.skipped) > 0 {
@@ -368,4 +395,64 @@ func clip(text string) string {
 		return string(runes[:printedLimit-3]) + "..."
 	}
 	return text
+}
+
+// keptLimit is how many bytes of a discarded standard error keptStderr reads for its first line, and keptColumns how much of that line a note
+// quotes.
+const (
+	keptLimit   = 4096
+	keptColumns = 200
+)
+
+// keptStderr stands for /dev/null as a command's standard error: it discards what is written, as /dev/null would, keeping only the start for
+// the first line, which the note on the command's failure quotes.
+type keptStderr struct {
+	mu    sync.Mutex
+	start []byte
+}
+
+func (k *keptStderr) Write(b []byte) (int, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if room := keptLimit - len(k.start); room > 0 {
+		k.start = append(k.start, b[:min(len(b), room)]...)
+	}
+	return len(b), nil
+}
+
+// line is the first line written that holds more than white space, without color codes, cut to keptColumns; "" for none.
+func (k *keptStderr) line() string {
+	if k == nil {
+		return ""
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, line := range strings.Split(strings.ToValidUTF8(string(k.start), "�"), "\n") {
+		if line = strings.TrimSpace(engine.PlainText(line)); line != "" {
+			if runes := []rune(line); len(runes) > keptColumns {
+				return string(runes[:keptColumns-3]) + "..."
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+type keptKey struct{}
+
+// keepDiscarded gives a command whose standard error is /dev/null a keptStderr in its place, through ctx; nil for any other.
+func keepDiscarded(ctx context.Context) (context.Context, *keptStderr) {
+	if file, ok := interp.HandlerCtx(ctx).Stderr.(*os.File); !ok || file == nil || file.Name() != os.DevNull {
+		return ctx, nil
+	}
+	kept := &keptStderr{}
+	return context.WithValue(ctx, keptKey{}, kept), kept
+}
+
+// stderrOf is where the command ctx runs writes its standard error: its keptStderr, if keepDiscarded gave it one, else the shell's.
+func stderrOf(ctx context.Context) io.Writer {
+	if kept, ok := ctx.Value(keptKey{}).(*keptStderr); ok {
+		return kept
+	}
+	return interp.HandlerCtx(ctx).Stderr
 }
