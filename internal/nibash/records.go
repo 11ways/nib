@@ -113,29 +113,62 @@ type output struct {
 	// pending go out before the next record, or before the command's next standard error, and not at all when neither comes: a header
 	// that shows only above output. mu keeps them ahead of what a program's two streams write at once.
 	pending []record
-	mu      sync.Mutex
+	// fold, when set, is the name a header in pending gives: the first plain record after it is held, and goes out alone on the header's
+	// line, as "fold: text", when unfold finds no other came.
+	fold string
+	held *record
+	mu   sync.Mutex
 }
 
 // emit sends one record; false means nothing reads any more, so the command may stop (or keep counting for a fact).
 func (o *output) emit(r record) bool {
+	o.mu.Lock()
+	if o.fold != "" && o.held == nil && len(o.pending) > 0 && plain(r) {
+		o.held = &r
+		o.mu.Unlock()
+		return !o.stopped
+	}
+	o.mu.Unlock()
 	if !o.flushPending() {
 		return false
 	}
 	return o.send(r)
 }
 
-// flushPending sends the pending records; false means nothing reads any more.
+// flushPending sends the pending records, and a record a fold held; false means nothing reads any more.
 func (o *output) flushPending() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	pending := o.pending
-	o.pending = nil
+	if o.held != nil {
+		pending = append(pending, *o.held)
+	}
+	o.pending, o.held = nil, nil
 	for _, r := range pending {
 		if !o.send(r) {
 			return false
 		}
 	}
 	return true
+}
+
+// unfold ends what pending and fold began: a record held alone goes out on its header's line, and a header nothing followed is dropped;
+// false means nothing reads any more.
+func (o *output) unfold() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	held, name := o.held, o.fold
+	o.pending, o.held, o.fold = nil, nil, ""
+	if held == nil {
+		return !o.stopped
+	}
+	return o.send(record{text: name + ": " + held.text})
+}
+
+// plain is whether r is a line of text alone: no file's line, no grep or diff row, no path a program named, no reshaped git line.
+func plain(r record) bool {
+	return r.origin == nil && r.listed == nil && r.shape == nil && r.kept == nil && r.raw == "" && r.input == "" &&
+		!r.match && !r.context && !r.added && !r.separator && !r.display
 }
 
 func (o *output) send(r record) bool {

@@ -274,8 +274,11 @@ where agents otherwise write the same `for r in ...; do git -C $r ...; done` loo
 `gitPlan` with `-C` and git's output is shaped as git's own is. The repositories are `engine.Repositories`, the walk
 searches already make for nested repositories, here with the untracked ones too. Each header is a pending record of
 the output: it goes out before the first record or standard error of that repository's git, and not at all when git
-printed nothing. Where the output reaches neither the model nor a nib command (a file, a real program, `$(...)`) the
-classifier leaves it a program, and the exec handler runs the same plan writing git's lines and the headers as text.
+printed nothing. The output folds: its first record is held while it is plain text (no path git named, no reshaped or
+anchored row), and when no other follows, it goes out alone on the header's line as `NAME: TEXT`, so a one-line answer
+per repository (`git-each status -sb`, `git-each log -1 --format=%s`) reads as a table. Where the output reaches neither
+the model nor a nib command (a file, a real program, `$(...)`) the classifier leaves it a program, and the exec handler
+runs the same plan writing git's lines and the headers as text.
 `{base}` reads `"base"` from the repository's `nib.json` (`names.BaseBranch`, beside `ConfigFile`), else
 `git symbolic-ref refs/remotes/origin/HEAD`. `git rm` and `git clean` are refused, since the trash only takes what
 they delete through `gitTrash`, which writes straight to the call's output and runs one repository. The command rules

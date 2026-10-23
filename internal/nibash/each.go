@@ -57,24 +57,21 @@ func (p *eachPlan) run(inv *invocation) int {
 	defer func() { inv.stderr = stderr }()
 	status := 0
 	for _, repository := range repositories {
-		header := record{text: "==> " + p.shown(inv, repository) + " <=="}
+		// A repository whose git printed one line shows it on its header's line, so a one-line answer per repository reads as a table.
+		shown := p.shown(inv, repository)
+		inv.out.pending, inv.out.fold = []record{{text: "==> " + shown + " <=="}}, shown
 		args, skipped := p.argsFor(inv, repository)
 		if skipped != "" {
-			inv.out.emit(header)
-			if !inv.out.emit(record{text: "[skipped: " + skipped + "]"}) {
+			if !inv.out.emit(record{text: "[skipped: " + skipped + "]"}) || !inv.out.unfold() {
 				break
 			}
 			continue
 		}
-		inv.out.pending = []record{header}
 		inv.stderr = &headedWriter{out: inv.out, w: stderr}
 		if p.runOne(inv, append([]string{"-C", repository}, args...)) != 0 {
 			status = 1
 		}
-		inv.out.mu.Lock()
-		inv.out.pending = nil
-		inv.out.mu.Unlock()
-		if inv.out.stopped || inv.ctx.Err() != nil {
+		if !inv.out.unfold() || inv.out.stopped || inv.ctx.Err() != nil {
 			break
 		}
 	}

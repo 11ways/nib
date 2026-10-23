@@ -29,16 +29,21 @@ func eachFixture(t *testing.T) *fixture {
 	return f
 }
 
-func TestGitEachPrintsOnlyTheRepositoriesWithOutputEachUnderItsHeader(t *testing.T) {
+func TestGitEachPrintsOnlyTheRepositoriesWithOutputEachUnderItsHeaderOrOnItsLine(t *testing.T) {
 	f := eachFixture(t)
 	expect(t, f.run("git-each status --short"), "==> alpha <==\n M a.txt")
-	// Path order, and git's own lines where its output goes to a real program or a file.
+	// Path order, and git's own lines where its output goes to a real program or a file; one plain line alone shows on its header's line.
 	f.git("-C", "beta", "commit", "-q", "--allow-empty", "-m", "second in beta")
-	expect(t, f.run("git-each log --format=%s -1 | cat -A | sed 's/\\$$//'"), "==> alpha <==\nfirst in alpha\n==> apps/gamma <==\nfirst in apps/gamma\n==> beta <==\nsecond in beta")
+	expect(t, f.run("git-each log --format=%s -2 | cat -A | sed 's/\\$$//'"), "alpha: first in alpha\napps/gamma: first in apps/gamma\n==> beta <==\nsecond in beta\nfirst in beta")
 	f.run("git-each status --short > out.txt")
 	if data, _ := os.ReadFile(filepath.Join(f.directory, "out.txt")); string(data) != "==> alpha <==\n M a.txt\n" {
 		t.Errorf("into a file: %q", data)
 	}
+}
+
+func TestGitEachStatusIsOneLinePerCleanRepository(t *testing.T) {
+	f := eachFixture(t)
+	expect(t, f.run("git-each status -sb"), "==> alpha <==\n## main\n M a.txt\napps/gamma: ## main\nbeta: ## main")
 }
 
 func TestGitEachGivesEachRepositoryItsBaseOrSaysWhyItHasNone(t *testing.T) {
@@ -47,15 +52,15 @@ func TestGitEachGivesEachRepositoryItsBaseOrSaysWhyItHasNone(t *testing.T) {
 	f.git("-C", "alpha", "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.git("-C", "alpha", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	f.git("-C", "alpha", "commit", "-q", "-am", "second in alpha")
-	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "==> alpha <==\nsecond in alpha\n==> beta <==\n[skipped: no \"base\" in its nib.json and no origin/HEAD]")
+	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "alpha: second in alpha\nbeta: [skipped: no \"base\" in its nib.json and no origin/HEAD]")
 }
 
 func TestGitEachFailsWhenAnyRepositorysGitFails(t *testing.T) {
 	f := eachFixture(t)
 	f.git("-C", "beta", "tag", "v1")
-	expect(t, f.run("git-each rev-parse -q --verify v1; echo status $?"), "==> beta <==\n"+strings.TrimSpace(f.git("-C", "beta", "rev-parse", "v1"))+"\nstatus 1")
+	expect(t, f.run("git-each rev-parse -q --verify v1; echo status $?"), "beta: "+strings.TrimSpace(f.git("-C", "beta", "rev-parse", "v1"))+"\nstatus 1")
 	out := f.run("git-each rev-parse --verify nosuch 2>&1; echo status $?")
-	if strings.Count(out, "fatal: Needed a single revision") != 3 || !strings.HasPrefix(out, "==> alpha <==\nfatal:") || !strings.HasSuffix(out, "status 1") {
+	if strings.Count(out, "fatal: Needed a single revision") != 3 || !strings.HasPrefix(out, "alpha: fatal:") || !strings.HasSuffix(out, "status 1") {
 		t.Errorf("got:\n%s", out)
 	}
 	// What git rm and git clean delete goes to the trash only one repository at a time.
