@@ -264,8 +264,8 @@ program. `type cat` names the system program.
 - **find and ls** print paths grouped by folder.
 - **git-each ARGS** runs `git ARGS` in every repository below the current directory, each repository's output under a
   `==> NAME <==` header, or as `NAME: LINE` when it is one plain line, so `git-each status -sb` gives a clean
-  repository's branch and how far it is ahead or behind on one line. `{base}` is the repository's `base` in
-  `nib.json`, else `origin/HEAD`.
+  repository's branch and how far it is ahead or behind on one line, and `git-each log --oneline --branches --not
+  --remotes` the commits that are on no remote. `{base}` is the repository's `base` in `nib.json`, else `origin/HEAD`.
 - **Deletes go to the trash.** `rm`, `unlink`, `git rm`, `git clean`, `find -delete` and `edit`'s `REM` move files to
   the user's trash. `trash list` shows them, `trash restore [-f] PATH` puts one back.
 - **A failed `cd`** (or `pushd`, `popd`) ends the call unless the command line handles it (`if`, `&&`, `||`), as under
