@@ -228,6 +228,8 @@ REM
   (or its token) applies it there.
 - Block ends (`N*`) come from tree-sitter in the languages `read` parses, from indentation elsewhere.
 - Diff-style `-` rows that match the replaced lines are accepted.
+- A patch that does not parse writes nothing. When its problems all lie in some files' sections, the refusal carries a
+  token holding the other sections, so `REAPPLY TOKEN` followed by only the corrected sections applies the whole patch.
 - Every section is checked before anything is written. Each file is written atomically, keeping its BOM, line endings,
   final newline, mode and owner. Hardlinked targets are refused.
 - The response gives the new tag and one unchanged row on each side of every change; rows the agent sent print as

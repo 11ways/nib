@@ -1358,6 +1358,25 @@ describe("refusals and reapply tokens", () => {
     expect(stale).toMatch(fixable)
   })
 
+  test("a patch whose sections partly parse keeps the sound ones under a token, so only the broken one is sent again", async () => {
+    const f = await fixture(numbered(10))
+    await writeFile(path.join(f.directory, "b.txt"), "b\n")
+    const r = await f.read()
+    const b = await f.read("", { file: path.join(f.directory, "b.txt") })
+    const message = await refusal(f.patch(`[file.txt#${r.tag}]\nPUT 2.=2:\n+TWO\n[b.txt#${b.tag}]\nPUT 1.=1:`))
+    expect(message).toStartWith("Patch line 5: PUT needs at least one + row; to delete that line, write CUT 1; got \"PUT 1.=1:\"")
+    expect(message).toContain(`call edit with input: REAPPLY ${tokenOf(message)} on the first line, then the section of b.txt corrected and whole.`)
+    // Sent alone, the token still refuses the broken section and writes nothing.
+    const again = await refusal(f.patch(`REAPPLY ${tokenOf(message)}`))
+    expect(again).toContain("b.txt was not resent corrected: Patch line 5:")
+    expect((await readFile(f.filePath, "utf8")).split("\n")[1]).toBe("line 2")
+    await f.patch(`REAPPLY ${tokenOf(again)}\n[b.txt#${b.tag}]\nCUT 1`)
+    expect((await readFile(f.filePath, "utf8")).split("\n")[1]).toBe("TWO")
+    expect(await readFile(path.join(f.directory, "b.txt"), "utf8")).toBe("")
+    // A problem outside any file's section leaves nothing to keep.
+    expect(await refusal(f.patch(`PUT 1.=1:\n+x\n[b.txt#${b.tag}]\nPUT 1.=1:\n+y`))).not.toContain("REAPPLY")
+  })
+
   test("corrected sections replace every stored section of their path, sections for new paths join, and a bad one leaves the token usable", async () => {
     const f = await fixture(numbered(10))
     await writeFile(path.join(f.directory, "b.txt"), "b\n")

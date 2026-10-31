@@ -323,7 +323,7 @@
  },
  {
   "input": "*** Begin Patch\n[a.ts#ABCD]\nPUT 1.=1:\n*** End Patch",
-  "error": "Patch line 3: PUT needs at least one + row (use CUT to delete lines); got \"PUT 1.=1:\""
+  "error": "Patch line 3: PUT needs at least one + row; to delete that line, write CUT 1; got \"PUT 1.=1:\""
  },
  {
   "input": "*** Begin Patch\n[a.ts#ABCD]\n-old\n+new\n*** End Patch",

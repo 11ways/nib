@@ -2191,7 +2191,7 @@ func (e *Engine) Patch(ctx *Context, input string) (result Result, err error) {
 	if reapply == nil {
 		sections, err := patch.Parse(input)
 		if err != nil {
-			return Result{}, err
+			return Result{}, e.parseRefusal(ctx.Session, sections, err)
 		}
 		return e.apply(ctx, sections, nil)
 	}
@@ -2334,6 +2334,25 @@ func corrected(ctx *Context, stored storedPatch, fixes []*patch.Section) ([]*pat
 	return sections, preview, replacements
 }
 
+// parseRefusal is a parse error, ending in a token for the sections that parsed when there are some, so a model resends only the broken
+// ones; a broken section reapplied unchanged is refused again.
+func (e *Engine) parseRefusal(session string, sections []*patch.Section, err error) error {
+	var broken []string
+	for _, section := range sections {
+		if section.Broken != "" {
+			broken = append(broken, section.Path)
+		}
+	}
+	if len(broken) == 0 || len(broken) == len(sections) {
+		return err
+	}
+	token := e.remember(session, sections, nil)
+	if e.Store.Teach(session, "reapply-parse") {
+		return fmt.Errorf("%w\n\nNothing was written. To apply the other sections as sent, call edit with input: REAPPLY %s on the first line, then the section of %s corrected and whole.", err, token, strings.Join(broken, " and "))
+	}
+	return fmt.Errorf("%w\n\nREAPPLY %s, then %s corrected", err, token, strings.Join(broken, " and "))
+}
+
 type indexedFailure struct {
 	index int
 	err   error
@@ -2345,6 +2364,10 @@ func (e *Engine) apply(ctx *Context, sections []*patch.Section, p *replacePrevie
 	order := map[*request]int{}
 	var requests []*request
 	for index, section := range sections {
+		if section.Broken != "" {
+			failures = append(failures, indexedFailure{index, fmt.Errorf("%s was not resent corrected: %s", section.Path, section.Broken)})
+			continue
+		}
 		if section.Create {
 			if _, err := decodeText([]byte(section.Content)); err != nil {
 				failures = append(failures, indexedFailure{index, err})

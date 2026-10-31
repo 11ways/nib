@@ -14,7 +14,8 @@ import (
 )
 
 // Section is one file of a patch: an edit of an existing file (Create false) or a new file.
-// Tag is nil for a tagless [PATH] section, which may only append; Move and Copy write the result to another path.
+// Tag is nil for a tagless [PATH] section, which may only append; Move and Copy write the result to another path. Broken holds the
+// first problem of a section that did not parse, which Parse returns beside the others for its error.
 type Section struct {
 	Create  bool
 	Path    string
@@ -25,6 +26,7 @@ type Section struct {
 	Copy    string
 	Content string
 	Line    int
+	Broken  string
 }
 
 var (
@@ -97,7 +99,8 @@ func (e lineError) Error() string { return e.message }
 
 // Parse splits a patch into per-file sections with edits sorted by original position.
 // Sections repeating a path and tag are merged; a missing Begin/End envelope and blank lines between hunks are tolerated.
-// The error names every offending patch line, not just the first.
+// The error names every offending patch line, not just the first. When each problem lies in a section of a named file, the sections
+// come back beside the error, those with problems marked Broken, so the sound ones can be kept.
 func Parse(input string) ([]*Section, error) {
 	lines := strings.Split(strings.ReplaceAll(input, "\r\n", "\n"), "\n")
 	if lines[len(lines)-1] == "" {
@@ -125,6 +128,8 @@ func Parse(input string) ([]*Section, error) {
 	}
 	var problems []string
 	failed := map[*Section]bool{}
+	// stray is a problem outside any section of the patch's, which no returned section could stand for.
+	stray := false
 	var sections []*Section
 	var current *Section
 	index := first
@@ -152,8 +157,13 @@ func Parse(input string) ([]*Section, error) {
 						panic(r)
 					}
 					problems = append(problems, failure.message)
-					if current != nil {
+					if current != nil && slices.Contains(sections, current) && current.Path != "" {
 						failed[current] = true
+						if current.Broken == "" {
+							current.Broken = failure.message
+						}
+					} else {
+						stray = true
 					}
 					for index < last && len(lines[index]) > 0 && strings.ContainsRune("-+~", rune(lines[index][0])) {
 						index++
@@ -168,7 +178,8 @@ func Parse(input string) ([]*Section, error) {
 			continue
 		}
 		if len(section.Edits) == 0 && !section.Remove && section.Move == "" && section.Copy == "" {
-			problems = append(problems, fmt.Sprintf("Section [%s%s] has no PUT, CUT, SUB, IMPORT, REM, MV or CP", section.Path, tagSuffix(section.Tag)))
+			section.Broken = fmt.Sprintf("Section [%s%s] has no PUT, CUT, SUB, IMPORT, REM, MV or CP", section.Path, tagSuffix(section.Tag))
+			problems = append(problems, section.Broken)
 		}
 		slices.SortStableFunc(section.Edits, func(a, b snapshots.LineEdit) int {
 			pa, pb := position(a), position(b)
@@ -185,7 +196,11 @@ func Parse(input string) ([]*Section, error) {
 		problems = append(problems, "Patch contains no sections")
 	}
 	if len(problems) > 0 {
-		return nil, errors.New(strings.Join(problems, "\n"))
+		err := errors.New(strings.Join(problems, "\n"))
+		if stray {
+			return nil, err
+		}
+		return sections, err
 	}
 	return sections, nil
 }
@@ -418,7 +433,15 @@ func parseLine(line string, at int, current **Section, sections *[]*Section, row
 		if isSub {
 			fail(at, "SUB needs + rows with the new text (a lone + deletes the old text)")
 		}
-		fail(at, "PUT needs at least one + row (use CUT to delete lines)")
+		switch {
+		case edit.Operation != snapshots.Replace:
+			fail(at, "PUT needs at least one + row: the lines it inserts")
+		case edit.Block:
+			fail(at, fmt.Sprintf("PUT needs at least one + row; to delete the block, write CUT %d*", edit.Start))
+		case edit.Start < edit.End:
+			fail(at, fmt.Sprintf("PUT needs at least one + row; to delete those lines, write CUT %d.=%d", edit.Start, edit.End))
+		}
+		fail(at, fmt.Sprintf("PUT needs at least one + row; to delete that line, write CUT %d", edit.Start))
 	}
 	if content == nil {
 		content = []string{}
