@@ -315,7 +315,7 @@ func (c *call) exitLabel(status int) string {
 	told := c.told(status)
 	label := fmt.Sprintf("exit %d", status)
 	if told >= 0 && c.commands > 1 {
-		label += ": " + c.steps[c.failures[told].step].text
+		label += ": " + c.named(c.failures[told].step)
 	}
 	if told >= 0 && c.failures[told].stderr != "" {
 		label += discardedLine(c.failures[told].stderr)
@@ -356,7 +356,7 @@ func (c *call) failureNote(status int) string {
 	var clauses []string
 	for _, id := range order {
 		s := c.steps[id]
-		clause := fmt.Sprintf("%s exited %d", s.text, statuses[id])
+		clause := fmt.Sprintf("%s exited %d", c.named(id), statuses[id])
 		if s.piped != "" {
 			clause += " before " + clip(s.piped)
 		}
@@ -381,6 +381,22 @@ func (c *call) failureNote(status int) string {
 		clauses = append(clauses[:noteFailures], fmt.Sprintf("%d more failed", len(clauses)-noteFailures))
 	}
 	return "[nibash: " + strings.Join(clauses, "; ") + "]"
+}
+
+// named is how a note names a step: by its program alone when no other watched command runs one of that name, since the model wrote the
+// command line and knows it, and otherwise as written.
+func (c *call) named(id int) string {
+	s := c.steps[id]
+	base := filepath.Base(s.name)
+	if s.name == "" {
+		return s.text
+	}
+	for other, o := range c.steps {
+		if other != id && filepath.Base(o.name) == base {
+			return s.text
+		}
+	}
+	return base
 }
 
 // noteFailures is how many failures a note names.

@@ -373,8 +373,10 @@ When the command finishes or its time runs out, the sink is rendered once:
     left out: `[4,762 earlier lines in LOG]`; fewer get no note and no log.
     With a decision model or a summarizer, the lines it left out may first be checked by the decider and the ones the
     call needs added after the tail's own output (`docs/design-decider.md`, section 17).
-- **Exit status:** a nonzero exit status ends the output with `[exit 1]`, naming the program that failed with it when
-  the command line has more than one command (`[exit 1: make test]`). Before classify, nibash reads each program the
+- **Exit status:** a nonzero exit status ends the output with `[exit 1]`, naming the command that failed with it when
+  the command line has more than one (`[exit 1: make]`): by its program alone, or as written when another command of
+  the line runs a program of that name (`[exit 1: make test]`), which the closing `[nibash: ...]` line does too. Before
+  classify, nibash reads each program the
   command line runs outside a condition and a pipeline (`failwatch.go`): its words, whether its standard error goes to
   `/dev/null`, what an `&&` chain skips when it fails and whether what follows handles that; after classify each gets
   `NIBASH_STEP=N` for itself, which the exec handler reads to record a failure and `environ` keeps from programs. A
@@ -395,8 +397,9 @@ When the command finishes or its time runs out, the sink is rendered once:
   - Files under the temp folder (`os.TempDir`, canonical) of which the session holds no line seen or known are not named
     but counted, `2 new files in the temp folder` or `1 changed file in the temp folder`, in the same note: an agent's
     scratch output it never read tells it nothing by name. Reading one makes it a file like any other.
-  - A file whose new content equals a here-document or here-string body in the command is recorded with every line
-    known, as after `write`, since the model typed it.
+  - A file whose new content equals a here-document or here-string body in the command, or what an `echo` of plain
+    words prints, is recorded with every line known, as after `write`, since the model typed it. Lines such a text
+    added to a file the agent saw print as one `[lines N-M as you sent them]` row instead of `+N:` rows.
   - A held file something else is changing is left out unless a redirect of the command wrote it, so a log a build
     appends to is not called changed by a `sleep; tail` beside it. At the start, a held file counts as changing when it
     already differs from the newest version the session holds (read only when its modification time is later than when
