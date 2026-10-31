@@ -66,13 +66,13 @@ func TestFilesInTheTempFolderTheAgentNeverReadAreCountedNotNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", temp)
-	if out := f.run("echo x > " + temp + "/a.json; echo y > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 2 new files in the temp folder]") || strings.Contains(out, ".json") {
+	if out := f.run("printf 'x\\n' > " + temp + "/a.json; printf 'y\\n' > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 2 new files in the temp folder]") || strings.Contains(out, ".json") {
 		t.Fatalf("got %q", out)
 	}
-	if out := f.run("echo v > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 1 changed file in the temp folder]") {
+	if out := f.run("printf 'v\\n' > " + temp + "/b.json"); !strings.HasSuffix(out, "[changed by this command: 1 changed file in the temp folder]") {
 		t.Fatalf("a rewrite of one never read, got %q", out)
 	}
-	if out := f.run("echo q > n.txt; echo r > " + temp + "/c.json"); !regexp.MustCompile(`\[changed by this command: n\.txt#[0-9A-F]{4} \(new\), 1 new file in the temp folder\]$`).MatchString(out) {
+	if out := f.run("echo q > n.txt; printf 'r\\n' > " + temp + "/c.json"); !regexp.MustCompile(`\[changed by this command: n\.txt#[0-9A-F]{4} \(new\), 1 new file in the temp folder\]$`).MatchString(out) {
 		t.Fatalf("a new file outside it, got %q", out)
 	}
 	// Once read, a file there is like any other.
@@ -146,8 +146,11 @@ func TestLinesAHereDocumentAddedPrintAsOneMarker(t *testing.T) {
 	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[a.txt#%s]\nPUT 4:\n+FOUR", tagOf(t, out))); err != nil {
 		t.Fatalf("edit of a typed row: %v", err)
 	}
-	// Lines a program added print as rows.
-	expect(t, tags.ReplaceAllString(f.run("echo five >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n+5:five")
+	// So did an echo of plain words; lines a program added, or an echo of what the shell expands, print as rows.
+	expect(t, tags.ReplaceAllString(f.run("echo 'five and' more >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n[line 5 as you sent it]")
+	expect(t, tags.ReplaceAllString(f.run("sh -c 'echo six' >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n+6:six")
+	expect(t, tags.ReplaceAllString(f.run("X=seven; echo $X >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n+7:seven")
+	expect(t, tags.ReplaceAllString(f.run("echo a* >> a.txt"), "#T"), "[changed by this command: a.txt#T (was #T, +1 -0)]\n[a.txt#T]\n+8:a.txt")
 }
 
 func TestALargeChangeOrAnUnseenFileShowsOnlyCounts(t *testing.T) {
@@ -163,7 +166,7 @@ func TestALargeChangeOrAnUnseenFileShowsOnlyCounts(t *testing.T) {
 	if _, err := f.engine.Patch(f.tools(), fmt.Sprintf("[big.txt#%s]\nPUT 1:\n+first", tagOf(t, out))); err == nil || !strings.Contains(err.Error(), "never displayed") {
 		t.Fatalf("got %v", err)
 	}
-	f.run("echo hi > made.txt")
+	f.run("printf 'hi\\n' > made.txt")
 	expect(t, tags.ReplaceAllString(f.run("sed -i s/hi/ho/ made.txt"), "#T"), "[changed by this command: made.txt#T (was #T, +1 -1)]")
 }
 

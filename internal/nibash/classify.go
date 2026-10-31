@@ -592,10 +592,17 @@ func parseMarker(name string) (mode, command string, ok bool) {
 	return mode, command, true
 }
 
-// heredocs are the bodies of the command's here-documents and here-strings when they are plain text, which the model typed whole.
+// heredocs are the texts the model typed whole: the bodies of the command's here-documents and here-strings when they are plain text, and
+// what an echo of plain words prints.
 func heredocs(file *syntax.File) []string {
 	var bodies []string
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if call, ok := node.(*syntax.CallExpr); ok {
+			if text, ok := echoed(call); ok {
+				bodies = append(bodies, text)
+			}
+			return true
+		}
 		r, ok := node.(*syntax.Redirect)
 		if !ok {
 			return true
@@ -615,4 +622,29 @@ func heredocs(file *syntax.File) []string {
 		return true
 	})
 	return bodies
+}
+
+// echoed is what an echo prints when every word is plain text that nothing expands, a glob, brace or tilde included, and no option comes
+// first.
+func echoed(call *syntax.CallExpr) (string, bool) {
+	if len(call.Args) == 0 {
+		return "", false
+	}
+	if name, ok := wordLiteral(call.Args[0]); !ok || name != "echo" {
+		return "", false
+	}
+	words := make([]string, 0, len(call.Args)-1)
+	for i, arg := range call.Args[1:] {
+		value, ok := wordLiteral(arg)
+		if !ok || (i == 0 && strings.HasPrefix(value, "-")) {
+			return "", false
+		}
+		for _, part := range arg.Parts {
+			if lit, isLit := part.(*syntax.Lit); isLit && strings.ContainsAny(lit.Value, "*?[{~") {
+				return "", false
+			}
+		}
+		words = append(words, value)
+	}
+	return strings.Join(words, " ") + "\n", true
 }
