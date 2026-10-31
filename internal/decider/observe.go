@@ -2,8 +2,8 @@ package decider
 
 import "sync/atomic"
 
-// Observer hears each model call as it starts, of the kind "decider" or "summary" and the model or entry asked, and gets back the function
-// to call when the call ends. It lets a client show what runs while a long output waits.
+// Observer hears each model call as it starts, of a kind CallDecider, CallRules or CallSummary names, and the model or entry asked, and
+// gets back the function to call when the call ends. It lets a client show what runs while a long output waits.
 type Observer func(kind, model string) (end func())
 
 // Observable is a decider or summarizer that tells an Observer of the model calls it makes; call Observe before serving.

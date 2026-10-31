@@ -32,6 +32,8 @@ const usage = `nib: hashline file tools and a shell for coding agents
   nib hook             Claude Code hook: refuses the built-in Read for files nib reads better, tells nib's server which subagent calls it, and tells the agent the named directories a message uses
   nib shape --log PATH --purpose TEXT [--exit N] [--command TEXT]
                        print what nibash would show of a program whose whole output is the log at PATH, for tools that keep their own logs
+  nib stats [--since 7d|12h|DATE] [--limit N]
+                       count what the decision models and summarizers did, from the ledger every nib keeps of them
   nib --version        print the version`
 
 // Keep the release name stable even when Go stamps an untagged checkout with a pseudo-version.
@@ -76,6 +78,8 @@ func main() {
 			os.Exit(runSetup(os.Args[2:]))
 		case "shape":
 			os.Exit(runShape(os.Args[2:]))
+		case "stats":
+			os.Exit(runStats(os.Args[2:]))
 		case "--version", "-v":
 			fmt.Println("nib " + version())
 			return

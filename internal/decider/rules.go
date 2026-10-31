@@ -72,26 +72,32 @@ func (o *openRouter) Breaks(ctx context.Context, q RuleQuestion) RuleVerdict {
 		state.Rules = append(state.Rules, field{id, rule})
 		questions = append(questions, field{id, ruleQuestion(id)})
 	}
+	event := Event{Call: CallRules, Command: q.Command, Purpose: q.Purpose, Directory: q.Directory, Rules: q.Rules}
 	var verdict RuleVerdict
 	var failures []string
 	for _, model := range o.config.Models {
+		event.Asked = append(event.Asked, model)
 		o.mu.Lock()
 		off := o.off[model]
 		o.mu.Unlock()
 		failure := off
 		if failure == "" {
-			end := o.begin("rules", model)
+			end := o.begin(CallRules, model)
 			got := o.ask(deadline, model, ruleRequest{Model: model, Provider: provider{ZDR: true, DataCollection: "deny"}, State: state, Questions: questions}, ids)
 			end()
 			verdict.Usage.add(got.usage)
 			if failure = got.failure; failure == "" {
 				for i, id := range ids {
+					event.Scores = append(event.Scores, got.answers[id])
 					if got.answers[id] >= RuleThreshold {
 						verdict.Broken = append(verdict.Broken, i)
 					}
 				}
 				verdict.Who = model
 				verdict.Usage.Elapsed = time.Since(started)
+				event.Who, event.Broken, event.Failure = model, verdict.Broken, strings.Join(failures, "; ")
+				event.usage(verdict.Usage)
+				o.ledger.record(event, started)
 				return verdict
 			}
 		}
@@ -105,5 +111,8 @@ func (o *openRouter) Breaks(ctx context.Context, q RuleQuestion) RuleVerdict {
 	}
 	verdict.Failure = strings.Join(failures, "; ")
 	verdict.Usage.Elapsed = time.Since(started)
+	event.Failure = verdict.Failure
+	event.usage(verdict.Usage)
+	o.ledger.record(event, started)
 	return verdict
 }

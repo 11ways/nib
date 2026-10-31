@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -67,6 +68,8 @@ type Config struct {
 	Timeout time.Duration
 	// Cache is a directory for answers on disk; "" keeps them in memory only.
 	Cache string
+	// Ledger is the file every model call is recorded in, NIB_DECIDER_LEDGER; "" records none.
+	Ledger string
 	// Client makes the requests; nil uses a plain one. Tests set it.
 	Client *http.Client
 	// Summary are the summarizers in order of preference; none turns summaries off.
@@ -105,6 +108,9 @@ func Parse(getenv func(string) string) (Config, error) {
 		return key, nil
 	}
 	c.Cache = getenv("NIB_DECIDER_CACHE")
+	if c.Ledger = DefaultLedger(getenv); c.Ledger != "" && !filepath.IsAbs(c.Ledger) {
+		return Config{}, fmt.Errorf("NIB_DECIDER_LEDGER is %q; give an absolute path, or off", c.Ledger)
+	}
 	if list := getenv("NIB_DECIDER_SUMMARY"); list != "" {
 		if c.Kind == Fixed {
 			return Config{}, errors.New("NIB_DECIDER_SUMMARY reads the passages a decider picks, which NIB_DECIDER=fixed does not; use keywords or openrouter")

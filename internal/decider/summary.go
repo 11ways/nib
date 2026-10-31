@@ -173,7 +173,7 @@ func (c Config) Summarizer() Summarizer {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &summaries{config: c, client: client, cache: newCache(c.Cache)}
+	return &summaries{config: c, client: client, cache: newCache(c.Cache), ledger: Ledger{c.Ledger}}
 }
 
 type summaries struct {
@@ -181,6 +181,8 @@ type summaries struct {
 	config Config
 	client *http.Client
 	cache  *cache
+	// ledger records each summary asked for.
+	ledger Ledger
 	// opencodes are the OpenCode programs found to be OpenCode 2, so each is asked its version once.
 	opencodes sync.Map
 }
@@ -195,14 +197,21 @@ func (s *summaries) Summarize(ctx context.Context, in SummaryInput) Summary {
 	started := time.Now()
 	deadline, cancel := context.WithTimeout(ctx, s.config.SummaryTimeout)
 	defer cancel()
+	event := Event{Call: CallSummary, Command: in.Command, Purpose: in.Purpose, Expect: in.Expect, Exit: in.Exit, TimedOut: in.TimedOut,
+		LogLines: len(in.Log), ReadLines: len(in.Excerpt)}
 	var usage Usage
 	var failures []string
 	for _, e := range s.config.Summary {
+		event.Asked = append(event.Asked, e.Spec)
 		got, failure := s.with(deadline, e, in)
 		usage.add(got.Usage)
 		if failure == "" {
 			got.Usage = usage
 			got.Usage.Elapsed = time.Since(started)
+			event.Who, event.Failure, event.Ranges, event.Dropped, event.Chars = got.Who, strings.Join(failures, "; "), len(got.Ranges), got.Dropped,
+				len(got.Text)
+			event.usage(usage)
+			s.ledger.record(event, started)
 			return got
 		}
 		failures = append(failures, e.Spec+": "+failure)
@@ -211,7 +220,10 @@ func (s *summaries) Summarize(ctx context.Context, in SummaryInput) Summary {
 		}
 	}
 	usage.Elapsed = time.Since(started)
-	return Summary{Failure: strings.Join(failures, "; "), Usage: usage}
+	event.Failure = strings.Join(failures, "; ")
+	event.usage(usage)
+	s.ledger.record(event, started)
+	return Summary{Failure: event.Failure, Usage: usage}
 }
 
 // with asks one entry, from the cache when it answered this before, and checks the answer against the log.
@@ -225,7 +237,7 @@ func (s *summaries) with(ctx context.Context, e SummaryEntry, in SummaryInput) (
 		reply, usage.Cached = cached, 1
 	} else {
 		var failure string
-		end := s.begin("summary", e.Spec)
+		end := s.begin(CallSummary, e.Spec)
 		if p := e.program(); p != nil {
 			reply, failure = p.run(s, ctx, e, prompt, text, &usage)
 		} else {

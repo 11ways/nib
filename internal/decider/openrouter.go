@@ -45,6 +45,8 @@ type openRouter struct {
 	mu     sync.Mutex
 	// off is why a model is off for the rest of the session, after an answer that retrying cannot change (401, 402, 403).
 	off map[string]string
+	// ledger records each decision and rule verdict.
+	ledger Ledger
 }
 
 func newOpenRouter(c Config) *openRouter {
@@ -52,7 +54,7 @@ func newOpenRouter(c Config) *openRouter {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &openRouter{config: c, client: client, cache: newCache(c.Cache), off: map[string]string{}}
+	return &openRouter{config: c, client: client, cache: newCache(c.Cache), off: map[string]string{}, ledger: Ledger{c.Ledger}}
 }
 
 func (o *openRouter) Kind() Kind { return OpenRouter }
@@ -93,10 +95,12 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 	started := time.Now()
 	deadline, cancel := context.WithTimeout(ctx, o.config.Timeout)
 	defer cancel()
+	event := Event{Call: CallDecider, Command: in.Command, Purpose: in.Purpose, Expect: in.Expect, Exit: in.Exit, TimedOut: in.TimedOut, Rows: len(in.Rows)}
 	var usage Usage
 	var failures []string
 	for _, model := range o.config.Models {
-		end := o.begin("decider", model)
+		event.Asked = append(event.Asked, model)
+		end := o.begin(CallDecider, model)
 		choice, failure := o.decideWith(deadline, in, model, fallback.Picks)
 		end()
 		usage.add(choice.Usage)
@@ -106,6 +110,20 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 			}
 			choice.Usage = usage
 			choice.Usage.Elapsed = time.Since(started)
+			event.Who = model
+			// The model's picks come first, the keyword hits after them.
+			for _, p := range choice.Picks[:len(choice.Picks)-len(fallback.Picks)] {
+				event.Windows++
+				if p.Score >= PickThreshold {
+					event.Picked++
+				}
+			}
+			if choice.Judged {
+				event.Whole = &choice.Whole
+			}
+			event.Failure = strings.Join(failures, "; ")
+			event.usage(usage)
+			o.ledger.record(event, started)
 			return choice
 		}
 		if len(o.config.Models) > 1 {
@@ -119,6 +137,9 @@ func (o *openRouter) Decide(ctx context.Context, in Input) Choice {
 	fallback.Failure = strings.Join(failures, "; ")
 	usage.Elapsed = time.Since(started)
 	fallback.Usage = usage
+	event.Failure = fallback.Failure
+	event.usage(usage)
+	o.ledger.record(event, started)
 	return fallback
 }
 

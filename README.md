@@ -307,6 +307,12 @@ through nibash, so they are cut and summarized too.
 `nib shape --log PATH --purpose TEXT [--exit N] [--command TEXT]` prints what nibash would show of a saved log, for
 build and test wrappers.
 
+Every decision, rule verdict and summary is appended as one JSON line to `~/.local/state/nib/models.jsonl`: the call,
+the models asked and the one that answered, why others failed, requests, cached answers, input tokens, cost and time,
+the command and its description, and what came of it (windows picked, each rule's score and the ones that refused it,
+the summary's ranges). It holds no program output. `nib stats [--since 7d|12h|DATE] [--limit N]` counts it by call and
+model and lists the latest refusals and close calls; `jq` reads the rest.
+
 ### Command rules
 
 A `nib.json` can forbid commands:
@@ -393,6 +399,7 @@ above the prompt and a toast when a job ends. Its slash commands open panes: `/n
 | `NIB_DECIDER_SUMMARY_TIMEOUT` | `30000` | milliseconds per summary |
 | `NIB_DECIDER_OPENCODE` | `opencode` | the OpenCode 2 binary |
 | `NIB_DECIDER_CACHE` | unset | directory to cache decisions and summaries on disk |
+| `NIB_DECIDER_LEDGER` | `~/.local/state/nib/models.jsonl` | the ledger of model calls `nib stats` reads; `off` keeps none |
 | `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1` |
 
 nib keeps its files under the home folder on every OS (`XDG_*` variables move them): settings in `~/.config/nib`,
