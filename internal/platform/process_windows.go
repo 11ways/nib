@@ -63,15 +63,18 @@ func Release(pid int) {
 
 // ending says whether Windows can deliver sig: it has no signals, only termination, which stands for the signals that end a process.
 func ending(sig syscall.Signal) error {
-	switch sig {
-	case syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM:
+	if Ends(sig) {
 		return nil
 	}
 	return fmt.Errorf("signal %d is not supported on Windows", int(sig))
 }
 
-// SignalGroup ends the job object pid's program is in, with the exit status a shell gives a process sig ended (128 plus its number).
+// SignalGroup ends the job object pid's program is in, with the exit status a shell gives a process sig ended (128 plus its number); signal 0
+// only checks that pid runs.
 func SignalGroup(pid int, sig syscall.Signal) error {
+	if sig == 0 {
+		return Signal(pid, 0)
+	}
 	if err := ending(sig); err != nil {
 		return err
 	}
@@ -81,8 +84,11 @@ func SignalGroup(pid int, sig syscall.Signal) error {
 	return Signal(pid, sig)
 }
 
-// Signal ends one process, with the exit status a shell gives a process sig ended.
+// Signal ends one process, with the exit status a shell gives a process sig ended; signal 0 only checks that pid runs.
 func Signal(pid int, sig syscall.Signal) error {
+	if sig == 0 {
+		return running(pid)
+	}
 	if err := ending(sig); err != nil {
 		return err
 	}
@@ -94,9 +100,28 @@ func Signal(pid int, sig syscall.Signal) error {
 	return windows.TerminateProcess(process, uint32(128+int(sig)))
 }
 
-// Signals are the signals kill knows by name: those Windows can stand for by ending a process.
-var Signals = map[string]syscall.Signal{"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUIT": syscall.SIGQUIT, "KILL": syscall.SIGKILL,
-	"TERM": syscall.SIGTERM}
+// stillActive is the exit code GetExitCodeProcess gives a process that has not ended.
+const stillActive = 259
+
+// running is nil when pid is a process that has not ended, and ESRCH, as kill(2) gives, when there is none.
+func running(pid int) error {
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err == windows.ERROR_INVALID_PARAMETER {
+		return syscall.ESRCH
+	}
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(process)
+	var code uint32
+	if err := windows.GetExitCodeProcess(process, &code); err != nil {
+		return err
+	}
+	if code != stillActive {
+		return syscall.ESRCH
+	}
+	return nil
+}
 
 // Ignored is empty: Windows sends nib no signal it must ignore.
 var Ignored []os.Signal

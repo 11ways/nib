@@ -87,7 +87,7 @@ describe("MCP server", () => {
     const size = tools.reduce((sum, tool) => sum + tool.description!.length + JSON.stringify(tool.inputSchema).length, 0) + client.getInstructions()!.length
     // The shell adds about 1.8K characters to the five file tools, its status tool included, that tool's three arguments for the mod's
     // panes another 0.3K, and the skim tool 720; the cap leaves little room to grow, and every character costs every session.
-    expect(size).toBeLessThanOrEqual(11020)
+    expect(size).toBeLessThanOrEqual(11053)
   })
 
   test("nibash's file views anchor edits through MCP, and its program output is plain", async () => {

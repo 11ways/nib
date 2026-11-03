@@ -296,15 +296,15 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
 - **Real programs** run under nibash's exec handler:
   - `platform.Prepare` gives each command its own process group (on Windows a job object it joins suspended, before it
     runs);
-  - on the client's cancellation of a call that still waits, `kill`, or the connection's end the group gets SIGTERM,
-    then SIGKILL after 3 s;
+  - on the client's cancellation of a call that still waits, or the connection's end, the group gets SIGTERM, then
+    SIGKILL after 3 s; `kill` sends its own signal and nothing more (section 5.7);
   - `WaitDelay` bounds the wait for output a daemonised child keeps open [missing].
 - **Output to the model:** when `hc.Stdout` or `hc.Stderr` is the terminal sink, the program writes into a pipe that the
   handler drains into the sink before returning. Output therefore keeps its order relative to the commands before and
   after. When both are the sink they share one pipe, so `2>&1` interleaving is real.
 - **`kill`, `jobs` and `wait`** are interp builtins that mvdan does not support for real processes (`builtin.go:1026`).
-  nibash's `CallHandler` renames them to its own commands, which act on real process groups and on the job table
-  (section 5.7) [B2].
+  nibash's `CallHandler` renames them to its own commands, also after `builtin` or `command`, which act on real process
+  groups and on the job table (section 5.7) [B2].
 - **Deleting commands** (`rm`, `unlink`, `git rm`, `git clean`, `find -delete`) and nibash's `trash list` /
   `trash restore` are caught in the exec handler before classification matters, wherever their output goes, so what they
   delete goes to the user's trash (`internal/trash`, shared with `edit`'s `REM`; the record of what this server
@@ -320,7 +320,9 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
   `CallHandler` turns every command the call reaches into `exit N` and the open handler refuses a redirect's file. A
   fatal handler error is not enough: mvdan drops one at a subshell's end and prints one leaving `$(...)` as an
   expansion error, then goes on. The call or the job's log ends with `[cd DIR failed, so nothing after it ran]` and
-  the change's status. This is the other deliberate difference in effect, beside deletion and `nib.json`'s refusals.
+  the change's status. A kill of the shell halts a call the same way (section 5.7). A halted call runs no `EXIT` trap,
+  since the trap's commands come after the halt too. This is another deliberate difference in effect, beside deletion,
+  `nib.json`'s refusals and the kills nibash refuses.
 
 ### 5.6 The terminal sink and rendering
 
@@ -429,15 +431,35 @@ When the command finishes or its time runs out, the sink is rendered once:
   The call's process groups join the job. Only that output so far renders under the request's context: what runs on
   keeps the run's own, since the request's ends with the answer (nib's own commands after a `wait` that went on as a job
   once failed with `context canceled`).
-- **`jobs`** lists the session's jobs with state, exit code and log path. **`kill %N`, `kill PID` and `kill -SIG`** work
-  on jobs and on any real process. **`wait %N`** waits for a job. A call that only waits gets the longest timeout unless
-  it asks for less, and past it stops waiting rather than go on as a job that waits for jobs, with one note naming the
-  jobs that run on (`[job %4 still running after 10m0s; wait %4 again]`); a `wait` its call stops ends with status 130,
-  as bash's does when a signal interrupts it. A call still in its request is no job, as one a client moved to its own
-  background list is: a `wait` that finds no such job, or no running one, while another call of the same agent runs
-  adds a note after the output, `[no job %2 to wait for: the call "..." still runs as a call, not a job, and its result
-  comes back to that call]`, with the command shortened to 60 characters. It is nib's own line, so it shows when the
-  command sends `wait`'s message to `/dev/null`; that message and the exit status stay bash's.
+- **`jobs`** lists the session's jobs with state, exit code and log path. **`wait %N`** waits for a job. A call that only
+  waits gets the longest timeout unless it asks for less, and past it stops waiting rather than go on as a job that waits
+  for jobs, with one note naming the jobs that run on (`[job %4 still running after 10m0s; wait %4 again]`); a `wait` its
+  call stops ends with status 130, as bash's does when a signal interrupts it, and one its call's halt stops with the
+  halt's status. A call still in its request is no job, as one a client moved to its own background list is: a `wait`
+  that finds no such job, or no running one, while another call of the same agent runs adds a note after the output,
+  `[no job %2 to wait for: the call "..." still runs as a call, not a job, and its result comes back to that call]`, with
+  the command shortened to 60 characters. It is nib's own line, so it shows when the command sends `wait`'s message to
+  `/dev/null`; that message and the exit status stay bash's.
+- **`kill`** (`kill.go`) is bash 5.3's builtin: `-s SIG`, `-n NUM`, `-SIG` (only the first such word, so `kill -9 -1234`
+  signals group 1234), `-sNAME`, `-nNUM`, `--`, and `-l`/`-L` with bash's table, a number's name (an exit status past 128
+  standing for its signal) and a name's number. Signal names take any case, with or without `SIG`; `EXIT` is 0, and on
+  Linux `RTMIN+N` and `RTMAX-N` name the real-time signals as glibc numbers them. Job specs are `%N`, `%%`, `%+`, `%`,
+  `%-`, `%STRING` and `%?STRING`, the last four among the jobs bash would still hold (running, or their end not told
+  yet). Messages and exit status are bash's: each target that fails is named, and the status is 0 once one target got
+  the signal. A job that ended is no target (`%N: job has terminated`), so `while kill -0 %N` ends.
+  - **A job's signal** goes to every process group the job started, and after SIGTERM or SIGHUP SIGCONT too, as bash
+    sends a stopped job (nibash cannot tell one from a running one). One that ends a process halts the job's shell, as
+    it would end bash's subshell, but the program takes the signal as it will: a server reloading on SIGHUP goes on.
+  - **The shell is the call.** nibash's shell is no process: `$$` is nib's pid, and nib's process group is mostly its
+    client's (Claude Code starts its servers in its own group), so bash's meaning of these targets would reach nib and
+    the client. `kill $$` and `kill 0`, `kill -- -PGRP` of nib's own group or `kill -0` of them, reach the call whose
+    command line runs `kill` (the root of a job's) instead. A signal that ends a process halts that call as a failed
+    `cd` does (section 5.5), with `[kill sent SIGTERM to the shell, so nothing after it ran]` and 128 plus the signal's
+    number; not SIGQUIT, which bash ignores, nor a signal that stops a process, since a stopped call would only hang.
+    `kill 0` also signals the programs the call still runs and the jobs it started, as members of the shell's group.
+    The job of a call that ended finds no shell: its `kill $$` fails with `No such process`.
+  - **Refusals.** `kill -1` (every process), the pid of nib's client and its process group are refused with a message
+    naming why, unless the signal is 0, which only asks whether they exist.
 - **Reporting:** finished jobs are reported at the top of the next nibash result (`[job 3 finished, exit 0]`), since MCP
   cannot notify on its own; a `wait` that saw a job end tells it, so no result repeats it.
 - **Pushing a job's end.** Claude Code's channels let a server put a message in the session's conversation

@@ -72,7 +72,7 @@ func jobLog(t *testing.T, note string) string {
 // ended waits for job spec of the fixture's session to end.
 func ended(t *testing.T, f *fixture, spec string) {
 	t.Helper()
-	j := f.shell.session("session").jobs.find(spec)
+	j, _ := f.shell.session("session").jobs.find(spec)
 	if j == nil {
 		t.Fatalf("no job %s", spec)
 	}

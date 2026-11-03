@@ -1,9 +1,6 @@
 package nibash
 
 import (
-	"errors"
-	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
@@ -16,16 +13,6 @@ const internalStop = "stop"
 
 // directoryChanges are the builtins that change the shell's directory, after whose failure the rest would run in the directory before.
 var directoryChanges = map[string]bool{"cd": true, "pushd": true, "popd": true}
-
-// stopped ends a call after a directory change failed with status, so nothing after it runs where the command did not mean it to.
-type stopped struct {
-	command string
-	status  int
-}
-
-func (s *stopped) Error() string {
-	return fmt.Sprintf("[%s failed, so nothing after it ran]", s.command)
-}
 
 // guardDirectoryChanges makes each cd, pushd and popd whose failure the command line leaves unhandled end the call when it fails. One is
 // handled as under bash's set -e: in an if or while condition, before && or ||, after !, or in a pipeline before its last stage.
@@ -129,46 +116,11 @@ func (c *call) stop(args []string) error {
 		}
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	command := strings.Join(c.change, " ")
+	c.mu.Unlock()
 	if command == "" {
 		command = "cd"
 	}
-	if c.halted == nil {
-		c.halted = &stopped{command: command, status: status}
-	}
+	c.haltWith(&stopped{reason: command + " failed", status: status})
 	return interp.ExitStatus(status)
-}
-
-// halt is what halted the call, nil while nothing did.
-func (c *call) halt() *stopped {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.halted
-}
-
-// haltNote is the note that a failed directory change halted the call, with err as the halt's exit status; "" and err for any other call.
-func (c *call) haltNote(err error) (string, error) {
-	if h := c.halt(); h != nil {
-		return h.Error(), interp.ExitStatus(h.status)
-	}
-	return "", err
-}
-
-// jobError is err as a job's log ends with it: for a call a failed directory change halted, its note written to out and its status instead;
-// a note of failures its exit status does not tell written to out too.
-func (c *call) jobError(err error, out io.Writer) error {
-	note, err := c.haltNote(err)
-	if note != "" {
-		fmt.Fprintln(out, note)
-	}
-	status := 0
-	var exit interp.ExitStatus
-	if errors.As(err, &exit) {
-		status = int(exit)
-	}
-	if note := c.failureNote(status); note != "" {
-		fmt.Fprintln(out, note)
-	}
-	return err
 }

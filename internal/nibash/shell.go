@@ -36,7 +36,7 @@ const (
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commits, no git hints, %s, with the whole kept in a log to read. Changed files list new tags.
-Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! is a job's %%N, and the next call reports its end. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! is a job's %%N, and the next call reports its end; kill never signals nib's client. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
@@ -60,12 +60,14 @@ type Shell struct {
 	// writers are the calls of every session running now, a job's included, and those that ended while one of them ran; mu guards it and
 	// each call's ranTo.
 	writers map[*call]bool
+	// identify names the processes kill must not reach as programs; tests stand others in for them.
+	identify func() identities
 }
 
 // New makes the shell with the fixed cut; its commands read files through e, the server's engine, so what they show counts for edits, and
 // expand the named directories of the caller's view that each call's tools carry.
 func New(e *engine.Engine, sandbox bool) *Shell {
-	return &Shell{engine: e, sandbox: sandbox, logs: newLogDirectory(), recall: newRecall(), sessions: map[any]*session{}}
+	return &Shell{engine: e, sandbox: sandbox, logs: newLogDirectory(), recall: newRecall(), sessions: map[any]*session{}, identify: currentIdentities}
 }
 
 // Deciding sets the decider that chooses what long output shows; nil is the fixed cut. Call it before serving.
@@ -338,8 +340,9 @@ type call struct {
 	reach []string
 	// change is the words of the last cd, pushd or popd the call ran, which a failed one's note names.
 	change []string
-	// halted is set once a directory change whose failure the command left unhandled failed, ending the call.
-	halted *stopped
+	// halted is set once something ended the call's shell (see stopped), and halting is closed then.
+	halted  *stopped
+	halting chan struct{}
 	// steps are the commands the call watches for failing, and failures those that failed, in order; mu guards failures.
 	steps    []step
 	failures []failedStep
@@ -657,6 +660,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 		return engine.Result{}, err
 	}
 	c.adopt(j)
+	j.attach(c)
 	j.push, j.purpose = request.Push, request.Description
 	j.shown = c.sink.detach(out)
 	go func() {

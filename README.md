@@ -275,6 +275,9 @@ program. `type cat` names the system program.
   `set -e`.
 - **Jobs.** `background: true` or `cmd &` start a job; `jobs`, `wait` and `kill` work on them, and `$!` is a job spec
   (`%3`). Finished jobs are reported at the next call.
+- **`kill`** is bash's: signal names and numbers, `-l`, job specs such as `%+`, `%-` and `%?text`, and bash's messages.
+  The shell it would signal is the call: `kill $$` ends the call, `kill 0` ends it and what it started. `kill -1`, the
+  client that started nib and the client's process group are refused, so a kill cannot end the session.
 - **Changed files** are listed with their new tags after the command; small changes to files the agent saw print as
   rows.
 - **Failures** that the exit status hides (stderr sent to `/dev/null`, an earlier pipeline stage) are named in a closing
@@ -410,7 +413,7 @@ state in `~/.local/state/nib`, the mod in `~/.local/share/nib`.
 ## Platforms
 
 - On macOS the trash is `~/.Trash`; on Windows nib uses a freedesktop-layout trash in `~/.local/share/Trash`.
-- On Windows, programs run in a job object; `kill` supports `HUP`, `INT`, `QUIT`, `KILL` and `TERM`. nibash runs
+- On Windows, programs run in a job object; `kill` supports `HUP`, `INT`, `QUIT`, `KILL`, `TERM` and signal 0. nibash runs
   programs from `PATH` (e.g. Git for Windows), and process substitution is not available.
 - Sandbox mode needs bwrap, so it works on Linux only.
 

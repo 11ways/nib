@@ -93,10 +93,10 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 	}
 }
 
-// callHandler sends kill, jobs and wait to nibash, since mvdan's builtins do not act on real processes, and hash -d's named directory forms,
-// and refuses a cd out of the sandbox with the reason, which the builtin would report as a missing directory.
+// callHandler sends kill, jobs and wait to nibash, also through builtin or command, since mvdan's builtins do not act on real processes, and
+// hash -d's named directory forms, and refuses a cd out of the sandbox with the reason, which the builtin would report as a missing directory.
 func (sess *session) callHandler(ctx context.Context, args []string) ([]string, error) {
-	// A call a failed directory change halted runs nothing more, wherever the shell would go on.
+	// A halted call runs nothing more, wherever the shell would go on.
 	if c := callOf(ctx); c != nil {
 		if h := c.halt(); h != nil {
 			return []string{"exit", strconv.Itoa(h.status)}, nil
@@ -112,10 +112,10 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 			c.mu.Unlock()
 		}
 	}
+	if at := jobBuiltin(args); at >= 0 {
+		return append([]string{marker + args[at]}, args[at+1:]...), nil
+	}
 	switch args[0] {
-	case "kill", "jobs", "wait":
-		renamed := append([]string{marker + args[0]}, args[1:]...)
-		return renamed, nil
 	case "cd":
 		c := callOf(ctx)
 		if c == nil || len(args) < 2 || args[1] == "-" {
@@ -575,4 +575,19 @@ func (sess *session) readDirHandler(ctx context.Context, path string) ([]fs.DirE
 		}
 	}
 	return interp.DefaultReadDirHandler2()(ctx, path)
+}
+
+// jobBuiltin is where args names kill, jobs or wait as the command it runs, after any builtin or command before it; -1 for another command,
+// and for command's options, as in command -v kill.
+func jobBuiltin(args []string) int {
+	for i, arg := range args {
+		switch arg {
+		case "builtin", "command":
+			continue
+		case "kill", "jobs", "wait":
+			return i
+		}
+		return -1
+	}
+	return -1
 }

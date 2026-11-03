@@ -39,6 +39,13 @@ func (c *call) end() {
 	c.ranTo = time.Now()
 }
 
+// running says whether c's run, a job's included, goes on.
+func (c *call) running() bool {
+	c.session.shell.mu.Lock()
+	defer c.session.shell.mu.Unlock()
+	return c.ranTo.IsZero()
+}
+
 // reachIn notes what a command c ran can reach: the directory it ran in and the paths its arguments name. The bare root is never one, so a
 // pattern like tr's / does not make every file the command's.
 func (c *call) reachIn(dir string, args []string) {
