@@ -1,10 +1,10 @@
 package nibash
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
-	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -107,8 +107,9 @@ func directoryChange(args []string) []string {
 }
 
 // stop halts the call after the directory change it last ran failed with the exit status args gives: from then on every command the call
-// reaches exits with it instead of running, in a subshell, function or command substitution too, where mvdan would let the shell go on.
-func (c *call) stop(args []string) error {
+// reaches exits with it instead of running, in a subshell, function or command substitution too, where mvdan would let the shell go on. The
+// shell's EXIT trap still runs, as bash's does when set -e ends it.
+func (c *call) stop(ctx context.Context, args []string) error {
 	status := 1
 	if len(args) > 0 {
 		if n, err := strconv.Atoi(args[0]); err == nil && n != 0 {
@@ -121,6 +122,6 @@ func (c *call) stop(args []string) error {
 	if command == "" {
 		command = "cd"
 	}
-	c.haltWith(&stopped{reason: command + " failed", status: status})
-	return interp.ExitStatus(status)
+	c.haltWith(&stopped{reason: command + " failed", status: status, trap: true})
+	return c.exitHere(ctx, status)
 }

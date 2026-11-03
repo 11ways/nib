@@ -28,5 +28,5 @@ func SignalGroup(pid int, sig syscall.Signal) error { return syscall.Kill(-pid, 
 // Signal sends sig to one process.
 func Signal(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }
 
-// Ignored are the signals nib ignores: a write past the file size limit fails with EFBIG rather than ending the server.
+// Ignored are the signals nib must outlive: a write past the file size limit fails with EFBIG rather than ending the server.
 var Ignored = []os.Signal{syscall.SIGXFSZ}

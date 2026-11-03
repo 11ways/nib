@@ -84,19 +84,18 @@ options:
 		fmt.Fprintln(hc.Stderr, killUsage)
 		return interp.ExitStatus(2)
 	}
-	halted := c.halt() != nil
 	id := c.session.shell.identify()
 	sent := false
 	for _, word := range args {
-		if err := c.killOne(word, sig, id); err != nil {
+		if err := c.killOne(ctx, word, sig, id); err != nil {
 			fmt.Fprintf(hc.Stderr, "kill: %v\n", err)
 			continue
 		}
 		sent = true
 	}
-	// A kill that ended the shell it runs in exits with the shell's status.
-	if h := c.halt(); h != nil && !halted {
-		return interp.ExitStatus(h.status)
+	// A kill that ended the interpreter it runs in ends it now, as bash dies of the signal it sent itself.
+	if h := c.haltReaching(ctx); h != nil {
+		return c.exitHere(ctx, h.status)
 	}
 	if !sent {
 		return interp.ExitStatus(1)
@@ -140,7 +139,7 @@ func aimAt(pid int, sig syscall.Signal, id identities) (aim, error) {
 
 // killOne sends sig to what word names: a pid, a process group as its negated id, or a job spec; the error is bash's complaint without its
 // "kill: ".
-func (c *call) killOne(word string, sig syscall.Signal, id identities) error {
+func (c *call) killOne(ctx context.Context, word string, sig syscall.Signal, id identities) error {
 	if strings.HasPrefix(word, "%") {
 		return c.killJob(word, sig)
 	}
@@ -153,9 +152,9 @@ func (c *call) killOne(word string, sig syscall.Signal, id identities) error {
 	case err != nil:
 		return err
 	case target == aimShellGroup:
-		err = c.killShell(sig, true)
+		err = c.killShell(ctx, sig, true)
 	case target == aimShell:
-		err = c.killShell(sig, false)
+		err = c.killShell(ctx, sig, false)
 	case target == aimGroup:
 		err = platform.SignalGroup(-pid, sig)
 	default:
@@ -169,7 +168,7 @@ func (c *call) killOne(word string, sig syscall.Signal, id identities) error {
 
 // killJob sends sig to the job spec names; a job that ended is no target, so kill -0 %N says whether it still runs.
 func (c *call) killJob(spec string, sig syscall.Signal) error {
-	j, problem := c.session.jobs.find(spec)
+	j, problem := c.findJob(spec)
 	if j == nil {
 		return errors.New(problem)
 	}
@@ -183,31 +182,28 @@ func (c *call) killJob(spec string, sig syscall.Signal) error {
 }
 
 // killShell sends sig to the shell, which in nibash is no process but the call whose command line runs kill, the root of a job's: $$ is
-// nib's pid, and nib's process group is mostly its client's too. A signal that ends a process ends the call, as it would end bash, so nothing
-// after it runs; not SIGQUIT, which bash ignores, nor one that stops a process, since a stopped call would only hang. With group the programs
-// the call and the jobs it started still run get sig too, as members of the shell's process group would. The error is ESRCH when the shell
-// is a call that ended, as a job's can be.
-func (c *call) killShell(sig syscall.Signal, group bool) error {
+// nib's pid, and nib's process group is mostly its client's too. The shell meets the signal as its traps say (deliver): by default one that
+// ends a process ends the call as it would end bash, so nothing after it runs. With group the programs the call and the jobs it started
+// still run get sig too, as members of the shell's process group would. The error is ESRCH when the shell is a call that ended, as a job's
+// can be.
+func (c *call) killShell(ctx context.Context, sig syscall.Signal, group bool) error {
 	root := c.root()
-	alive := root.running()
-	if !group && !alive {
+	if !group && !root.running() {
 		return syscall.ESRCH
 	}
 	if sig == 0 {
 		return nil
 	}
-	if alive && sig != syscall.SIGQUIT && platform.Ends(sig) {
-		target := "the shell"
-		if group {
-			target = "the shell's process group"
-		}
-		root.haltWith(&stopped{reason: "kill sent " + signalLabel(sig) + " to " + target, status: 128 + int(sig)})
+	target := "the shell"
+	if group {
+		target = "the shell's process group"
 	}
+	root.deliver(sig, sending{group: group, target: target, elsewhere: root != c || !c.inShell(ctx)})
 	if !group {
 		return nil
 	}
 	if own := root.ownJob(); own != nil {
-		own.signal(sig)
+		own.sendGroups(sig)
 	} else {
 		root.signalGroups(sig)
 	}

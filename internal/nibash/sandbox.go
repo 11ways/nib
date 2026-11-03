@@ -9,8 +9,9 @@ import (
 )
 
 // sandboxed wraps a real program in bwrap: the system read-only, an empty home except the toolchain directories on PATH and those in
-// NIB_SANDBOX_BIND, the workspace roots writable, a private /tmp and, unless NIB_SANDBOX_NETWORK=1, no network.
-func (c *call) sandboxed(dir string, argv []string) ([]string, error) {
+// NIB_SANDBOX_BIND, the workspace roots writable, a private /tmp and, unless NIB_SANDBOX_NETWORK=1, no network. through is set when argv runs
+// the program through nib's own binary (ignoringArgv), which the sandbox then holds too.
+func (c *call) sandboxed(dir string, argv []string, through bool) ([]string, error) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		return nil, errors.New("the sandbox runs programs in bwrap, which is not installed")
@@ -41,6 +42,9 @@ func (c *call) sandboxed(dir string, argv []string) ([]string, error) {
 	}
 	if os.Getenv("NIB_SANDBOX_NETWORK") != "1" {
 		args = append(args, "--unshare-net")
+	}
+	if through {
+		args = append(args, "--ro-bind", argv[0], argv[0])
 	}
 	args = append(args, "--die-with-parent", "--chdir", dir, "--")
 	return append(args, argv...), nil

@@ -123,7 +123,7 @@ func (c *call) cutCounts(hc interp.HandlerContext) (cutCounting, error) {
 	}
 	argv := []string{path, "-c2-6"}
 	if c.tools.Sandbox {
-		if argv, err = c.sandboxed(hc.Dir, argv); err != nil {
+		if argv, err = c.sandboxed(hc.Dir, argv, false); err != nil {
 			return 0, errUncounted
 		}
 	}

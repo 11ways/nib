@@ -31,3 +31,9 @@ func GroupOf(int) (int, bool) { return 0, false }
 
 // ContinueGroup does nothing: no process nib starts can be stopped on Windows.
 func ContinueGroup(int) {}
+
+// Catchable is false for SIGKILL, which no trap takes.
+func Catchable(sig syscall.Signal) bool { return sig != syscall.SIGKILL }
+
+// Stopped is false: no program nib starts can be stopped on Windows.
+func Stopped(int) (stopped, known bool) { return false, true }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/11ways/nib/internal/platform"
 	"github.com/11ways/nib/internal/server"
 )
 
@@ -241,15 +242,16 @@ func TestKillOfTheShellEndsTheCall(t *testing.T) {
 	shell := func(signal string, status int) string {
 		return fmt.Sprintf("[kill sent %s to the shell, so nothing after it ran]\n[exit %d]", signal, status)
 	}
-	group := fmt.Sprint(syscall.Getpgrp())
+	group := fmt.Sprint(platform.Group())
 	for command, want := range map[string]string{
-		"echo a; kill $$; echo b":                     "a\n" + shell("SIGTERM", 143),
-		"kill -9 $$; echo b":                          shell("SIGKILL", 137),
-		"kill -USR1 $$; echo b":                       shell("SIGUSR1", 138),
-		"kill -s INT $$; echo b":                      shell("SIGINT", 130),
-		"kill $$ || echo handled":                     shell("SIGTERM", 143),
-		"f() { kill $$; echo in; }; f; echo after":    shell("SIGTERM", 143),
-		"(kill $$; echo in); echo after":              shell("SIGTERM", 143),
+		"echo a; kill $$; echo b":                  "a\n" + shell("SIGTERM", 143),
+		"kill -9 $$; echo b":                       shell("SIGKILL", 137),
+		"kill -USR1 $$; echo b":                    shell("SIGUSR1", 138),
+		"kill -s INT $$; echo b":                   shell("SIGINT", 130),
+		"kill $$ || echo handled":                  shell("SIGTERM", 143),
+		"f() { kill $$; echo in; }; f; echo after": shell("SIGTERM", 143),
+		// A subshell is no process bash's kill of $$ reaches, so it goes on; the shell ends after it.
+		"(kill $$; echo in); echo after":              "in\n" + shell("SIGTERM", 143),
 		"echo $(kill $$; echo in); echo after":        shell("SIGTERM", 143),
 		"for i in 1 2; do echo $i; kill $$; done":     "1\n" + shell("SIGTERM", 143),
 		"echo a | while read l; do kill $$; done; ls": shell("SIGTERM", 143),
@@ -260,8 +262,10 @@ func TestKillOfTheShellEndsTheCall(t *testing.T) {
 		"kill -0 $$ && kill -0 0 && kill -0 -- -" + group + " && echo alive": "alive",
 		"command kill $$; echo b":                                            shell("SIGTERM", 143),
 		"builtin kill -HUP $$; echo b":                                       shell("SIGHUP", 129),
-		// A halted call runs no EXIT trap, whose commands come after the halt too; bash's would run.
-		"trap 'echo bye' EXIT; kill $$; echo after": shell("SIGTERM", 143),
+		// The EXIT trap runs as bash runs it before SIGTERM ends it, but not before SIGKILL, which no shell outlives.
+		"trap 'echo bye' EXIT; kill $$; echo after":    "bye\n" + shell("SIGTERM", 143),
+		"trap 'echo bye' EXIT; kill -9 $$; echo after": shell("SIGKILL", 137),
+		"trap 'echo bye' EXIT; kill -PROF $$":          shell("SIGPROF", 155),
 	} {
 		expect(t, f.run(command), want)
 	}
@@ -275,7 +279,7 @@ func TestKillZeroEndsTheCallWithWhatItStarted(t *testing.T) {
 	}
 	expect(t, f.run("sleep 30 & echo started; kill 0; echo after"), "started\n"+note("SIGTERM", 143))
 	expect(t, waitFor(f, "%1"), "143")
-	expect(t, f.run(fmt.Sprintf("sleep 30 & kill -KILL -- -%d; echo after", syscall.Getpgrp())), note("SIGKILL", 137))
+	expect(t, f.run(fmt.Sprintf("sleep 30 & kill -KILL -- -%d; echo after", platform.Group())), note("SIGKILL", 137))
 	expect(t, waitFor(f, "%2"), "137")
 	expect(t, f.run("(sleep 30; echo late) & kill -s HUP -0; echo after"), note("SIGHUP", 129))
 	expect(t, waitFor(f, "%3"), "129")
@@ -286,13 +290,22 @@ func TestKillZeroEndsTheCallWithWhatItStarted(t *testing.T) {
 	expect(t, f.run("sleep 30 & kill -STOP 0; echo after; kill -CONT 0; kill %5; wait %5; echo $?"), "after\n143")
 }
 
-// waitFor waits for the job spec names in a call of its own and returns its status, without the report of its end a call that began after
-// it ended opens with.
+// waitFor waits for the job spec names in a call of its own and returns its status.
 func waitFor(f *fixture, spec string) string {
 	f.t.Helper()
-	out := f.run("wait " + spec + "; echo $?")
-	if strings.HasPrefix(out, "[job "+spec+" finished, ") {
-		out = out[strings.Index(out, "\n")+1:]
+	return f.quiet("wait " + spec + "; echo $?")
+}
+
+// quiet runs command as run does, without the reports of jobs that ended before it that a call opens with.
+func (f *fixture) quiet(command string) string {
+	f.t.Helper()
+	out := f.run(command)
+	for strings.HasPrefix(out, "[job %") && strings.Contains(out, " finished, exit ") {
+		end := strings.Index(out, "\n")
+		if end < 0 {
+			return "(no output)"
+		}
+		out = out[end+1:]
 	}
 	return out
 }
@@ -300,13 +313,20 @@ func waitFor(f *fixture, spec string) string {
 func TestKillOfTheShellFromAJob(t *testing.T) {
 	f := newFixture(t, nil)
 	start := time.Now()
-	expect(t, f.run("(sleep 0.3; kill $$) & sleep 1; echo after"), "[kill sent SIGTERM to the shell, so nothing after it ran]\n[exit 143]")
-	if took := time.Since(start); took < time.Second {
-		t.Errorf("the call ended while its program ran, after %s", took)
+	// bash would die at once and leave its program running: the call returns, and what it still runs goes on as a job.
+	out := f.run("(sleep 0.3; kill $$) & sleep 1; echo after")
+	log := f.jobLog(2)
+	expect(t, out, "[kill sent SIGTERM to the shell, so nothing after it ran; what it still runs goes on as job %2, output: "+log+"; wait %2 or kill %2]\n[exit 143]")
+	if took := time.Since(start); took > 900*time.Millisecond {
+		t.Errorf("the call waited for its program, %s", took)
+	}
+	expect(t, waitFor(f, "%2"), "143")
+	if data, err := os.ReadFile(log); err != nil || string(data) != "[kill sent SIGTERM to the shell, so nothing after it ran]\n" {
+		t.Errorf("the job's log: %q, %v", data, err)
 	}
 	// The job of a call that ended has no shell to signal, as bash's would find its parent gone.
 	f.run("(sleep 0.3; kill -0 $$ 2>/dev/null; echo alive=$? > status.txt) &")
-	expect(t, f.run("wait %2; echo $(cat status.txt)"), "alive=1")
+	expect(t, f.quiet("wait %3; echo $(cat status.txt)"), "alive=1")
 }
 
 // jobLog is the log of job id in the fixture's session.

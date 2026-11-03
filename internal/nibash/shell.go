@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -36,7 +37,7 @@ const (
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commits, no git hints, %s, with the whole kept in a log to read. Changed files list new tags.
-Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! is a job's %%N, and the next call reports its end; kill never signals nib's client. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! and jobs -p give a job's %%N, and the next call reports its end; kill never signals nib's client; no DEBUG or RETURN traps. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
@@ -340,9 +341,21 @@ type call struct {
 	reach []string
 	// change is the words of the last cd, pushd or popd the call ran, which a failed one's note names.
 	change []string
-	// halted is set once something ended the call's shell (see stopped), and halting is closed then.
+	// halted is set once something ended the call's shell (see stopped), and halting is closed then; exited is set once the shell runs its
+	// exit, after which what runs in it is its EXIT trap. mu guards the three.
 	halted  *stopped
 	halting chan struct{}
+	exited  bool
+	// traps are what each interpreter of the call does on a signal (see trap.go), by runnerOf; pending are the signals the shell took with a
+	// trap that has not run yet, and attention is closed when one comes. mu guards the three.
+	traps     map[*interp.Runner]trapTable
+	pending   []syscall.Signal
+	attention chan struct{}
+	// subshell is set for a call that is a shell of its own, a job's statement or a command run with background: true, whose jobs are only
+	// those it started; a call of the session's shell knows every job of the session.
+	subshell bool
+	// waitedIDs are the ids the last wait in each interpreter returned the status of, for wait -p (saveWaited). mu guards it.
+	waitedIDs map[*interp.Runner]string
 	// steps are the commands the call watches for failing, and failures those that failed, in order; mu guards failures.
 	steps    []step
 	failures []failedStep
@@ -374,10 +387,15 @@ func (c *call) started(pgid int) {
 	}
 }
 
-func (c *call) ended(pgid int) {
+// ended notes the end of the program that leads pgid, with its exit status, which its job keeps for wait PID.
+func (c *call) ended(pgid, status int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	delete(c.groups, pgid)
+	j := c.job
+	c.mu.Unlock()
+	if j != nil {
+		j.childEnded(pgid, status)
+	}
 }
 
 func (c *call) wrote(path string, existed bool) {
@@ -479,7 +497,9 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 		return engine.Result{}, err
 	}
 	if request.Background {
-		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description, nil)
+		jobs := startJobs(file)
+		leaveAll(file, jobs)
+		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description, nil, jobs)
 		if err != nil {
 			return engine.Result{}, err
 		}
@@ -492,7 +512,9 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	// Before classify, which renames nib's own commands.
 	savedPatch := savesGitPatch(file)
 	watched := watchFailures(file)
-	jobs, piped := classify(file, 0)
+	jobs, piped := classify(file)
+	leaveAll(file, jobs)
+	file.Stmts = append([]*syntax.Stmt{startShell()}, file.Stmts...)
 	watched.mark()
 	bodies := heredocs(file)
 	before := map[string]held{}
@@ -547,16 +569,28 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		cancel()
-		err = <-done
-	case <-timer.C:
-		if waits {
-			return s.stopWaiting(ctx, c, request, timeout, cancel, done, before, bodies, reports)
+	stop := c.stopping()
+wait:
+	for {
+		select {
+		case err = <-done:
+			break wait
+		case <-ctx.Done():
+			cancel()
+			err = <-done
+			break wait
+		case <-timer.C:
+			if waits {
+				return s.stopWaiting(ctx, c, request, timeout, cancel, done, before, bodies, reports)
+			}
+			return s.detach(ctx, c, request, fmt.Sprintf("nibash: still running after %s; it goes on as job", timeout), cancel, done, before, bodies, reports)
+		case <-stop:
+			stop = nil
+			// A kill from elsewhere ended the shell while its programs run: bash's would be gone, and them orphaned, so the call returns now.
+			if h := c.halt(); h != nil && h.elsewhere && c.runsPrograms() {
+				return s.detach(ctx, c, request, h.reason+", so nothing after it ran; what it still runs goes on as job", cancel, done, before, bodies, reports, c.exitLabel(h.status))
+			}
 		}
-		return s.detach(ctx, c, request, timeout, cancel, done, before, bodies, reports)
 	}
 	cancel()
 	c.killAll()
@@ -643,9 +677,10 @@ func (s *Shell) stopWaiting(ctx context.Context, c *call, request server.ShellCa
 	return c.result(reports, text, tail, before, bodies), nil
 }
 
-// detach turns a call still running at its timeout into a job: the call returns the output so far, and the job's log gets all of it, that
-// output included, while the run goes on; with a way to reach the agent, the job's end is pushed to it.
-func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, timeout time.Duration, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string) (engine.Result, error) {
+// detach turns a call still running into a job, at its timeout or when a kill ended its shell while its programs ran: the call returns the
+// output so far, and the job's log gets all of it, that output included, while the run goes on; with a way to reach the agent, the job's end
+// is pushed to it. lead begins the closing line, which goes on with the job's spec, and closing lines follow it.
+func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, lead string, cancel context.CancelFunc, done <-chan error, before map[string]held, bodies []string, reports []string, closing ...string) (engine.Result, error) {
 	// The job carries on the call's command, so it keeps the call's start.
 	started := time.Now()
 	if was, ok := c.session.untrack(c); ok {
@@ -679,7 +714,7 @@ func (s *Shell) detach(ctx context.Context, c *call, request server.ShellCall, t
 	if request.Push != nil {
 		next = fmt.Sprintf("its end comes to you as a message; kill %%%d stops it", j.id)
 	}
-	tail := []string{fmt.Sprintf("[nibash: still running after %s; it goes on as job %%%d, output: %s; %s]", timeout, j.id, j.log, next)}
+	tail := append([]string{fmt.Sprintf("[%s %%%d, output: %s; %s]", lead, j.id, j.log, next)}, closing...)
 	return c.result(reports, text, tail, before, bodies), nil
 }
 

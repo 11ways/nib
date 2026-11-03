@@ -3,25 +3,51 @@
 package platform
 
 import (
+	"debug/elf"
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-// Realtime is the first and last real-time signal as a glibc program numbers them on Linux, where glibc keeps 32 and 33 for its threads;
-// 0 and 0 elsewhere, where kill knows no real-time signal.
+// Realtime is the first and last real-time signal as the system's C library numbers them, which its shell's kill -l names: on Linux glibc
+// keeps 32 and 33 for its threads and musl 32 to 34; 0 and 0 where kill knows no real-time signal.
 func Realtime() (first, last syscall.Signal) {
-	if runtime.GOOS != "linux" {
-		return 0, 0
+	switch runtime.GOOS {
+	case "linux":
+		last = 64
+		if strings.HasPrefix(runtime.GOARCH, "mips") {
+			last = 127
+		}
+		return linuxRealtimeFirst(), last
+	case "freebsd":
+		return 65, 126
+	case "netbsd":
+		return 33, 63
 	}
-	if strings.HasPrefix(runtime.GOARCH, "mips") {
-		return 34, 127
-	}
-	return 34, 64
+	return 0, 0
 }
+
+// linuxRealtimeFirst is SIGRTMIN of the C library the system's shell is linked with, read from the program interpreter /bin/sh names: musl's
+// loader for musl, glibc's otherwise.
+var linuxRealtimeFirst = sync.OnceValue(func() syscall.Signal {
+	if file, err := elf.Open("/bin/sh"); err == nil {
+		defer file.Close()
+		for _, program := range file.Progs {
+			if program.Type != elf.PT_INTERP {
+				continue
+			}
+			interpreter := make([]byte, program.Filesz)
+			if _, err := program.ReadAt(interpreter, 0); err == nil && strings.Contains(string(interpreter), "ld-musl") {
+				return 35
+			}
+		}
+	}
+	return 34
+})
 
 // LastSignal is the highest signal number kill can send.
 func LastSignal() syscall.Signal {
@@ -71,6 +97,9 @@ func Ends(sig syscall.Signal) bool {
 
 // Group is the process group nib is in, which it shares with the client that started it unless that client gave it one of its own.
 func Group() int { return syscall.Getpgrp() }
+
+// Catchable says whether a trap can take sig, as it can every signal but SIGKILL and SIGSTOP.
+func Catchable(sig syscall.Signal) bool { return sig != syscall.SIGKILL && sig != syscall.SIGSTOP }
 
 // GroupOf is the process group pid is in; false when the OS does not say.
 func GroupOf(pid int) (int, bool) {

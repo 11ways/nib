@@ -569,7 +569,7 @@ func TestClassifierDecidesFromTheCommandLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		classify(file, 0)
+		classify(file)
 		var got []string
 		syntax.Walk(file, func(node syntax.Node) bool {
 			if lit, ok := node.(*syntax.Lit); ok {

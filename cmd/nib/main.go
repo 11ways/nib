@@ -93,8 +93,7 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	// Under a file size limit a write past it fails with EFBIG; the signal would otherwise end nib mid-write.
-	signal.Ignore(platform.Ignored...)
+	outlive(platform.Ignored...)
 	directory := os.Getenv("NIB_DIRECTORY")
 	if directory == "" {
 		directory, _ = os.Getwd()
@@ -219,4 +218,15 @@ func startProviders(ctx context.Context, specs []providers.Spec, directory strin
 	}
 	wait.Wait()
 	return slices.DeleteFunc(started, func(p *providers.Provider) bool { return p == nil })
+}
+
+// outlive makes nib take and drop each of signals, so a write past a file size limit fails with EFBIG rather than ending nib mid-write. An
+// ignored signal would be inherited by the programs nibash starts, which bash's, under the same parent, would get at its default; one nib's
+// parent gave it ignored stays so, as bash's programs would inherit it too.
+func outlive(signals ...os.Signal) {
+	for _, sig := range signals {
+		if !signal.Ignored(sig) {
+			signal.Notify(make(chan os.Signal, 1), sig)
+		}
+	}
 }

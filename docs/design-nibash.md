@@ -316,13 +316,22 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
 - **A failed directory change ends the call.** Before a call runs, in the foreground or as a job, each `cd`, `pushd`
   and `popd` whose failure the command line leaves unhandled (by `set -e`'s rules: outside `if` and `while` conditions,
   before `&&` or `||`, after `!` and a pipeline's earlier stages, not in the background) becomes `cd ... || stop $?`,
-  function bodies and `$(...)` counting as unhandled of their own. `stop` marks the call halted, and from then on the
-  `CallHandler` turns every command the call reaches into `exit N` and the open handler refuses a redirect's file. A
-  fatal handler error is not enough: mvdan drops one at a subshell's end and prints one leaving `$(...)` as an
-  expansion error, then goes on. The call or the job's log ends with `[cd DIR failed, so nothing after it ran]` and
-  the change's status. A kill of the shell halts a call the same way (section 5.7). A halted call runs no `EXIT` trap,
-  since the trap's commands come after the halt too. This is another deliberate difference in effect, beside deletion,
-  `nib.json`'s refusals and the kills nibash refuses.
+  function bodies and `$(...)` counting as unhandled of their own. `stop` marks the call halted and exits the
+  interpreter it runs in; from then on the `CallHandler` turns every command the halt reaches into `exit N` and the open
+  handler refuses a redirect's file. A fatal handler error is not enough: mvdan drops one at a subshell's end and prints
+  one leaving `$(...)` as an expansion error, then goes on. The call or the job's log ends with
+  `[cd DIR failed, so nothing after it ran]` and the change's status. The shell's `EXIT` trap still runs, as bash's
+  does when `set -e` ends it (section 5.7, Traps). A kill of the shell halts a call the same way (section 5.7). This is
+  another deliberate difference in effect, beside deletion, `nib.json`'s refusals and the kills nibash refuses.
+- **The shell's own interpreter.** A call's or a job's runner is its shell; mvdan runs a subshell, a `$(...)` and each
+  pipeline stage but the last in a copy of it. mvdan names the runner a handler runs in only in an unexported field of
+  `HandlerContext`, which `runnerOf` reads by reflection and `TestRunnerOfTellsTheShellFromItsSubshells` pins. It tells
+  a halt that reaches only the shell (bash's signal to `$$`) from one that reaches its subshells too, a shell's traps
+  from a subshell's, and the interpreter `&` forks a job from.
+- **Signals the shell ignores** reach its programs ignored, as bash's inherit them: a program starts through nib's own
+  binary (`__nibash-exec-ignoring`, which nibash's `init` serves in any binary that links it), which ignores them and
+  execs the program with its own name; in the sandbox bwrap binds that binary. nib itself takes and drops `SIGXFSZ`
+  rather than ignore it, so its programs get it at its default, as bash's under the same parent would.
 
 ### 5.6 The terminal sink and rendering
 
@@ -420,46 +429,84 @@ When the command finishes or its time runs out, the sink is rendered once:
 
 - **`background: true`** runs the whole command as a job: its own `Runner.Subshell()`, its own process group, output to
   a log (capped like call logs), stdin `/dev/null`. It returns `[job 3 started; output: <log>]` at once.
-- **`cmd &` inside a command** is rewritten before running into a job start for that statement, with the same log and
-  process-group handling. The statement runs in a subshell copy of the shell at that moment, as bash forks.
-  - `$!` is rewritten to the job's spec, `%3`, which nibash's `kill` and `wait` accept. The description states this one
+- **`cmd &`** is rewritten before running into a job start for that statement, wherever it stands (`startJobs`): in a
+  function body, a `$(...)`, or the statement of another job too, so mvdan's own background runs, which no `wait`,
+  `kill` or `jobs` would know, never happen. The statement runs in a copy of the interpreter the `&` ran in at that
+  moment, a function's local variables included, as bash forks, with the same log and process-group handling.
+  - `$!` is rewritten to the job's spec, `%3`, which nibash's `kill` and `wait` accept. The description states this
     difference from bash.
   - The call returns when its foreground part ends. Jobs keep running.
+- **A job is a shell of its own**, as a bash subshell starts with an empty job table: it knows only the jobs it started,
+  for `jobs`, `wait`, `kill %N` and `disown`, while a call of the session's shell knows every job of the session but its
+  own. A job's shell keeps the signals its starter ignores and drops its traps.
 - **Past the call's timeout** the foreground part is not stopped: it goes on as a job. The call returns the output so
   far, with `[nibash: still running after 2m0s; it goes on as job %4, output: <log>; wait %4 or kill %4]`; the sink
   writes what it held to the job's log and sends everything later there, so the log has the whole output from the start.
   The call's process groups join the job. Only that output so far renders under the request's context: what runs on
   keeps the run's own, since the request's ends with the answer (nib's own commands after a `wait` that went on as a job
   once failed with `context canceled`).
-- **`jobs`** lists the session's jobs with state, exit code and log path. **`wait %N`** waits for a job. A call that only
-  waits gets the longest timeout unless it asks for less, and past it stops waiting rather than go on as a job that waits
-  for jobs, with one note naming the jobs that run on (`[job %4 still running after 10m0s; wait %4 again]`); a `wait` its
-  call stops ends with status 130, as bash's does when a signal interrupts it, and one its call's halt stops with the
-  halt's status. A call still in its request is no job, as one a client moved to its own background list is: a `wait`
-  that finds no such job, or no running one, while another call of the same agent runs adds a note after the output,
-  `[no job %2 to wait for: the call "..." still runs as a call, not a job, and its result comes back to that call]`, with
-  the command shortened to 60 characters. It is nib's own line, so it shows when the command sends `wait`'s message to
-  `/dev/null`; that message and the exit status stay bash's.
+- **`jobs`** is bash's with nibash's form: `[1]+ Running  sleep 30 &  (output: <log>)`, `Stopped` when every program the
+  job still runs is stopped (waitid without reaping on Linux, the kernel's process record on macOS), and
+  `Done (exit N)`. `-l` adds the process groups it runs, `-p` prints the job's spec, as `$!` does, so `kill $(jobs -p)`
+  works, `-r`, `-s` and `-n` keep the running, stopped and untold jobs, and `-x` runs a command with each job spec
+  replaced by the job's process group. Listing a job that ended tells its end.
+- **`wait`** is bash's: job specs and pids, a pid naming a job's program as `jobs -l` lists it (the job keeps the last 256
+  programs' statuses), `wait PID` of anything else is `pid N is not a child of this shell` with 127, `wait` with no ids
+  waits for every job of the shell and returns 0, `-n` returns as the first of them ends, with its status, `-f` is
+  taken, and `-p VAR` names the job or pid whose status it returned (the `CallHandler` rewrites it into the wait and an
+  assignment, since a handler cannot set the shell's variables). A call that only waits gets the longest timeout unless
+  it asks for less, and past it stops waiting rather than go on as a job that waits for jobs, with one note naming the
+  jobs that run on (`[job %4 still running after 10m0s; wait %4 again]`); a `wait` its call stops ends with status 130,
+  as bash's does when a signal interrupts it, one its call's halt stops with the halt's status, and one in the shell
+  a signal its trap takes stops with 128 plus the signal's number. A call still in its request is no job, as one a client
+  moved to its own background list is: a `wait` that finds no such job, or no running one, while another call of the
+  same agent runs adds a note after the output, `[no job %2 to wait for: the call "..." still runs as a call, not a job,
+  and its result comes back to that call]`, with the command shortened to 60 characters. It is nib's own line, so it
+  shows when the command sends `wait`'s message to `/dev/null`; that message and the exit status stay bash's.
+- **`disown`** takes jobs from their shell's table (`-a`, `-r`, specs or pids), so nothing names, reports or ends them
+  at the session's end, as bash's sends a disowned job no `SIGHUP`; `-h` keeps one listed but running past that end. A
+  job whose program outlives nib goes on; the shell statements after it end with nib.
+- **`fg`, `bg` and `suspend`** say there is no job control, as bash running a command line does.
 - **`kill`** (`kill.go`) is bash 5.3's builtin: `-s SIG`, `-n NUM`, `-SIG` (only the first such word, so `kill -9 -1234`
   signals group 1234), `-sNAME`, `-nNUM`, `--`, and `-l`/`-L` with bash's table, a number's name (an exit status past 128
-  standing for its signal) and a name's number. Signal names take any case, with or without `SIG`; `EXIT` is 0, and on
-  Linux `RTMIN+N` and `RTMAX-N` name the real-time signals as glibc numbers them. Job specs are `%N`, `%%`, `%+`, `%`,
-  `%-`, `%STRING` and `%?STRING`, the last four among the jobs bash would still hold (running, or their end not told
-  yet). Messages and exit status are bash's: each target that fails is named, and the status is 0 once one target got
-  the signal. A job that ended is no target (`%N: job has terminated`), so `while kill -0 %N` ends.
-  - **A job's signal** goes to every process group the job started, and after SIGTERM or SIGHUP SIGCONT too, as bash
-    sends a stopped job (nibash cannot tell one from a running one). One that ends a process halts the job's shell, as
-    it would end bash's subshell, but the program takes the signal as it will: a server reloading on SIGHUP goes on.
+  standing for its signal) and a name's number. Signal names take any case, with or without `SIG`; `EXIT` is 0, and
+  `RTMIN+N` and `RTMAX-N` name the real-time signals as the system's C library numbers them: on Linux from 34 for glibc
+  and from 35 for musl, read from the program interpreter `/bin/sh` names, and FreeBSD's and NetBSD's. Job specs are
+  `%N`, `%%`, `%+`, `%`, `%-`, `%STRING` and `%?STRING`, among the jobs the shell knows, and the last four among those
+  bash would still hold (running, or their end not told yet). Messages and exit status are bash's: each target that
+  fails is named, and the status is 0 once one target got the signal. A job that ended is no target
+  (`%N: job has terminated`), so `while kill -0 %N` ends. `kill`, `jobs`, `wait`, `trap` and `disown` are nibash's
+  through `builtin` and `command` too.
+  - **A job's signal** goes to every process group the job started, and after SIGTERM or SIGHUP SIGCONT to a stopped
+    one, as bash sends it (to each where the OS does not tell what is stopped). The job's shell meets the signal as its
+    traps say: by default one that ends a process halts it, as it would end bash's subshell, but the program takes the
+    signal as it will: a server reloading on SIGHUP goes on.
   - **The shell is the call.** nibash's shell is no process: `$$` is nib's pid, and nib's process group is mostly its
     client's (Claude Code starts its servers in its own group), so bash's meaning of these targets would reach nib and
     the client. `kill $$` and `kill 0`, `kill -- -PGRP` of nib's own group or `kill -0` of them, reach the call whose
-    command line runs `kill` (the root of a job's) instead. A signal that ends a process halts that call as a failed
-    `cd` does (section 5.5), with `[kill sent SIGTERM to the shell, so nothing after it ran]` and 128 plus the signal's
-    number; not SIGQUIT, which bash ignores, nor a signal that stops a process, since a stopped call would only hang.
-    `kill 0` also signals the programs the call still runs and the jobs it started, as members of the shell's group.
-    The job of a call that ended finds no shell: its `kill $$` fails with `No such process`.
+    command line runs `kill` (the root of a job's) instead, which meets the signal as its traps say (Traps, below). By
+    default a signal that ends a process halts that call as a failed `cd` does (section 5.5), with
+    `[kill sent SIGTERM to the shell, so nothing after it ran]` and 128 plus the signal's number; not SIGQUIT, which bash
+    ignores, nor a signal that stops a process, since a stopped call would only hang. `kill $$` reaches the shell, not
+    its subshells, which go on; `kill 0` reaches them too, and the programs the call still runs and the jobs it started,
+    as members of the shell's group. A kill from a job or a subshell that ends the shell while the call waits for a
+    program returns the call at once, as bash would die then: what it still runs goes on as a job, with
+    `[kill sent SIGTERM to the shell, so nothing after it ran; what it still runs goes on as job %4, ...]`. The job of a
+    call that ended finds no shell: its `kill $$` fails with `No such process`.
   - **Refusals.** `kill -1` (every process), the pid of nib's client and its process group are refused with a message
     naming why, unless the signal is 0, which only asks whether they exist.
+- **Traps** (`trap.go`) are bash's `trap`, `-l`, `-p` and `-P` with bash's quoting, names and messages. A trap on a
+  signal runs when a kill sends its signal to the shell: at the shell's next command, as one eval of the trap and the
+  command quoted so the trap's `exit` ends the shell first, or, when none comes, as the shell exits; a `wait` in the
+  shell returns at once with 128 plus the signal's number. `trap ''` ignores a signal, and the programs the shell starts
+  inherit that (section 5.5). The `EXIT` trap is nibash's own: each shell's command line starts by making nibash's end
+  command mvdan's `EXIT` trap, which mvdan runs as the shell exits however it does; that command runs the signals' traps
+  still waiting and then the shell's `EXIT` trap, except after a signal bash dies of without running it (SIGKILL, the
+  real-time signals, `SIGPROF`, `SIGIO`, `SIGPWR`, `SIGSTKFLT`; `trapsOnDeath` names those it runs it for). A subshell's
+  statements end with nibash's leave command, and its `exit` runs through it too, so the `EXIT` trap a subshell set runs
+  as it ends, with `$?` its status, as bash runs it and mvdan, which runs a shell's only, would not. mvdan runs `ERR`
+  traps. `DEBUG` and `RETURN` traps, which mvdan cannot run, are refused rather than set to never run; the description
+  says so.
 - **Reporting:** finished jobs are reported at the top of the next nibash result (`[job 3 finished, exit 0]`), since MCP
   cannot notify on its own; a `wait` that saw a job end tells it, so no result repeats it.
 - **Pushing a job's end.** Claude Code's channels let a server put a message in the session's conversation

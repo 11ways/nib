@@ -46,14 +46,91 @@ type job struct {
 	killed syscall.Signal
 	// call is the call that runs the job's command: a statement's own, or the call that went on as the job.
 	call *call
+	// programs are the programs the job started, in order, the last programsKept of them, for wait PID and jobs -l.
+	programs []*child
+	// disowned is set once disown took the job from its shell's table, which no longer names, reports or ends it; kept is set by disown -h,
+	// which leaves it in the table but running past the session's end, as bash's sends it no SIGHUP when it exits. The table's lock guards
+	// both.
+	disowned, kept bool
 }
+
+// child is a program a job started: its process group, which its pid leads, and once done is closed its exit status.
+type child struct {
+	pgid   int
+	done   chan struct{}
+	status int
+}
+
+// programsKept is how many of a job's programs it remembers for wait PID, as bash remembers its children's statuses.
+const programsKept = 256
 
 func (j *job) add(pgid int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.groups[pgid] = true
+	j.programs = append(j.programs, &child{pgid: pgid, done: make(chan struct{})})
+	if len(j.programs) > programsKept {
+		j.programs = slices.Delete(j.programs, 0, len(j.programs)-programsKept)
+	}
 	if j.killed != 0 {
 		_ = platform.SignalGroup(pgid, j.killed)
+	}
+}
+
+// childEnded notes the end of the job's program that leads pgid, with its exit status.
+func (j *job) childEnded(pgid, status int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, p := range j.programs {
+		if p.pgid == pgid && !isClosed(p.done) {
+			p.status = status
+			close(p.done)
+		}
+	}
+}
+
+// child is the program of the job whose process group pid leads, nil when the job started none.
+func (j *job) child(pid int) *child {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for i := len(j.programs) - 1; i >= 0; i-- {
+		if j.programs[i].pgid == pid {
+			return j.programs[i]
+		}
+	}
+	return nil
+}
+
+// runningPrograms are the process groups of the job's programs that still run, in the order they started.
+func (j *job) runningPrograms() []int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var groups []int
+	for _, p := range j.programs {
+		if !isClosed(p.done) {
+			groups = append(groups, p.pgid)
+		}
+	}
+	return groups
+}
+
+// stopped says whether every program the job still runs is stopped, as bash's jobs calls a job Stopped; false where the OS does not tell.
+func (j *job) stopped() bool {
+	groups := j.runningPrograms()
+	for _, pgid := range groups {
+		if stopped, known := platform.Stopped(pgid); !stopped || !known {
+			return false
+		}
+	}
+	return len(groups) > 0
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -64,7 +141,7 @@ func (j *job) attach(c *call) {
 	killed := j.killed
 	j.mu.Unlock()
 	if killed != 0 {
-		c.haltWith(jobKilled(killed))
+		c.deliver(killed, sending{group: true, quiet: true, target: "the job"})
 	}
 }
 
@@ -84,36 +161,34 @@ func (j *job) running() bool {
 	}
 }
 
-// signal sends sig to every process group the job started. One that ends a process also halts the job's shell, as it would end the subshell
-// a bash job runs, but leaves the program running to take it as it will: one that handles it, as a server reloading on SIGHUP does, goes on.
-// After SIGTERM or SIGHUP the groups get SIGCONT, as bash sends a stopped job, since nibash cannot tell a stopped job from a running one and
-// a running program ignores it.
+// signal is a kill of the job: sig goes to every process group the job started (sendGroups), and the job's shell meets it as its traps say
+// (deliver), by default ending on one that ends a process, as bash's subshell would, but leaving its program running to take the signal as
+// it will: one that handles it, as a server reloading on SIGHUP does, goes on.
 func (j *job) signal(sig syscall.Signal) {
-	ends := platform.Ends(sig)
+	j.sendGroups(sig)
+	if shell := j.runner(); shell != nil {
+		shell.deliver(sig, sending{group: true, quiet: true, target: "the job"})
+	}
+}
+
+// sendGroups sends sig to every process group the job started, and after SIGTERM or SIGHUP SIGCONT to a stopped one, as bash sends it, since a
+// stopped program holds the signal until it continues; where the OS does not tell what is stopped, to each, which a running one ignores.
+func (j *job) sendGroups(sig syscall.Signal) {
 	j.mu.Lock()
 	groups := make([]int, 0, len(j.groups))
 	for pgid := range j.groups {
 		groups = append(groups, pgid)
 	}
-	if ends {
+	if platform.Ends(sig) {
 		j.killed = sig
 	}
-	shell := j.call
 	j.mu.Unlock()
 	for _, pgid := range groups {
 		_ = platform.SignalGroup(pgid, sig)
-		if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
+		if stopped, known := platform.Stopped(pgid); (sig == syscall.SIGTERM || sig == syscall.SIGHUP) && (stopped || !known) {
 			platform.ContinueGroup(pgid)
 		}
 	}
-	if ends && shell != nil {
-		shell.haltWith(jobKilled(sig))
-	}
-}
-
-// jobKilled is the halt of a job's shell that sig ended.
-func jobKilled(sig syscall.Signal) *stopped {
-	return &stopped{reason: "kill sent " + signalLabel(sig) + " to the job", status: 128 + int(sig), quiet: true}
 }
 
 type jobTable struct {
@@ -124,16 +199,19 @@ type jobTable struct {
 
 func newJobTable() *jobTable { return &jobTable{next: 1} }
 
-// find is the job spec names: %N, %%, %+ or % for the current job, %- for the one before it, %STRING for the one whose command starts with
-// STRING and %?STRING for the one whose command holds it, else problem says why none, as bash words it. The current and previous jobs and
-// those a string names are among the jobs bash would still hold, those running or whose end was not told yet; %N names any. A spec without %
-// is a job's number, as nibash's wait has always taken one.
-func (t *jobTable) find(spec string) (j *job, problem string) {
+// find is the job spec names among every job of the table, as findAmong reads it.
+func (t *jobTable) find(spec string) (*job, string) { return t.findAmong(spec, t.all()) }
+
+// findAmong is the job spec names among known, a shell's jobs: %N, %%, %+ or % for the current job, %- for the one before it, %STRING for
+// the one whose command starts with STRING and %?STRING for the one whose command holds it, else problem says why none, as bash words it.
+// The current and previous jobs and those a string names are among the jobs bash would still hold, those running or whose end was not told
+// yet; %N names any. A spec without % is a job's number, as nibash's wait took one before it took pids.
+func (t *jobTable) findAmong(spec string, known []*job) (j *job, problem string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	missing := spec + ": no such job"
 	var held []*job
-	for _, j := range t.jobs {
+	for _, j := range known {
 		if j.running() || !j.reported {
 			held = append(held, j)
 		}
@@ -146,7 +224,7 @@ func (t *jobTable) find(spec string) (j *job, problem string) {
 			id, err = strconv.Atoi(spec)
 		}
 		if err == nil {
-			for _, j := range t.jobs {
+			for _, j := range known {
 				if j.id == id {
 					return j, ""
 				}
@@ -179,6 +257,26 @@ func (t *jobTable) find(spec string) (j *job, problem string) {
 		return nil, missing
 	}
 	return found, ""
+}
+
+// marks are the job markers bash's jobs prints among known: '+' for the current job, '-' for the one before it.
+func (t *jobTable) marks(known []*job) map[*job]byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var held []*job
+	for _, j := range known {
+		if j.running() || !j.reported {
+			held = append(held, j)
+		}
+	}
+	marks := map[*job]byte{}
+	if len(held) > 1 {
+		marks[held[len(held)-2]] = '-'
+	}
+	if len(held) > 0 {
+		marks[held[len(held)-1]] = '+'
+	}
+	return marks
 }
 
 func (t *jobTable) all() []*job {
@@ -220,9 +318,9 @@ func (t *jobTable) unclaim(j *job) {
 	t.mu.Unlock()
 }
 
-// await waits for j within ctx, or until stop is closed; the wait tells its end, so it is neither pushed while the wait runs nor reported
-// again after.
-func (t *jobTable) await(ctx context.Context, j *job, stop <-chan struct{}) error {
+// await waits for j within ctx, or until stop or signalled is closed; the wait tells its end, so it is neither pushed while the wait runs
+// nor reported again after.
+func (t *jobTable) await(ctx context.Context, j *job, stop, signalled <-chan struct{}) error {
 	t.mu.Lock()
 	j.waiters++
 	t.mu.Unlock()
@@ -233,24 +331,34 @@ func (t *jobTable) await(ctx context.Context, j *job, stop <-chan struct{}) erro
 	}()
 	select {
 	case <-j.done:
-		t.mu.Lock()
-		j.reported = true
-		t.mu.Unlock()
+		t.tell(j)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-signalled:
+		return errSignalled
 	case <-stop:
 		return errHalted
 	}
 }
 
+// tell marks j's end told, as a wait that saw it tells it.
+func (t *jobTable) tell(j *job) {
+	t.mu.Lock()
+	j.reported = true
+	t.mu.Unlock()
+}
+
 // errHalted is the error of a wait its call's halt stopped.
 var errHalted = errors.New("halted")
 
-// killAll ends every running job and its shell, as the connection ends.
+// killAll ends every running job and its shell, as the connection ends, but those disown let run past it.
 func (t *jobTable) killAll() {
 	for _, j := range t.all() {
-		if j.running() {
+		t.mu.Lock()
+		spared := j.disowned || j.kept
+		t.mu.Unlock()
+		if j.running() && !spared {
 			j.signal(syscall.SIGKILL)
 			j.cancel()
 		}
@@ -317,8 +425,9 @@ func (j *job) finish(err error, out *cappedWriter) {
 }
 
 // launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal; push, when set, tells the
-// agent its end, with purpose as what the call was for.
-func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string, origin *call) (*job, error) {
+// agent its end, with purpose as what the call was for. jobs are the statements the command line's & started (startJobs), which the job's own
+// & starts from; origin is the call whose statement node is, nil for a command run with background: true.
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string, origin *call, jobs map[int]*syntax.Stmt) (*job, error) {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return nil, err
@@ -340,21 +449,34 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 		return nil, err
 	}
 	jobTools := *tools
-	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, runner: runner, names: names, links: &links{}, logs: sess.shell.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}, origin: origin}
+	c := &call{engine: sess.shell.engine, tools: &jobTools, session: sess, runner: runner, names: names, links: &links{}, logs: sess.shell.logs, job: j, groups: map[int]bool{}, written: map[string]bool{}, origin: origin, jobs: jobs, subshell: true}
+	if origin != nil {
+		c.inherit(origin)
+	}
 	sess.shell.register(c)
 	j.attach(c)
 	ctx := context.WithValue(base, callKey{}, c)
 	jobTools.Ctx = ctx
+	// The job is a shell of its own, whose exit runs the traps it set.
+	stmts, ok := []*syntax.Stmt{}, false
+	if file, isFile := node.(*syntax.File); isFile {
+		stmts, ok = file.Stmts, true
+	}
+	if !ok {
+		stmts = []*syntax.Stmt{node.(*syntax.Stmt)}
+	}
+	file := &syntax.File{Stmts: append([]*syntax.Stmt{startShell()}, stmts...)}
 	go func() {
 		defer devnull.Close()
-		j.finish(c.jobError(runner.Run(ctx, node), out), out)
+		j.finish(c.jobError(runner.Run(ctx, file), out), out)
 		c.end()
 		sess.shell.pushEnd(sess, j)
 	}()
 	return j, nil
 }
 
-// startJob starts the statement an & put away as a job, in a copy of the shell as it is now, and prints the job's spec for $!.
+// startJob starts the statement an & put away as a job, in a copy of the interpreter the & ran in as it is now, as bash forks, and prints the
+// job's spec for $!.
 func (c *call) startJob(ctx context.Context, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 	key, err := strconv.Atoi(args[0])
@@ -362,13 +484,17 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	if err != nil || stmt == nil {
 		return interp.ExitStatus(1)
 	}
-	runner := c.runner.Subshell()
+	here := runnerOf(ctx)
+	if here == nil {
+		here = c.runner
+	}
+	runner := here.Subshell()
 	if err := interp.Dir(hc.Dir)(runner); err != nil {
 		return err
 	}
 	var text strings.Builder
 	syntax.NewPrinter().Print(&text, stmt)
-	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "", c)
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "", c, c.jobs)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
 		return interp.ExitStatus(1)
@@ -383,58 +509,6 @@ func errorText(err error) string {
 		return text
 	}
 	return strings.ToUpper(text[:1]) + text[1:]
-}
-
-// listJobs prints the session's jobs with their state and log.
-func (c *call) listJobs(ctx context.Context) error {
-	hc := interp.HandlerCtx(ctx)
-	for _, j := range c.session.jobs.all() {
-		state := "Running"
-		if !j.running() {
-			state = fmt.Sprintf("Done (exit %d)", j.exit)
-		}
-		fmt.Fprintf(hc.Stdout, "[%d]  %s  %s  (output: %s)\n", j.id, state, j.command, j.log)
-	}
-	return nil
-}
-
-// wait waits for the named jobs, or for every job, within the call's time.
-func (c *call) wait(ctx context.Context, args []string) error {
-	hc := interp.HandlerCtx(ctx)
-	targets := c.session.jobs.all()
-	if len(args) > 0 {
-		targets = nil
-		for _, spec := range args {
-			j, problem := c.session.jobs.find(spec)
-			if j == nil {
-				fmt.Fprintf(hc.Stderr, "wait: %s\n", problem)
-				c.noteWaitless("no job " + spec)
-				return interp.ExitStatus(127)
-			}
-			targets = append(targets, j)
-		}
-	} else if !slices.ContainsFunc(targets, (*job).running) {
-		c.noteWaitless("no running job")
-	}
-	c.mu.Lock()
-	c.waited = append(c.waited, targets...)
-	c.mu.Unlock()
-	status := 0
-	for _, j := range targets {
-		if err := c.session.jobs.await(ctx, j, c.stopping()); err != nil {
-			if h := c.halt(); errors.Is(err, errHalted) && h != nil {
-				return interp.ExitStatus(h.status)
-			}
-			// Stopped by its call, wait ends as bash's does when a signal interrupts it; the interpreter takes an error for an internal one.
-			return interp.ExitStatus(waitInterrupted)
-		}
-		status = j.exit
-	}
-	if status == 0 {
-		// The interpreter takes a zero exit status given as an error for an internal error.
-		return nil
-	}
-	return interp.ExitStatus(status)
 }
 
 // waitlessCommand is how many characters of another call's command line the note of a wait with nothing to wait for shows.
@@ -468,6 +542,3 @@ func (c *call) noteWaitless(what string) {
 }
 
 var _ io.Writer = (*cappedWriter)(nil)
-
-// waitInterrupted is the status of a wait its call stopped: bash's for a wait a signal interrupts, 128 plus SIGINT's number.
-const waitInterrupted = 130

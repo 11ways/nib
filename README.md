@@ -273,11 +273,16 @@ program. `type cat` names the system program.
   the user's trash. `trash list` shows them, `trash restore [-f] PATH` puts one back.
 - **A failed `cd`** (or `pushd`, `popd`) ends the call unless the command line handles it (`if`, `&&`, `||`), as under
   `set -e`.
-- **Jobs.** `background: true` or `cmd &` start a job; `jobs`, `wait` and `kill` work on them, and `$!` is a job spec
-  (`%3`). Finished jobs are reported at the next call.
+- **Jobs.** `background: true` or `cmd &` start a job, wherever the `&` stands; `jobs`, `wait`, `kill` and `disown` work on
+  them as bash's do, and `$!` and `jobs -p` give a job spec (`%3`). A job is a shell of its own, which knows the jobs it
+  started. Finished jobs are reported at the next call; a disowned one runs past the session's end.
 - **`kill`** is bash's: signal names and numbers, `-l`, job specs such as `%+`, `%-` and `%?text`, and bash's messages.
-  The shell it would signal is the call: `kill $$` ends the call, `kill 0` ends it and what it started. `kill -1`, the
-  client that started nib and the client's process group are refused, so a kill cannot end the session.
+  The shell it would signal is the call: `kill $$` ends the call, `kill 0` ends it and what it started, as their traps
+  allow. `kill -1`, the client that started nib and the client's process group are refused, so a kill cannot end the
+  session.
+- **`trap`** is bash's, signal traps included, which run when a kill sends their signal to the shell; `trap ''` signals
+  stay ignored in the programs the shell starts, and a subshell runs the `EXIT` trap it set. `DEBUG` and `RETURN` traps
+  are refused.
 - **Changed files** are listed with their new tags after the command; small changes to files the agent saw print as
   rows.
 - **Failures** that the exit status hides (stderr sent to `/dev/null`, an earlier pipeline stage) are named in a closing

@@ -123,5 +123,5 @@ func running(pid int) error {
 	return nil
 }
 
-// Ignored is empty: Windows sends nib no signal it must ignore.
+// Ignored is empty: Windows sends nib no signal it must outlive.
 var Ignored []os.Signal

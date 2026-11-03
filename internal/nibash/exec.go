@@ -20,6 +20,7 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/11ways/nib/internal/platform"
 )
@@ -66,11 +67,17 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 			case internalKill:
 				return c.kill(ctx, args[1:])
 			case internalJobs:
-				return c.listJobs(ctx)
+				return c.listJobs(ctx, args[1:])
 			case internalWait:
 				return c.wait(ctx, args[1:])
+			case internalTrap:
+				return c.trap(ctx, args[1:])
+			case internalDisown:
+				return c.disown(ctx, args[1:])
+			case internalFg, internalBg, internalSuspend:
+				return noJobControl(ctx, marked)
 			case internalStop:
-				return c.stop(args[1:])
+				return c.stop(ctx, args[1:])
 			case internalHash:
 				return c.hash(ctx, args[2:])
 			}
@@ -93,13 +100,47 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 	}
 }
 
-// callHandler sends kill, jobs and wait to nibash, also through builtin or command, since mvdan's builtins do not act on real processes, and
-// hash -d's named directory forms, and refuses a cd out of the sandbox with the reason, which the builtin would report as a missing directory.
+// callHandler sends the builtins nibash runs itself to it (jobBuiltins), also through builtin or command, and hash -d's named directory
+// forms, and refuses a cd out of the sandbox with the reason, which the builtin would report as a missing directory. In the shell it runs the
+// traps of signals it took before the command (withTraps), and its exit runs them and its EXIT trap (startShell).
 func (sess *session) callHandler(ctx context.Context, args []string) ([]string, error) {
-	// A halted call runs nothing more, wherever the shell would go on.
 	if c := callOf(ctx); c != nil {
-		if h := c.halt(); h != nil {
-			return []string{"exit", strconv.Itoa(h.status)}, nil
+		shell := c.inShell(ctx)
+		status := interp.HandlerCtx(ctx).LastExitStatus
+		switch args[0] {
+		case marker + internalStart:
+			return []string{"trap", "--", marker + internalEnd, "EXIT"}, nil
+		case marker + internalEnd:
+			return c.exiting(ctx), nil
+		case marker + internalLeave:
+			return c.exitWithTrap(ctx, []string{"exit", strconv.Itoa(status)}, status), nil
+		case marker + internalWaited:
+			return c.saveWaited(ctx, args), nil
+		}
+		// A halted call runs nothing more where its halt reaches, wherever the shell would go on.
+		if h := c.haltReaching(ctx); h != nil {
+			exit := []string{"exit", strconv.Itoa(h.status)}
+			if shell {
+				c.markExited()
+			} else if h.trap {
+				exit = c.exitWithTrap(ctx, exit, h.status)
+			}
+			return exit, nil
+		}
+		if shell {
+			if wrapped := c.withTraps(args); wrapped != nil {
+				return wrapped, nil
+			}
+		} else if args[0] == "exit" && len(args) <= 2 {
+			// A subshell's exit runs the EXIT trap it set first.
+			if len(args) == 2 {
+				n, ok := legalNumber(args[1])
+				if !ok {
+					return args, nil
+				}
+				status = int(uint8(n))
+			}
+			return c.exitWithTrap(ctx, []string{"exit", strconv.Itoa(status)}, status), nil
 		}
 	}
 	if namedHash(args) {
@@ -113,7 +154,13 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 		}
 	}
 	if at := jobBuiltin(args); at >= 0 {
-		return append([]string{marker + args[at]}, args[at+1:]...), nil
+		renamed := append([]string{marker + args[at]}, args[at+1:]...)
+		if args[at] == internalWait {
+			if withVariable := waitWithVariable(renamed); withVariable != nil {
+				return withVariable, nil
+			}
+		}
+		return renamed, nil
 	}
 	switch args[0] {
 	case "cd":
@@ -328,7 +375,7 @@ func (c *call) runProgramTo(ctx context.Context, args []string, stdout, stderr i
 }
 
 // runProgramWith is runProgramTo with env added to the shell's environment.
-func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, stderr io.Writer, printed func()) error {
+func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, stderr io.Writer, printed func()) (err error) {
 	hc := interp.HandlerCtx(ctx)
 	// A shell knows no named directories, so a script it gets with -c has them expanded as nibash would expand them there.
 	args = namedScripts(hc.Env, args)
@@ -343,8 +390,10 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 		return interp.ExitStatus(126)
 	}
 	argv := append([]string{path}, args[1:]...)
+	// The program starts with the signals the shell ignores ignored, as bash's inherit them, through nib's own binary.
+	argv, ignoring := ignoringArgv(argv, args[0], c.ignoredHere(ctx))
 	if c.tools.Sandbox {
-		wrapped, err := c.sandboxed(hc.Dir, argv)
+		wrapped, err := c.sandboxed(hc.Dir, argv, ignoring)
 		if err != nil {
 			fmt.Fprintf(stderrOf(ctx), "%s: %v\n", args[0], err)
 			return interp.ExitStatus(126)
@@ -352,11 +401,14 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 		argv = wrapped
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	if !c.tools.Sandbox {
+	if !c.tools.Sandbox && !ignoring {
 		// The program sees the name it was called by, as under bash.
 		cmd.Args[0] = args[0]
 	}
 	cmd.Env = append(environ(hc.Env), env...)
+	if ignoring {
+		cmd.Env = append(cmd.Env, ignoringEnv+"=1")
+	}
 	cmd.Dir = hc.Dir
 	platform.Prepare(cmd)
 	if hc.Stdin != nil {
@@ -435,7 +487,7 @@ func (c *call) runProgramWith(ctx context.Context, args, env []string, stdout, s
 	}
 	defer platform.Release(pgid)
 	c.started(pgid)
-	defer c.ended(pgid)
+	defer func() { c.ended(pgid, exitStatusOf(err)) }()
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
 	var waitErr error
@@ -543,8 +595,11 @@ func (c *call) allowedPath(path string) error {
 func (sess *session) openHandler(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 	c := callOf(ctx)
 	if c != nil {
-		// A redirect alone runs no command, so a halted call refuses the file itself.
-		if h := c.halt(); h != nil {
+		// A redirect alone runs no command, so a halted call refuses the file itself, which ends the interpreter.
+		if h := c.haltReaching(ctx); h != nil {
+			if c.inShell(ctx) {
+				c.markExited()
+			}
 			return nil, h
 		}
 		full := absolute(interp.HandlerCtx(ctx).Dir, path)
@@ -577,17 +632,36 @@ func (sess *session) readDirHandler(ctx context.Context, path string) ([]fs.DirE
 	return interp.DefaultReadDirHandler2()(ctx, path)
 }
 
-// jobBuiltin is where args names kill, jobs or wait as the command it runs, after any builtin or command before it; -1 for another command,
+// jobBuiltin is where args names one of jobBuiltins as the command it runs, after any builtin or command before it; -1 for another command,
 // and for command's options, as in command -v kill.
 func jobBuiltin(args []string) int {
 	for i, arg := range args {
-		switch arg {
-		case "builtin", "command":
+		switch {
+		case arg == "builtin" || arg == "command":
 			continue
-		case "kill", "jobs", "wait":
+		case jobBuiltins[arg]:
 			return i
 		}
 		return -1
 	}
 	return -1
+}
+
+// startShell is the statement nibash puts before a shell's command line, a call's or a job's: it makes nibash's end command mvdan's EXIT
+// trap, which mvdan runs as the shell exits, at the end of its command line or at an exit, so that command (exiting) knows the shell exits
+// and runs what bash runs then.
+func startShell() *syntax.Stmt {
+	return &syntax.Stmt{Cmd: &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalStart)}}}
+}
+
+// exitStatusOf is the exit status a handler's error stands for, as $? would hold it.
+func exitStatusOf(err error) int {
+	var exit interp.ExitStatus
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return int(exit)
+	}
+	return 1
 }

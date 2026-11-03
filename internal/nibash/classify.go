@@ -31,13 +31,27 @@ const bandFlag = "+"
 // (passesLines), which may then print it reshaped as at the terminal.
 const modelFlag = ">"
 
-// internal commands nibash adds for builtins mvdan does not run for real processes, and for starting a job.
+// internal commands nibash adds for the builtins mvdan does not run for real processes or lacks, for starting a job, and for the end of a
+// shell's command line, where it exits as bash does after its last command (see endShell).
 const (
-	internalJob  = "job"
-	internalKill = "kill"
-	internalJobs = "jobs"
-	internalWait = "wait"
+	internalJob     = "job"
+	internalKill    = "kill"
+	internalJobs    = "jobs"
+	internalWait    = "wait"
+	internalTrap    = "trap"
+	internalDisown  = "disown"
+	internalFg      = "fg"
+	internalBg      = "bg"
+	internalSuspend = "suspend"
+	internalStart   = "start"
+	internalEnd     = "end"
+	internalLeave   = "leave"
+	internalWaited  = "waited"
 )
+
+// jobBuiltins are the builtins nibash runs itself, wherever a command line names them, also through builtin or command.
+var jobBuiltins = map[string]bool{internalKill: true, internalJobs: true, internalWait: true, internalTrap: true, internalDisown: true,
+	internalFg: true, internalBg: true, internalSuspend: true}
 
 // expansion stands for a word whose value only exists at run time.
 const expansion = "\x00"
@@ -76,12 +90,9 @@ const (
 // pipe is a command printing rows that would be nib's own, whose output went into a real program before reaching the model.
 type pipe struct{ command, program string }
 
-// classifier marks the commands nibash runs itself and rewrites background statements into jobs.
+// classifier marks the commands nibash runs itself.
 type classifier struct {
 	functions map[string]bool
-	// jobs holds the statements & started, by the key their job-start command carries.
-	jobs map[int]*syntax.Stmt
-	next int
 	// piped are the row commands whose output reached the model through a real program, in the order the command line names them.
 	piped []pipe
 	// edges is whether the pipe the statements being classified write into in band reaches the model through nothing but nib's own commands
@@ -89,10 +100,11 @@ type classifier struct {
 	edges bool
 }
 
-// classify rewrites file in place: nib commands get a marker name, `X &` becomes `NIBASH_JOB=$(job k)` with X kept in jobs, and $! reads
-// NIBASH_JOB. Functions the command defines shadow nib commands. piped lists the row commands whose rows went through a real program.
-func classify(file *syntax.File, firstJob int) (jobs map[int]*syntax.Stmt, piped []pipe) {
-	c := &classifier{functions: map[string]bool{}, jobs: map[int]*syntax.Stmt{}, next: firstJob}
+// classify rewrites file in place: its jobs start as startJobs makes them, and nib commands get a marker name. Functions the command defines
+// shadow nib commands. piped lists the row commands whose rows went through a real program.
+func classify(file *syntax.File) (jobs map[int]*syntax.Stmt, piped []pipe) {
+	jobs = startJobs(file)
+	c := &classifier{functions: map[string]bool{}}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if f, ok := node.(*syntax.FuncDecl); ok {
 			c.functions[f.Name.Value] = true
@@ -100,13 +112,74 @@ func classify(file *syntax.File, firstJob int) (jobs map[int]*syntax.Stmt, piped
 		return true
 	})
 	c.stmts(file.Stmts, toTerminal)
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if p, ok := node.(*syntax.ParamExp); ok && p.Param != nil && p.Param.Value == "!" {
-			p.Param.Value = jobVariable
+	return jobs, c.piped
+}
+
+// leaveAll ends the subshells of file and of the statements its jobs run (leaveSubshells), each once, as each job's statement is a tree of
+// its own.
+func leaveAll(file *syntax.File, jobs map[int]*syntax.Stmt) {
+	leaveSubshells(file)
+	for _, stmt := range jobs {
+		leaveSubshells(stmt)
+	}
+}
+
+// leaveSubshells ends the statements of every subshell, $(...) and <(...) under node with nibash's leave command, which runs the EXIT trap
+// the subshell set as it ends, as bash runs it there and mvdan runs a shell's only (see leaving).
+func leaveSubshells(node syntax.Node) {
+	leave := func() *syntax.Stmt {
+		return &syntax.Stmt{Cmd: &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalLeave)}}}
+	}
+	syntax.Walk(node, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Subshell:
+			n.Stmts = append(n.Stmts, leave())
+		case *syntax.CmdSubst:
+			n.Stmts = append(n.Stmts, leave())
+		case *syntax.ProcSubst:
+			n.Stmts = append(n.Stmts, leave())
 		}
 		return true
 	})
-	return c.jobs, c.piped
+}
+
+// startJobs turns every `X &` in file into `NIBASH_JOB=$(job k)`, with X kept in jobs under k, and makes $! read NIBASH_JOB: wherever it
+// stands, in a function body, a $(...) or the statement of another job too, so each runs as one of nibash's jobs, which wait, kill and jobs
+// know, rather than as mvdan's own background run.
+func startJobs(file *syntax.File) map[int]*syntax.Stmt {
+	jobs := map[int]*syntax.Stmt{}
+	var rewrite func(node syntax.Node)
+	rewrite = func(node syntax.Node) {
+		syntax.Walk(node, func(node syntax.Node) bool {
+			switch n := node.(type) {
+			case *syntax.ParamExp:
+				if n.Param != nil && n.Param.Value == "!" {
+					n.Param.Value = jobVariable
+				}
+			case *syntax.Stmt:
+				if !n.Background {
+					return true
+				}
+				key := len(jobs)
+				job := *n
+				job.Background = false
+				jobs[key] = &job
+				rewrite(&job)
+				start := &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalJob), literal(strconv.Itoa(key))}}
+				n.Background = false
+				n.Redirs = nil
+				n.Negated = false
+				n.Cmd = &syntax.CallExpr{Assigns: []*syntax.Assign{{
+					Name:  &syntax.Lit{Value: jobVariable},
+					Value: &syntax.Word{Parts: []syntax.WordPart{&syntax.CmdSubst{Stmts: []*syntax.Stmt{{Cmd: start}}}}},
+				}}}
+				return false
+			}
+			return true
+		})
+	}
+	rewrite(file)
+	return jobs
 }
 
 func (c *classifier) stmts(list []*syntax.Stmt, out destination) {
@@ -147,10 +220,6 @@ func mergesError(s *syntax.Stmt) bool {
 }
 
 func (c *classifier) stmt(s *syntax.Stmt, out destination) {
-	if s.Background {
-		c.background(s)
-		return
-	}
 	if redirectsOutput(s) {
 		out = toOther
 	}
@@ -189,23 +258,6 @@ func (c *classifier) stmt(s *syntax.Stmt, out destination) {
 		}
 	}
 	// Function bodies run wherever they are called, so their commands stay real; so do commands inside $(...) and <(...).
-}
-
-// background turns `X &` into `NIBASH_JOB=$(job k)`: the job command starts X as a job and prints its spec.
-func (c *classifier) background(s *syntax.Stmt) {
-	key := c.next
-	c.next++
-	job := *s
-	job.Background = false
-	c.jobs[key] = &job
-	start := &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalJob), literal(strconv.Itoa(key))}}
-	s.Background = false
-	s.Redirs = nil
-	s.Negated = false
-	s.Cmd = &syntax.CallExpr{Assigns: []*syntax.Assign{{
-		Name:  &syntax.Lit{Value: jobVariable},
-		Value: &syntax.Word{Parts: []syntax.WordPart{&syntax.CmdSubst{Stmts: []*syntax.Stmt{{Cmd: start}}}}},
-	}}}
 }
 
 func literal(value string) *syntax.Word {
