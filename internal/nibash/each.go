@@ -99,14 +99,14 @@ func (p *eachPlan) shown(inv *invocation, repository string) string {
 	return relative
 }
 
-// argsFor are the arguments with {base} replaced by repository's integration branch: what its nib.json names, else what origin/HEAD
-// points at; skipped says why there is none when an argument needs it.
+// argsFor are the arguments with {base} replaced by repository's integration branch (baseBranch); skipped says why there is none when
+// an argument needs it.
 func (p *eachPlan) argsFor(inv *invocation, repository string) (args []string, skipped string) {
 	base := ""
 	for _, a := range p.args {
 		if strings.Contains(a, eachBase) && base == "" {
 			if base = baseBranch(inv, repository); base == "" {
-				return nil, "no \"base\" in its " + names.ConfigFile + " and no origin/HEAD"
+				return nil, "no \"base\" in its " + names.ConfigFile + ", no upstream of another name and no origin/HEAD"
 			}
 		}
 		args = append(args, strings.ReplaceAll(a, eachBase, base))
@@ -114,9 +114,13 @@ func (p *eachPlan) argsFor(inv *invocation, repository string) (args []string, s
 	return args, ""
 }
 
-// baseBranch is repository's integration branch, "" when it has none.
+// baseBranch is repository's integration branch: what its nib.json names, else the upstream of its branch when that is another branch
+// (a lane tracking the branch it was cut from), else what origin/HEAD points at; "" when it has none.
 func baseBranch(inv *invocation, repository string) string {
 	if base := names.BaseBranch(repository); base != "" {
+		return base
+	}
+	if base := otherUpstream(inv, repository); base != "" {
 		return base
 	}
 	var out bytes.Buffer
@@ -125,6 +129,28 @@ func baseBranch(inv *invocation, repository string) string {
 		return ""
 	}
 	return strings.TrimSpace(out.String())
+}
+
+// otherUpstream is the upstream of repository's checked-out branch when it tracks a branch of another name, "" when it tracks its own
+// name, none, or one that is gone.
+func otherUpstream(inv *invocation, repository string) string {
+	var out bytes.Buffer
+	format := "--format=%(HEAD)%00%(refname)%00%(upstream:short)%00%(upstream:remoteref)%00%(upstream:track)"
+	args := []string{"git", "-C", repository, "for-each-ref", format, "refs/heads/"}
+	if inv.call.runProgramTo(inv.ctx, args, &out, io.Discard, nil) != nil {
+		return ""
+	}
+	for line := range strings.Lines(out.String()) {
+		fields := strings.Split(strings.TrimRight(line, "\n"), "\x00")
+		if len(fields) != 5 || fields[0] != "*" {
+			continue
+		}
+		if fields[2] == "" || fields[3] == fields[1] || fields[4] == "[gone]" {
+			return ""
+		}
+		return fields[2]
+	}
+	return ""
 }
 
 // headedWriter is a command's standard error that sends its output's pending header first, so an error shows under its repository.

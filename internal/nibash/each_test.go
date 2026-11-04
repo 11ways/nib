@@ -52,7 +52,27 @@ func TestGitEachGivesEachRepositoryItsBaseOrSaysWhyItHasNone(t *testing.T) {
 	f.git("-C", "alpha", "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.git("-C", "alpha", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	f.git("-C", "alpha", "commit", "-q", "-am", "second in alpha")
-	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "alpha: second in alpha\nbeta: [skipped: no \"base\" in its nib.json and no origin/HEAD]")
+	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "alpha: second in alpha\nbeta: [skipped: no \"base\" in its nib.json, no upstream of another name and no origin/HEAD]")
+}
+
+func TestGitEachBaseIsTheUpstreamALaneTracksBeforeOriginHEAD(t *testing.T) {
+	f := eachFixture(t)
+	// alpha's lane tracks rewrite, which has a commit main lacks; origin/HEAD is main.
+	skip := "beta: [skipped: no \"base\" in its nib.json, no upstream of another name and no origin/HEAD]"
+	f.git("-C", "alpha", "remote", "add", "origin", "../beta")
+	f.git("-C", "alpha", "update-ref", "refs/remotes/origin/main", "HEAD")
+	f.git("-C", "alpha", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	f.git("-C", "alpha", "commit", "-q", "--allow-empty", "-m", "only on rewrite")
+	f.git("-C", "alpha", "update-ref", "refs/remotes/origin/rewrite", "HEAD")
+	f.git("-C", "alpha", "checkout", "-q", "-b", "lane/x")
+	f.git("-C", "alpha", "branch", "-q", "--set-upstream-to", "origin/rewrite")
+	expect(t, f.run("git-each log --format=%s {base}..HEAD"), skip)
+	f.git("-C", "alpha", "commit", "-q", "--allow-empty", "-m", "on the lane")
+	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "alpha: on the lane\n"+skip)
+	// A branch tracking its own name on the remote is not its base: origin/HEAD is.
+	f.git("-C", "alpha", "update-ref", "refs/remotes/origin/lane/x", "HEAD")
+	f.git("-C", "alpha", "branch", "-q", "--set-upstream-to", "origin/lane/x")
+	expect(t, f.run("git-each log --format=%s {base}..HEAD"), "==> alpha <==\non the lane\nonly on rewrite\n"+skip)
 }
 
 func TestGitEachFailsWhenAnyRepositorysGitFails(t *testing.T) {

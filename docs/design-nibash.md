@@ -286,8 +286,10 @@ anchored row), and when no other follows, it goes out alone on the header's line
 per repository (`git-each status -sb`, `git-each log -1 --format=%s`) reads as a table. Where the output reaches neither
 the model nor a nib command (a file, a real program, `$(...)`) the classifier leaves it a program, and the exec handler
 runs the same plan writing git's lines and the headers as text.
-`{base}` reads `"base"` from the repository's `nib.json` (`names.BaseBranch`, beside `ConfigFile`), else
-`git symbolic-ref refs/remotes/origin/HEAD`. `git rm` and `git clean` are refused, since the trash only takes what
+`{base}` reads `"base"` from the repository's `nib.json` (`names.BaseBranch`, beside `ConfigFile`), else the upstream of
+the checked-out branch when it tracks a branch of another name (a lane cut from `java-rewrite` tracks `origin/java-rewrite`,
+and `origin/HEAD` would list that branch's whole history), else `git symbolic-ref refs/remotes/origin/HEAD`. An upstream
+that is gone or of the branch's own name is passed over. `git rm` and `git clean` are refused, since the trash only takes what
 they delete through `gitTrash`, which writes straight to the call's output and runs one repository. The command rules
 see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to the directories whose rules count.
 
