@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,33 @@ func TestStatusListsCallsInFlightAndJobsWithTheirOutput(t *testing.T) {
 	status = f.shell.Status(owns, 0)
 	if len(status.Commands) != 0 || len(status.Jobs) != 1 || status.Jobs[0].Running || status.Jobs[0].Exit == nil || status.Jobs[0].Ended == 0 || status.Jobs[0].Tail != nil {
 		t.Fatalf("after: %+v", status)
+	}
+}
+
+// A running command's one line of megabytes, as rg prints from a minified bundle, made nibash_status's reply too large for its client.
+func TestStatusBoundsATailOfOneHugeLine(t *testing.T) {
+	f := newFixture(t, nil)
+	owns := func(key any) (string, bool) { return "main", key == "session" }
+	done := make(chan string)
+	go func() {
+		done <- f.call(server.ShellCall{Command: "head -c 3000000 /dev/zero | tr '\\0' a; echo; echo last; sleep 1"})
+	}()
+	var status server.ShellStatus
+	for range 200 {
+		status = f.shell.Status(owns, MaxTail)
+		if len(status.Commands) == 1 && slices.Contains(status.Commands[0].Tail, "last") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	<-done
+	tail := status.Commands[0].Tail
+	size := 0
+	for _, line := range tail {
+		size += len(line)
+	}
+	if !slices.Contains(tail, "last") || size > statusColumns+64 || !strings.HasSuffix(tail[0], " bytes]") {
+		t.Fatalf("tail of %d bytes: %.200q", size, tail)
 	}
 }
 

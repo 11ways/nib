@@ -79,8 +79,9 @@ func (ch *channel) push(ctx context.Context, content string, meta map[string]str
 	return conn.Write(ctx, &jsonrpc.Request{Method: channelMethod, Params: params})
 }
 
-// Transport is t, keeping its connection for channel messages when the server has a channel.
+// Transport is t with no message over maxMessageBytes, keeping its connection for channel messages when the server has a channel.
 func (s *Server) Transport(t mcp.Transport) mcp.Transport {
+	t = boundedTransport{t, maxMessageBytes}
 	if s.channel == nil {
 		return t
 	}

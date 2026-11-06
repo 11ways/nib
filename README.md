@@ -92,11 +92,12 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | `edit` | `input` (a patch, or `REAPPLY TOKEN`) | Edits, creates, copies, moves and deletes files. |
 | `write` | `path`, `content`, optional `tag` | Creates a file, or overwrites one given its current tag. |
 | `nibash` | `command`, optional `description`, `expect`, `timeout`, `background` | Runs a command in nibash. |
-| `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists running commands and jobs; used by the nibash mod. |
+| `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists running commands and jobs, each `tail` from the last 64 KB of output with lines cut at 2000 bytes; used by the nibash mod. |
 | `skim` | `paths[]`, `expect` | Reads long files (logs, test reports) for what `expect` asks, without edit anchors. |
 
 `skim` is offered only with nibash. Tool arguments are lenient: numbers as strings, another tool's argument names
-(`file_path`, `offset`, `limit`), and JSON lists sent as strings are accepted with a note.
+(`file_path`, `offset`, `limit`), and JSON lists sent as strings are accepted with a note. No reply is written over 8 MiB: a larger
+one becomes an error for its call, since Claude Code drops a stdio server that writes 16 MiB without a line break.
 
 ### read
 

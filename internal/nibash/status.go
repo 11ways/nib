@@ -2,6 +2,7 @@ package nibash
 
 import (
 	"cmp"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -17,6 +18,9 @@ const MaxTail = 50
 
 // tailBytes bounds how much of a command's output Status reads to find its last lines.
 const tailBytes = 64 * 1024
+
+// statusColumns is the most of one output line Status gives.
+const statusColumns = engine.LineLimit
 
 // endedShown is how long an ended job stays in Status, so a watcher sees how it ended.
 const endedShown = 10 * time.Minute
@@ -70,7 +74,7 @@ func (s *Shell) Status(owns func(key any) (agent string, ok bool), tail int) ser
 	return status
 }
 
-// tail is the last n lines of what the sink holds, as plain text.
+// tail is the last n lines of what the sink holds, as plain text, from at most its last tailBytes; an entry can be one line of megabytes.
 func (s *sink) tail(n int) []string {
 	s.mu.Lock()
 	var parts []string
@@ -79,6 +83,9 @@ func (s *sink) tail(n int) []string {
 		text := string(s.entries[i].bytes)
 		if r := s.entries[i].record; r != nil {
 			text = r.text + "\n"
+		}
+		if len(text) > tailBytes-size {
+			text = text[len(text)-(tailBytes-size):]
 		}
 		parts = append(parts, text)
 		size += len(text)
@@ -110,7 +117,8 @@ func fileTail(path string, n int) []string {
 	return lastLines(string(data), n)
 }
 
-// lastLines are the last n lines of text, a final line break aside, with control characters and color codes stripped.
+// lastLines are the last n lines of text, a final line break aside, with control characters and color codes stripped and each cut to
+// statusColumns bytes.
 func lastLines(text string, n int) []string {
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
@@ -118,7 +126,11 @@ func lastLines(text string, n int) []string {
 	}
 	lines = lines[max(len(lines)-n, 0):]
 	for i, line := range lines {
-		lines[i] = engine.PlainText(strings.ToValidUTF8(strings.TrimSuffix(line, "\r"), "�"))
+		line = strings.TrimSuffix(line, "\r")
+		if len(line) > statusColumns {
+			line = fmt.Sprintf("%s [cut: %d bytes]", line[:statusColumns], len(line))
+		}
+		lines[i] = engine.PlainText(strings.ToValidUTF8(line, "�"))
 	}
 	return lines
 }
