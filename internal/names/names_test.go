@@ -71,12 +71,12 @@ func TestConfiguredNamesWinAndBadOnesAreNoted(t *testing.T) {
 	isUser = func(name string) bool { return name == "root" }
 	t.Cleanup(func() { isUser = func(string) bool { return false } })
 	mkdir(t, filepath.Join(base, "a/very/long/path/to/the/orm/package"))
-	config := `{"directories": {"orm": "a/very/long/path/to/the/orm/package", "root": "a", "Bad": "a", "gone": "nope"}, "autoDirectories": false}`
+	config := `{"directories": {"orm_pkg": "a/very/long/path/to/the/orm/package", "root": "a", "Bad": "a", "gone": "nope"}, "autoDirectories": false}`
 	if err := os.WriteFile(filepath.Join(base, "nib.json"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	table, notes := Load(base)
-	if len(table.Entries) != 1 || table.Entries[0].Name != "orm" {
+	if len(table.Entries) != 1 || table.Entries[0].Name != "orm_pkg" {
 		t.Fatalf("entries %v", table.Entries)
 	}
 	joined := strings.Join(notes, "\n")

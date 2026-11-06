@@ -8,8 +8,8 @@ import (
 )
 
 func TestMentionedFindsNamesNotPartsOfWordsOrPaths(t *testing.T) {
-	got := Mentioned("see ~w/a.go and (~g), ~my-dir: not a~b, /x/~c, ~/home, ~Foo, ~w_x or ~w again; path:~p/x")
-	if want := []string{"w", "g", "my-dir", "p"}; !slices.Equal(got, want) {
+	got := Mentioned("see ~w/a.go and (~g), ~my-dir, ~w_x: not a~b, /x/~c, ~/home, ~Foo, ~wX or ~w again; path:~p/x")
+	if want := []string{"w", "g", "my-dir", "w_x", "p"}; !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }

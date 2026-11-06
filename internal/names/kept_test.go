@@ -25,7 +25,7 @@ func TestAnAgentKeepsItsNamesUntoldAcrossARestart(t *testing.T) {
 	first := restarted(t, dir, learned, root)
 	first.Persist("main", "claude:session")
 	view := (&Table{Base: root}).For(first, "main")
-	if err := view.Define("w", widgets); err != nil {
+	if err := view.Define("w_x", widgets); err != nil {
 		t.Fatal(err)
 	}
 	untilNamed(t, view, gadgets)
@@ -38,7 +38,7 @@ func TestAnAgentKeepsItsNamesUntoldAcrossARestart(t *testing.T) {
 	second := restarted(t, dir, learned, root)
 	second.Persist("main", "claude:session")
 	again := (&Table{Base: root}).For(second, "main")
-	if shown, _ := again.Display(filepath.Join(widgets, "A.java")); shown != "~w/A.java" {
+	if shown, _ := again.Display(filepath.Join(widgets, "A.java")); shown != "~w_x/A.java" {
 		t.Fatalf("a defined name works at once: %q", shown)
 	}
 	for i := range 5 {
@@ -52,10 +52,10 @@ func TestAnAgentKeepsItsNamesUntoldAcrossARestart(t *testing.T) {
 	// Another agent, and one with no lasting key, get nothing of them.
 	other := restarted(t, dir, learned, root)
 	other.Persist("main", "claude:other")
-	if shown, _ := (&Table{Base: root}).For(other, "main").Display(filepath.Join(widgets, "A.java")); strings.HasPrefix(shown, "~w") {
+	if shown, _ := (&Table{Base: root}).For(other, "main").Display(filepath.Join(widgets, "A.java")); strings.HasPrefix(shown, "~w_x") {
 		t.Fatalf("another key's agent: %q", shown)
 	}
-	if shown, _ := (&Table{Base: root}).For(restarted(t, dir, learned, root), "main").Display(filepath.Join(widgets, "A.java")); strings.HasPrefix(shown, "~w") {
+	if shown, _ := (&Table{Base: root}).For(restarted(t, dir, learned, root), "main").Display(filepath.Join(widgets, "A.java")); strings.HasPrefix(shown, "~w_x") {
 		t.Fatalf("an agent with no key: %q", shown)
 	}
 }

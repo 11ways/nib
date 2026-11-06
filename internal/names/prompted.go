@@ -17,10 +17,10 @@ func Mentioned(text string) []string {
 			continue
 		}
 		end := i + 1
-		for end < len(text) && (text[end] >= 'a' && text[end] <= 'z' || text[end] >= '0' && text[end] <= '9' || text[end] == '-') {
+		for end < len(text) && (text[end] >= 'a' && text[end] <= 'z' || text[end] >= '0' && text[end] <= '9' || text[end] == '-' || text[end] == '_') {
 			end++
 		}
-		if end < len(text) && (text[end] >= 'A' && text[end] <= 'Z' || text[end] == '_') {
+		if end < len(text) && text[end] >= 'A' && text[end] <= 'Z' {
 			continue
 		}
 		if name := text[i+1 : end]; valid.MatchString(name) && !slices.Contains(found, name) {

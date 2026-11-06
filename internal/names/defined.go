@@ -269,12 +269,12 @@ func (v *View) Home(name string) (string, bool) { return v.table().Home(name) }
 func (v *View) Entries() []Entry { return slices.Clone(v.table().Entries) }
 
 // Define makes name stand for directory, an absolute path, for this agent and the agents it spawns from now on. A name is lowercase letters,
-// digits and dashes starting with a letter; a user's name on this machine, whose home ~name already means, and a name of the server's own
+// digits, underscores and dashes starting with a letter; a user's name on this machine, whose home ~name already means, and a name of the server's own
 // table are refused. directory must be an existing directory; it is kept canonical.
 func (v *View) Define(name, directory string) error {
 	switch {
 	case !valid.MatchString(name):
-		return errors.New("a name is lowercase letters, digits and dashes, starting with a letter")
+		return errors.New("a name is lowercase letters, digits, underscores and dashes, starting with a letter")
 	case v.server != nil && slices.ContainsFunc(v.server.Entries, func(e Entry) bool { return e.Name == name }):
 		return fmt.Errorf("~%s is one of nib's own named directories, which cannot be redefined", name)
 	case isUser(name):

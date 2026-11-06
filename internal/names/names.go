@@ -32,7 +32,7 @@ const (
 	walkFolders  = 20000
 )
 
-var valid = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var valid = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // skipped are folders the automatic walk never enters: build output and package caches.
 var skipped = map[string]bool{"node_modules": true, "build": true, "target": true, "dist": true, "out": true, "bin": true}
@@ -94,7 +94,7 @@ func Load(directory string) (*Table, []string) {
 		canonical, err := filepath.EvalSymlinks(path)
 		switch {
 		case !valid.MatchString(name):
-			notes = append(notes, fmt.Sprintf("~%s skipped: a name is lowercase letters, digits and dashes, starting with a letter", name))
+			notes = append(notes, fmt.Sprintf("~%s skipped: a name is lowercase letters, digits, underscores and dashes, starting with a letter", name))
 		case isUser(name):
 			notes = append(notes, fmt.Sprintf("~%s skipped: it is a user on this machine, whose home ~%s already names", name, name))
 		case err != nil:

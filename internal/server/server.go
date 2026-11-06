@@ -87,6 +87,8 @@ type Shell interface {
 	// Shape is what nibash shows of the log at path, another tool's run of command with description, ended with exit; the path is judged as
 	// a read's is, and the lines it shows count as every agent's skim of the log.
 	Shape(ctx context.Context, path, command, description string, exit int, tools *engine.Context) (string, error)
+	// ShapeFind selects or summarizes a complete file listing within limit; empty means use the engine's compact listing.
+	ShapeFind(ctx context.Context, lines []string, expect string, limit int) string
 }
 
 // ShellStatus is what nibash runs for one client: the commands still in their call and the jobs, oldest first.
@@ -300,7 +302,7 @@ func New(options Options) *Server {
 	always := mcp.Meta{"anthropic/alwaysLoad": true}
 	s.AddTool(&mcp.Tool{Name: "read", Description: readDescription, InputSchema: json.RawMessage(readSchema), Annotations: readOnly, Meta: always}, s.handle(s.read, false))
 	s.AddTool(&mcp.Tool{Name: "grep", Description: grepDescription, InputSchema: json.RawMessage(grepSchema), Annotations: readOnly, Meta: always}, s.handle(s.grep, false))
-	s.AddTool(&mcp.Tool{Name: "find", Description: findDescription, InputSchema: json.RawMessage(findSchema), Annotations: readOnly, Meta: always}, s.handle(s.find, false))
+	s.AddTool(&mcp.Tool{Name: "find", Description: findDescription, InputSchema: json.RawMessage(findSchema(options.Shell != nil && options.Shell.Expects())), Annotations: readOnly, Meta: always}, s.handle(s.find, false))
 	s.AddTool(&mcp.Tool{Name: "edit", Description: EditDescription, InputSchema: json.RawMessage(editSchema), Annotations: writes, Meta: always}, s.handle(s.edit, true))
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
@@ -1204,6 +1206,18 @@ func (s *Server) find(ctx *engine.Context, args arguments, notes *[]string, _ *c
 	findArgs.Sort = sortBy
 	if findArgs.Skip, err = args.number("skip", 0); err != nil {
 		return engine.Result{}, err
+	}
+	if findArgs.Limit, err = args.number("limit", 1); err != nil {
+		return engine.Result{}, err
+	}
+	expect, _, err := args.text("expect")
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if expect = strings.TrimSpace(expect); expect != "" && s.options.Shell != nil && s.options.Shell.Expects() {
+		findArgs.Shape = func(lines []string, limit int) string {
+			return s.options.Shell.ShapeFind(ctx.Ctx, lines, expect, limit)
+		}
 	}
 	return s.engine.Find(ctx, findArgs)
 }

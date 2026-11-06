@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// rollupRows is the most rows a rolled-up listing shows: folders are opened, the biggest first, while their files and subfolders fit.
+// rollupRows is the default target for a compact listing; a find limit overrides it.
 const rollupRows = 30
 
 // folderNode is a folder of a rolled-up listing, path ending in a slash, with what lies at and below it.
@@ -34,8 +34,8 @@ type rollupEntry struct {
 // rollup lays out more files than a page holds as the shape of their folders, so a listing too long to read says where its files are: rows
 // for the files of opened folders and one row for each folder left closed, with its count, ordered as the listing sorts. described says the
 // files carry their size and age, which a closed folder then sums up. rows are nil when the folder every file lies in holds more files and
-// folders than rollupRows, which only paging shows.
-func rollup(ctx *Context, files []listedFile, sortBy string, described bool) (rows []listedRow, shown []string) {
+// folders than the budget, which only paging shows.
+func rollup(ctx *Context, files []listedFile, sortBy string, described bool, budget int) (rows []listedRow, shown []string) {
 	root := &folderNode{folders: map[string]*folderNode{}, described: described}
 	for _, file := range files {
 		parts := strings.Split(ctx.relativeDisplay(file.name), "/")
@@ -72,13 +72,13 @@ func rollup(ctx *Context, files []listedFile, sortBy string, described bool) (ro
 		return entries
 	}
 	entries := open(compress(root))
-	if len(entries) > rollupRows {
+	if len(entries) > budget {
 		return nil, nil
 	}
 	for {
 		best := -1
 		for i, entry := range entries {
-			if entry.folder != nil && len(entries)-1+len(open(entry.folder)) <= rollupRows && (best < 0 || entry.folder.count > entries[best].folder.count) {
+			if entry.folder != nil && len(entries)-1+len(open(entry.folder)) <= budget && (best < 0 || entry.folder.count > entries[best].folder.count) {
 				best = i
 			}
 		}

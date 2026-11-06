@@ -82,7 +82,7 @@ func beforeOperands(args []string) []string {
 // budget stays whole. A decision model and a summarizer read the output deduplicated (dedupe); the agent still gets its real rows. Joined
 // skim output is cut file by file (assemble, fairFixed).
 func shape(ctx context.Context, rows []row, raw string, log saved, d decision) []row {
-	over := overBudget(rows)
+	over := overBudget(rows) || d.limit > 0 && len(rows) > d.limit
 	files := grouped(rows, log)
 	// Plain output under file headers, as a skimmed diff, is cut as nib's own file rows are.
 	plain := !slices.ContainsFunc(rows, func(r row) bool { return !r.plain }) && (files == nil || files.joined)
@@ -96,6 +96,9 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 		entries, legend = dedupe(lines)
 	}
 	from, to := chosenSpan(rows, files)
+	if d.limit > 0 {
+		from, to = 0, len(rows)
+	}
 	decide := func() decider.Choice {
 		return choose(ctx, rows[from:to], entries, legend, d, model)
 	}
@@ -108,6 +111,13 @@ func shape(ctx context.Context, rows []row, raw string, log saved, d decision) [
 	cut := func(choice *decider.Choice, notes ...string) []row {
 		if !over {
 			return rows
+		}
+		if d.limit > 0 {
+			if choice == nil && d.decider != nil {
+				c := decide()
+				choice = &c
+			}
+			return findSelection(rows, choice, log, d.limit)
 		}
 		if from == to || d.decider == nil || !plain && (files == nil || files.joined || !model || d.purpose == "" && d.expect == "") {
 			switch {

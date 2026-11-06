@@ -53,6 +53,24 @@ func TestHashDefinesListsAndRefusesNamedDirectories(t *testing.T) {
 	}
 }
 
+func TestUnderscoreNamesExpandInCommandsAndNestedShells(t *testing.T) {
+	directory := agentDirectory(t)
+	sub := filepath.Join(directory, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := connectNamed(t, directory, nil, func(string) hookstate.Agent { return hookstate.Agent{} })
+	expect(t, run("toolu_define", "hash -d claude_fix=sub"), "[~claude_fix now names "+sub+"]")
+	expect(t, run("toolu_expand", "echo ~claude_fix/a '~claude_fix/a'"), sub+"/a ~claude_fix/a")
+	expect(t, run("toolu_nested", `sh -c 'echo ~claude_fix/a'`), sub+"/a")
+	if got := run("toolu_read", "cat ~claude_fix/a.txt"); !strings.Contains(got, "[~claude_fix/a.txt#") || !strings.Contains(got, "1:one") {
+		t.Fatalf("named file view: %s", got)
+	}
+}
+
 func TestADefinitionIsTheDefinersAndLaterSubagentsOnly(t *testing.T) {
 	directory := agentDirectory(t)
 	for _, folder := range []string{"early", "late", "mine", "sibling"} {

@@ -88,7 +88,7 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | --- | --- | --- |
 | `read` | `paths[]`, optional `maxLineLength`, `plain`, `collapse`, `info`, `full` | Files, ranges, declarations, directories, images, revisions and SQLite tables. |
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search; match rows are edit anchors; `replace` previews a replacement. |
-| `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip` | Lists files with line counts, sizes and ages. |
+| `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip`, `limit`, `expect` | Lists files with line counts, sizes and ages. |
 | `edit` | `input` (a patch, or `REAPPLY TOKEN`) | Edits, creates, copies, moves and deletes files. |
 | `write` | `path`, `content`, optional `tag` | Creates a file, or overwrites one given its current tag. |
 | `nibash` | `command`, optional `description`, `expect`, `timeout`, `background` | Runs a command in nibash. |
@@ -129,8 +129,8 @@ Without a selector:
 
 In Java and Kotlin, runs of 10 or more imports print as a package tree. A call's output is capped at 40 KiB, shared
 fairly between its files. Lines over `maxLineLength` (default 2000) print as `[line N, chars 1-2000 of M]|...`, which
-is not an anchor; `maxLineLength` goes up to 2 MiB. Text files are limited to 8 MiB. Images (PNG, JPEG, GIF, WebP) are
-returned as image content, scaled down to what the model sees; PDFs are refused.
+is not an anchor; values above 2 MiB clamp to that limit. Text files are limited to 8 MiB. Images (PNG, JPEG, GIF,
+WebP) are returned as image content, scaled down to what the model sees; PDFs are refused.
 
 - `plain: true` prints lines without numbers or tag, strips color codes and collapses repeats; it has no size limit and
   suits logs.
@@ -181,8 +181,19 @@ README.md (189 lines, 16.1 KiB, 1h ago)
 ```
 
 Lists the files grep would search. `glob` filters by name, `minSize` (`20k`, `1.5M`) and `newer` (`30m`, `2h`, `3d`)
-by size and age, `sort` is `path`, `size` or `modified`. Pages hold 200 files; a larger listing without `skip` shows
-folders with their file counts instead. Each folder is printed once, with its files indented under it.
+by size and age, `sort` is `path`, `size` or `modified`. Without `skip`, large listings show folders with their file
+counts. Set `skip: 0` for individual files, then use the returned offset to continue. Pages hold at most 200 files;
+each folder is printed once, with its files indented under it.
+
+`limit: 20` targets 20 output lines, not 20 matches searched: it reduces the folder overview or individual-file page.
+Counts and continuation notes may add a few lines. Values above 200 clamp to 200. Continuation offsets count files,
+not folder headers or summary lines.
+
+When a decision model or summarizer is configured, `expect` says what to locate or learn. With `skip` omitted, a
+listing past the target (30 lines by default) can be selected or summarized from the complete filtered inventory,
+not just its first page. The output links to that inventory as a saved log. A failed model, or one that needs every
+file, falls back to the deterministic listing; explicit pages bypass model selection. No model is called without
+`expect`. For example: `find {"paths":"src","limit":20,"expect":"where authentication is implemented"}`.
 
 ### edit
 
@@ -356,6 +367,9 @@ programs receive the real path. They come from:
   in `~/.local/state/nib/names/` for later ones. `NIB_AUTO_NAMES=0` turns this off.
 - An agent's names of both kinds survive a restart of nib (kept in `~/.local/state/nib/agents/`), so its paths keep
   printing under them and it is not told of them again, unless its context was compacted or cleared since.
+
+Names start with a lowercase letter and can contain lowercase letters, digits, underscores and dashes:
+`hash -d claude_fix=/path/to/project` defines `~claude_fix/` exactly as written.
 
 ## Agents and seen lines
 

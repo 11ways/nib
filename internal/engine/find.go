@@ -22,6 +22,9 @@ type FindArgs struct {
 	Newer    *string
 	Sort     string
 	Skip     *int
+	Limit    *int
+	// Shape may select or summarize the complete inventory; empty keeps the deterministic listing.
+	Shape func(lines []string, limit int) string
 }
 
 type listedFile struct {
@@ -145,6 +148,10 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		}
 		return found, nil
 	}
+	var caps []string
+	limit := capped("limit", args.Limit, findFiles, &caps)
+	pageSize, target := valueOr(limit, findFiles), valueOr(limit, rollupRows)
+	out.notes = append(caps, out.notes...)
 	skip := valueOr(args.Skip, 0)
 	// Without a filter or a sort by size or age, only the page needs its files looked at.
 	whole := minSize != nil || newer != nil || sortBy != "path"
@@ -175,7 +182,7 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 	// too many in one folder for that are paged.
 	var rows []listedRow
 	rolled := false
-	if args.Skip == nil && total > findFiles {
+	if args.Skip == nil && total > pageSize {
 		files := matching
 		if !whole {
 			files = make([]listedFile, len(names))
@@ -184,7 +191,15 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 			}
 		}
 		var shownFiles []string
-		rows, shownFiles = rollup(ctx, files, sortBy, whole)
+		for budget := target; budget > 0; {
+			rows, shownFiles = rollup(ctx, files, sortBy, whole, budget)
+			_, lines := grouped(rows)
+			if limit == nil || len(lines) <= target {
+				break
+			}
+			budget -= max(1, len(lines)-target)
+			rows = nil
+		}
 		if rolled = rows != nil; rolled {
 			ctx.preview(shownFiles)
 		}
@@ -192,9 +207,9 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 	if !rolled {
 		var page []listedFile
 		if whole {
-			page = matching[min(skip, len(matching)):min(skip+findFiles, len(matching))]
+			page = matching[min(skip, len(matching)):min(skip+pageSize, len(matching))]
 		} else {
-			page, err = describe(names[min(skip, len(names)):min(skip+findFiles, len(names))])
+			page, err = describe(names[min(skip, len(names)):min(skip+pageSize, len(names))])
 			if err != nil {
 				return Result{}, err
 			}
@@ -249,6 +264,15 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		left -= len(rows[shown].path+rows[shown].after) + 1
 		shown++
 	}
+	if limit != nil {
+		for shown > 1 {
+			_, lines := grouped(rows[:shown])
+			if len(lines) <= target {
+				break
+			}
+			shown--
+		}
+	}
 	under, lines := grouped(rows[:shown])
 	if under != "" {
 		head += " under " + under
@@ -259,6 +283,25 @@ func (e *Engine) Find(ctx *Context, args FindArgs) (Result, error) {
 		parts = append(parts, "[a folder of many files shows as one row with their count; find it for its files, or skip 0 lists every file]")
 	case skip+shown < total:
 		parts = append(parts, more(shown))
+	}
+	if args.Shape != nil && args.Skip == nil && total > target {
+		inventory := make([]string, total)
+		if whole {
+			for i, item := range matching {
+				inventory[i] = fmt.Sprintf("%s (%s, %s ago)", ctx.relativeDisplay(item.name), formatSize(item.size), formatAge(item.modified))
+			}
+		} else {
+			for i, name := range names {
+				inventory[i] = ctx.relativeDisplay(name)
+			}
+		}
+		if shaped := args.Shape(inventory, target); shaped != "" {
+			// The inventory uses whole paths, not paths relative to the deterministic listing's head.
+			parts = []string{strings.TrimSuffix(head, " under "+under), shaped}
+		}
+		if err := ctx.Ctx.Err(); err != nil {
+			return Result{}, err
+		}
 	}
 	return Result{Text: strings.Join(append(parts, out.notes...), "\n\n")}, nil
 }

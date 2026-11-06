@@ -228,6 +228,8 @@ type decision struct {
 	recall *recall
 	// teach says whether the agent is to learn a lesson now, marking it learned; render sets it for its agent, and nil teaches every time.
 	teach func(lesson string) bool
+	// limit is a find listing's target rows; zero uses the shell's normal output policy.
+	limit int
 }
 
 // asked names the purpose in notes: the call's description, or what the agent expects when it gave only that or read with skim.
@@ -740,10 +742,16 @@ type saved struct {
 	file         bool
 	files        int
 	base         int
+	// limit bounds a find summary's passages; tool names its retrieval notes.
+	limit int
+	tool  string
 }
 
 // note is a row of nib's own about the log.
 func (l saved) note(text string) string {
+	if l.tool != "" {
+		return "[" + l.tool + ": " + text + "]"
+	}
 	if l.file || l.files > 0 {
 		return "[" + engine.Skim + ": " + text + "]"
 	}
@@ -766,6 +774,9 @@ func (l saved) whole() string {
 func (l saved) passages() (rows, bytes int) {
 	files := max(1, l.files)
 	bytes = min(budgetBytes*2/3, passageBytes*files)
+	if l.limit > 0 {
+		return max(1, l.limit-1), bytes
+	}
 	return min(summaryRows*files, bytes*2/passageColumns), bytes
 }
 

@@ -504,6 +504,10 @@ func (f *fakeShell) Shape(_ context.Context, path, command, description string, 
 	return fmt.Sprintf("shaped %s for %q, %q exit %d", path, description, command, exit), nil
 }
 
+func (f *fakeShell) ShapeFind(_ context.Context, _ []string, _ string, _ int) string {
+	return ""
+}
+
 func (f *fakeShell) SetSummaries(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
