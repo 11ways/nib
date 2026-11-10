@@ -123,8 +123,9 @@ Zig, and as blocks and snippets in Hawkeye (`.hwk`) templates.
 
 Without a selector:
 
-- Files over 500 lines or 20 KiB (code over 200 lines or 8 KiB) return an outline: real rows for top-level lines and
-  first-level members. Flat data (logs, CSV, JSON) returns its first 100 lines instead.
+- Files over 500 lines or 20 KiB return an outline: real rows for top-level lines and first-level members. So does code
+  whose whole read would print more than 12 KiB, with imports folded and lines you hold as markers, when its outline
+  prints at most a third of that. Flat data (logs, CSV, JSON) returns its first 100 lines instead.
 - Lockfiles, minified or bundled files and files in `node_modules/` or `dist/` over 4 KiB are skipped with their size.
 - A SQLite database lists its tables, columns and row counts.
 

@@ -201,15 +201,27 @@ describe("large reads", () => {
     expect((await f.read(":1-")).anchors).toHaveLength(lines.length - 1)
   })
 
-  test("code past 200 lines gets its outline when that is at most a third of the file; flat data and dense code stay whole", async () => {
-    const outlined = await fixture(source(50))
+  test("code whose whole read would print past 12 KiB gets its outline when that prints at most a third of it; flat data, dense code and folded imports stay whole", async () => {
+    const wide = (members: number) => source(members).replaceAll("const doubled = value", `const doubled = value /* ${"w".repeat(40)} */`)
+    const outlined = await fixture(wide(90))
     expect((await outlined.read()).text.split("\n")[0]).toEndWith("outline only. Read the ranges you need, like file.txt:120-180, or file.txt:1- for everything.")
+    const middling = await fixture(source(50))
+    expect((await middling.read()).anchors).toHaveLength(source(50).split("\n").length - 1)
     const small = await fixture(source(36))
     expect((await small.read()).anchors).toHaveLength(source(36).split("\n").length - 1)
     const flat = Array.from({ length: 300 }, (_, index) => `row ${index}`).join("\n") + "\n"
     expect((await (await fixture(flat)).read()).anchors).toHaveLength(300)
-    const dense = "export class Dense {\n" + Array.from({ length: 70 }, (_, index) => `  m${index}() {\n  }\n`).join("\n") + "}\n"
+    const dense = "export class Dense {\n" + Array.from({ length: 140 }, (_, index) => `  m${index}() {\n  }\n`).join("\n") + "}\n"
     expect((await (await fixture(dense)).read()).anchors).toHaveLength(dense.split("\n").length - 1)
+    const imports = Array.from({ length: 300 }, (_, index) => `import com.example.module${index % 30}.feature.Klass${index};`)
+    const body = ["", "public class Holder {", ...Array.from({ length: 12 }, (_, index) => [`  void m${index}() {`, "  }"]).flat(), "}"]
+    const java = await fixture()
+    const file = path.join(java.directory, "Holder.java")
+    await writeFile(file, [...imports, ...body].join("\n") + "\n")
+    const read = (await java.read("", { file })).text
+    expect(read).not.toContain("outline only")
+    expect(read).toContain("imports as a package tree")
+    expect(read).toContain("  void m11() {")
   })
 
   test("outlines skip comments, multi-line strings and signature tails, and list class members of any language", async () => {
@@ -1852,6 +1864,10 @@ describe("grep options", () => {
     const plain = (await g.engine.grep(g.ctx, { pattern: "hit" })).text
     expect(plain).not.toContain("miss")
     expect(plain).toEndWith("\n\n[all 50 match rows shown, without context lines: around all 50 they would be 99 lines, over grep's budget of 40; ask with before or after for some around the first matches, or read file.txt:2-150]")
+    // With no context asked for, there is none to leave out and no note saying so, however many the matches.
+    const bare = (await g.engine.grep(g.ctx, { pattern: "hit", before: 0, after: 0 })).text
+    expect(bare).not.toContain("miss")
+    expect(bare).not.toContain("match rows shown")
     // hit 5 to hit 25 of the first file: few enough for the default context.
     expect((await f.engine.grep(f.ctx, { pattern: "hit ([5-9]|1[05]|2[05])$" })).text).toContain("\n 4:miss 4\n*5:hit 5\n 6:miss 6\n 9:miss 9\n*10:hit 10\n")
   })

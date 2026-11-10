@@ -18,9 +18,9 @@ const jsSpace = `[\t\n\v\f\r \x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{2
 const (
 	outlineLines = 500
 	outlineBytes = 20 * 1024
-	// Code past these gets an outline too, when one parses and is at most a third of the file; flat data waits for outlineLines.
-	codeOutlineLines  = 200
-	codeOutlineBytes  = 8 * 1024
+	// Code whose whole read would print past this gets an outline too, when one parses and prints at most a third of that read;
+	// flat data waits for outlineLines.
+	codeOutlineBytes  = 12 * 1024
 	outlineRows       = 150
 	outlineMinRows    = 5
 	headLines         = 100

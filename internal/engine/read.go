@@ -680,6 +680,15 @@ type blockRow struct {
 	marks
 }
 
+// printedBytes is what rows print, a newline each.
+func printedBytes(rows []blockRow) int {
+	n := 0
+	for _, r := range rows {
+		n += len(r.text) + 1
+	}
+	return n
+}
+
 // block is one displayable read entry; rows compete for the shared budget, while head and the footer always print.
 type block struct {
 	head   string
@@ -1622,7 +1631,16 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 					},
 				}, nil
 			}
-		} else if large || total > codeOutlineLines || size > codeOutlineBytes {
+		} else if large || size+total*(len(itoa(total))+1) > codeOutlineBytes {
+			// What a whole read would print, with imports folded and held lines as markers, is what an outline saves against.
+			whole := 0
+			if !large {
+				every := make([]blockRow, total)
+				for i := range every {
+					every[i] = rowFor(i + 1)
+				}
+				whole = printedBytes(held(every))
+			}
 			s := outline(t.display, anchored.Lines)
 			anchors := 0
 			for _, r := range s.rows {
@@ -1636,17 +1654,17 @@ func (e *Engine) textBlock(ctx *Context, t *target, source *text, sel selection,
 					nonBlank++
 				}
 			}
-			// Flat data (logs, CSV, lists) puts nearly every line at the top level; its head says more than such an "outline".
-			if anchors >= outlineMinRows && s.candidates*2 <= nonBlank && (large || len(s.rows)*3 <= total) {
-				rows := make([]blockRow, len(s.rows))
-				for i, r := range s.rows {
-					if r.line > 0 {
-						rows[i] = rowFor(r.line)
-					} else {
-						rows[i] = blockRow{text: r.text}
-					}
+			rows := make([]blockRow, len(s.rows))
+			for i, r := range s.rows {
+				if r.line > 0 {
+					rows[i] = rowFor(r.line)
+				} else {
+					rows[i] = blockRow{text: r.text}
 				}
-				rows = held(rows)
+			}
+			rows = held(rows)
+			// Flat data (logs, CSV, lists) puts nearly every line at the top level; its head says more than such an "outline".
+			if anchors >= outlineMinRows && s.candidates*2 <= nonBlank && (large || whole > codeOutlineBytes && printedBytes(rows)*3 <= whole) {
 				return &block{
 					head: fmt.Sprintf("%s %s; outline only. Read the ranges you need, like %s:120-180, or %s:1- for everything.", head, sizeText, name, name),
 					rows: rows,
