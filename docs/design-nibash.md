@@ -309,11 +309,17 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
 - **`kill`, `jobs` and `wait`** are interp builtins that mvdan does not support for real processes (`builtin.go:1026`).
   nibash's `CallHandler` renames them to its own commands, also after `builtin` or `command`, which act on real process
   groups and on the job table (section 5.7) [B2].
-- **`printf`** is mvdan's builtin only where it prints what bash's does (`printf.go`, pinned against bash by
-  `printf_test.go`): plain text and escapes, `%s`, `%d`, `%i`, `%u`, `%o`, `%x` with the flags and widths mvdan reads as
-  C does, `%b` and `%c` of plain operands. Any other form (`%q`, `%f`, precision, `%*d`, `%(...)T`, a number bash reads
-  otherwise, such as `'a` or `1_000`) runs real bash's `printf`, and `printf -v NAME` assigns through `eval` in the
-  caller's scope, a function's local variable included; mvdan's builtin has no `-v` at all.
+- **`printf`** is bash 5.3's, formatted by nibash (`printf.go`) and printed through mvdan's `%s`, since mvdan's own lacks
+  most of bash's forms. It covers the escapes of a format and of `%b` (`\c` ends all output there), `%s`, `%b`, `%q`,
+  `%Q`, `%c`, the integer conversions with every flag, `*` widths and precisions, bash's numbers (`'a`, octal, hex,
+  white space before, a missing operand as 0), and `%e`, `%f` and `%g` as glibc formats a long double: the operand is
+  read exactly (`big.Rat`), rounded to a 64-bit mantissa and printed exactly, half to even, on linux/amd64, the one
+  platform checked against bash. What depends on the locale or the machine goes to real bash's `printf`: float input
+  outside the C numeric locale (bash reads `2.25` as invalid under `nl_BE`), text past ASCII under a width, precision
+  or `%q`, `\u` past ASCII outside UTF-8, floats on other platforms, and also every error bash reports, `%a`,
+  `%(...)T`, the `'` flag and glibc's `%#g` after a carry (`1.e+06`). `printf -v NAME` assigns through `eval` in the
+  caller's scope. `printf_test.go` compares 1,700 written forms in three locales and 66,000 seeded random numbers with
+  bash byte for byte, and pins which forms nibash formats itself.
 - **Deleting commands** (`rm`, `unlink`, `git rm`, `git clean`, `find -delete`) and nibash's `trash list` /
   `trash restore` are caught in the exec handler before classification matters, wherever their output goes, so what they
   delete goes to the user's trash (`internal/trash`, shared with `edit`'s `REM`; the record of what this server
