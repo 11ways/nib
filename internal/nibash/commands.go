@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/11ways/nib/internal/engine"
 )
@@ -260,7 +261,7 @@ func prepareEdge(tail bool, args []string) (plan, error) {
 		n, ok := count(value)
 		if !ok {
 			// head -c -N (all but the last N bytes) and suffixes like 5K are left to the real program.
-			return nil, errUnsupported
+			return nil, unsupported("a count such as -N or 5K")
 		}
 		p.count, p.from, p.butLast, p.bytes = n, from, butLast, o.name == "c"
 	}
@@ -518,7 +519,7 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 	case digits > 0:
 		line, ok := count(script[:digits])
 		if !ok || (line == 0 && !end) {
-			return sedAddress{}, "", errUnsupported
+			return sedAddress{}, "", unsupported("a sed address of line 0")
 		}
 		return sedAddress{line: line}, script[digits:], nil
 	case end && strings.HasPrefix(script, "$"):
@@ -526,7 +527,7 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 	case end && strings.HasPrefix(script, "+"):
 		address, rest, err := sedAddressOf(script[1:], d, true)
 		if err != nil || address.last || address.more || address.re != nil {
-			return sedAddress{}, "", errUnsupported
+			return sedAddress{}, "", unsupported("a sed addr,+N whose N is not a line count")
 		}
 		address.more = true
 		return address, rest, nil
@@ -535,12 +536,12 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 		for i := 1; i < len(script); i++ {
 			switch c := script[i]; {
 			case c == '\n':
-				return sedAddress{}, "", errUnsupported
+				return sedAddress{}, "", unsupported("a newline inside a sed pattern")
 			case c == '\\' && i+1 < len(script):
 				i++
 				next := script[i]
 				if (next >= 'a' && next <= 'z' || next >= 'A' && next <= 'Z') && !strings.ContainsRune(sedEscapes, rune(next)) {
-					return sedAddress{}, "", errUnsupported
+					return sedAddress{}, "", unsupported(`the sed escape \` + string(next))
 				}
 				if next != '/' {
 					pattern.WriteByte('\\')
@@ -549,11 +550,11 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 			case c == '/':
 				// An empty pattern is the last one sed matched, which only sed knows.
 				if pattern.Len() == 0 {
-					return sedAddress{}, "", errUnsupported
+					return sedAddress{}, "", unsupported("the empty sed pattern //")
 				}
 				expression, err := translate(pattern.String(), d)
 				if err != nil {
-					return sedAddress{}, "", errUnsupported
+					return sedAddress{}, "", err
 				}
 				rest := script[i+1:]
 				if strings.HasPrefix(rest, "I") {
@@ -561,7 +562,7 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 				}
 				re, err := regexp.Compile(expression)
 				if err != nil {
-					return sedAddress{}, "", errUnsupported
+					return sedAddress{}, "", unsupported("a sed pattern RE2 does not compile")
 				}
 				return sedAddress{re: re}, rest, nil
 			default:
@@ -569,7 +570,7 @@ func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error
 			}
 		}
 	}
-	return sedAddress{}, "", errUnsupported
+	return sedAddress{}, "", unsupported("a sed address nib's own lacks, such as $ alone, first~step or \\cREc")
 }
 
 // sedPrints are the p commands of script, the only ones nib's sed runs; anything else in it is errUnsupported.
@@ -594,13 +595,22 @@ func sedPrints(script string, d dialect) ([]sedPrint, error) {
 		}
 		script = strings.TrimLeft(script, " \t")
 		if !strings.HasPrefix(script, "p") {
-			return nil, errUnsupported
+			return nil, unsupported("the sed command " + sedCommandName(script))
 		}
 		if script = strings.TrimLeft(script[1:], " \t"); script != "" && script[0] != ';' && script[0] != '\n' {
-			return nil, errUnsupported
+			return nil, unsupported("more after a sed p command than ; or a newline")
 		}
 		prints = append(prints, p)
 	}
+}
+
+// sedCommandName is the command script starts with, for the fallback log: its letter, or "nothing" at the end of the script.
+func sedCommandName(script string) string {
+	if script == "" {
+		return "nothing (an address alone)"
+	}
+	r, _ := utf8.DecodeRuneInString(script)
+	return string(r)
 }
 func prepareSed(name string, args []string) (plan, error) {
 	options, operands, err := parseOptions(optionSpec{flags: "nEr", values: "e", long: map[string]string{"quiet": "n", "silent": "n", "expression=": "e", "regexp-extended": "E"}}, args)
@@ -620,11 +630,11 @@ func prepareSed(name string, args []string) (plan, error) {
 		}
 	}
 	if !quiet {
-		return nil, errUnsupported
+		return nil, unsupported("sed without -n")
 	}
 	if len(scripts) == 0 {
 		if len(operands) == 0 {
-			return nil, errUnsupported
+			return nil, unsupported("sed without a script")
 		}
 		scripts, operands = operands[:1], operands[1:]
 	}
@@ -637,7 +647,7 @@ func prepareSed(name string, args []string) (plan, error) {
 		p.prints = append(p.prints, prints...)
 	}
 	if len(p.prints) == 0 {
-		return nil, errUnsupported
+		return nil, unsupported("a sed script that prints nothing")
 	}
 	return p, nil
 }
@@ -933,7 +943,7 @@ func prepareGrep(name string, args []string) (plan, error) {
 		case "m", "A", "B", "C":
 			n, ok := count(o.value)
 			if !ok {
-				return nil, errUnsupported
+				return nil, unsupported("a -" + o.name + " count nib's own does not read")
 			}
 			switch o.name {
 			case "m":
@@ -956,13 +966,13 @@ func prepareGrep(name string, args []string) (plan, error) {
 			p.excludeDir = append(p.excludeDir, o.value)
 		case "color", "colour":
 			if o.value != "never" && o.value != "auto" {
-				return nil, errUnsupported
+				return nil, unsupported("option --color=" + o.value)
 			}
 		}
 	}
 	if len(p.patterns) == 0 {
 		if len(operands) == 0 {
-			return nil, errUnsupported
+			return nil, unsupported("grep without a pattern")
 		}
 		p.patterns, operands = strings.Split(operands[0], "\n"), operands[1:]
 	}
@@ -971,11 +981,11 @@ func prepareGrep(name string, args []string) (plan, error) {
 		if errors.Is(err, errUntranslatable) {
 			return nil, err
 		}
-		return nil, errUnsupported
+		return nil, unsupported("a pattern nib's own cannot run")
 	}
 	if p.recursive {
 		if _, err := exec.LookPath("rg"); err != nil {
-			return nil, errUnsupported
+			return nil, unsupported("grep -r without rg on PATH")
 		}
 	}
 	return p, nil
@@ -1294,7 +1304,7 @@ func prepareRg(name string, args []string) (plan, error) {
 		return nil, err
 	}
 	if _, err := exec.LookPath("rg"); err != nil {
-		return nil, errUnsupported
+		return nil, unsupported("rg without rg on PATH")
 	}
 	p := &rgPlan{}
 	patterns := 0
@@ -1317,7 +1327,7 @@ func prepareRg(name string, args []string) (plan, error) {
 			patterns++
 		case "color", "colour":
 			if o.value != "never" && o.value != "auto" {
-				return nil, errUnsupported
+				return nil, unsupported("option --color=" + o.value)
 			}
 			continue
 		}
@@ -1332,7 +1342,7 @@ func prepareRg(name string, args []string) (plan, error) {
 	}
 	if patterns == 0 {
 		if len(operands) == 0 {
-			return nil, errUnsupported
+			return nil, unsupported("rg without a pattern")
 		}
 		p.pattern, operands = operands[0], operands[1:]
 	}

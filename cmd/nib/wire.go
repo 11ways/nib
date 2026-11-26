@@ -11,6 +11,7 @@ import (
 
 	"github.com/11ways/nib/internal/decider"
 	"github.com/11ways/nib/internal/engine"
+	"github.com/11ways/nib/internal/fallback"
 	"github.com/11ways/nib/internal/hook"
 	"github.com/11ways/nib/internal/hookstate"
 	"github.com/11ways/nib/internal/names"
@@ -39,7 +40,7 @@ func newServer(options server.Options, choose decider.Decider, summarize decider
 		return opencode.Compacted(opencode.Databases(os.Getenv), session)
 	}
 	if os.Getenv("NIB_SHELL") != "0" {
-		options.Shell = nibash.New(options.Engine, options.Sandbox).Deciding(choose).Summarizing(summarize)
+		options.Shell = nibash.New(options.Engine, options.Sandbox).Deciding(choose).Summarizing(summarize).FallingBack(fallback.Default(os.Getenv))
 	}
 	return server.New(options)
 }

@@ -12,6 +12,8 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/11ways/nib/internal/fallback"
 )
 
 // printfName is the bash builtin nibash formats itself, as the interpreter's covers only part of bash's.
@@ -37,15 +39,26 @@ func printfAt(args []string) int {
 func printfCall(ctx context.Context, args []string) []string {
 	hc := interp.HandlerCtx(ctx)
 	variable, format, operands, ok := printfOperands(args)
+	kind, reason := fallback.Error, "an option printf lacks, or no format"
+	if len(args) >= 2 && args[0] == "-v" && !printfVariable.MatchString(args[1]) {
+		reason = "-v with a name bash reports as invalid"
+	}
 	if ok {
-		if out, done := bashPrintf(format, operands, localeOf(hc.Env)); done {
-			if variable == "" {
-				return []string{printfName, "%s", out}
-			}
-			if !strings.ContainsRune(out, 0) {
-				return []string{"eval", variable + "=" + printfQuote(out)}
-			}
+		p := runPrintf(format, operands, localeOf(hc.Env))
+		out := p.out.String()
+		switch {
+		case p.left == "" && variable == "":
+			return []string{printfName, "%s", out}
+		case p.left == "" && !strings.ContainsRune(out, 0):
+			return []string{"eval", variable + "=" + printfQuote(out)}
+		case p.left == "":
+			kind, reason = fallback.Machine, "-v of output holding a NUL byte"
+		default:
+			kind, reason = p.kind, p.left
 		}
+	}
+	if c := callOf(ctx); c != nil {
+		c.fellBack(printfName, kind, reason, printfForm(variable, format))
 	}
 	bash, err := interp.LookPathDir(hc.Dir, hc.Env, "bash")
 	if err != nil {
@@ -120,14 +133,23 @@ var longDoubleBits = map[string]uint{"linux/amd64": 64}[runtime.GOOS+"/"+runtime
 // it leaves to bash: an error bash would report, a conversion it lacks (%a, %(...)T), the ' flag, float input outside the C numeric locale,
 // and text past ASCII where bash's widths, precisions, quoting or character codes follow the locale.
 func bashPrintf(format string, operands []string, locale printfLocale) (out string, done bool) {
+	p := runPrintf(format, operands, locale)
+	return p.out.String(), p.left == ""
+}
+
+// runPrintf formats as bashPrintf does; a printfer left set is a call left to bash, which says why.
+func runPrintf(format string, operands []string, locale printfLocale) *printfer {
 	p := &printfer{format: format, operands: operands, locale: locale}
 	for {
 		used := p.at
 		if !p.pass() {
-			return "", false
+			if p.left == "" {
+				p.leave(fallback.Missing, "a form nib's printf lacks")
+			}
+			return p
 		}
 		if p.stopped || p.at == used || p.at >= len(p.operands) {
-			return p.out.String(), true
+			return p
 		}
 	}
 }
@@ -140,7 +162,23 @@ type printfer struct {
 	out      strings.Builder
 	// stopped is set by \c in a %b operand, which ends all output.
 	stopped bool
+	// left and kind are why and how the call was left to bash, for the fallback log; "" while nibash formats it.
+	left, kind string
 }
+
+// leave notes why the call goes to bash, the first reason found, and returns false for the caller to give up with.
+func (p *printfer) leave(kind, reason string) bool {
+	if p.left == "" {
+		p.left, p.kind = reason, kind
+	}
+	return false
+}
+
+// leaveAt is leave for a conversion's caller, which takes how many bytes the conversion used too.
+func (p *printfer) leaveAt(kind, reason string) (int, bool) { return 0, p.leave(kind, reason) }
+
+// utf8Escape is the reason \u past ASCII is left to bash.
+const utf8Escape = `\u or \U past ASCII outside a UTF-8 locale`
 
 // next is the next operand, "" past the last.
 func (p *printfer) next() (string, bool) {
@@ -167,7 +205,7 @@ func (p *printfer) pass() bool {
 		case '\\':
 			text, n, ok := printfEscape(f[i+1:], false, p.locale)
 			if !ok {
-				return false
+				return p.leave(fallback.Machine, utf8Escape)
 			}
 			p.out.WriteString(text)
 			i += n
@@ -217,7 +255,7 @@ flags:
 		case '0':
 			s.zero = true
 		case '\'':
-			return 0, false
+			return p.leaveAt(fallback.Missing, "the ' flag")
 		default:
 			break flags
 		}
@@ -228,7 +266,7 @@ flags:
 			arg := p.number()
 			value, ok := printfSigned(arg)
 			if !ok || value < -(1<<31) || value >= 1<<31 {
-				return 0, false
+				return 0, p.leave(fallback.Error, "a * width or precision bash reports as invalid")
 			}
 			return int(value), true
 		}
@@ -237,7 +275,7 @@ flags:
 			i++
 		}
 		if i-start > 9 {
-			return 0, false
+			return 0, p.leave(fallback.Missing, "a width or precision past 9 digits")
 		}
 		value, _ := strconv.Atoi(spec[start:i])
 		return value, true
@@ -263,7 +301,7 @@ flags:
 		i++
 	}
 	if i >= len(spec) {
-		return 0, false
+		return p.leaveAt(fallback.Error, "a % without its conversion")
 	}
 	verb := spec[i]
 	i++
@@ -285,7 +323,7 @@ flags:
 			}
 			text, n, ok := printfEscape(arg[j+1:], true, p.locale)
 			if !ok {
-				return 0, false
+				return p.leaveAt(fallback.Machine, utf8Escape)
 			}
 			expanded.WriteString(text)
 			j += n
@@ -295,19 +333,22 @@ flags:
 		arg, _ := p.next()
 		if verb == 'Q' && s.precise && s.precision < len(arg) {
 			if !printfASCII(arg) {
-				return 0, false
+				return p.leaveAt(fallback.Machine, "%Q with a precision, of text past ASCII")
 			}
 			arg = arg[:s.precision]
 		}
 		quoted, ok := bashQuote(arg, s.alt)
 		if !ok {
-			return 0, false
+			if s.alt {
+				return p.leaveAt(fallback.Missing, "%#q")
+			}
+			return p.leaveAt(fallback.Machine, "%q of text past ASCII")
 		}
 		return i, p.text(quoted, s, verb == 'q' && s.precise)
 	case 'c':
 		arg, _ := p.next()
 		if arg != "" && arg[0] >= 0x80 {
-			return 0, false
+			return p.leaveAt(fallback.Machine, "%c of a letter past ASCII")
 		}
 		var c string
 		if arg != "" {
@@ -321,7 +362,7 @@ flags:
 		arg := p.number()
 		value, ok := printfSigned(arg)
 		if !ok {
-			return 0, false
+			return p.leaveAt(fallback.Error, "a %d operand bash reports as invalid or out of range")
 		}
 		sign := ""
 		magnitude := uint64(value)
@@ -338,7 +379,7 @@ flags:
 		arg := p.number()
 		value, ok := printfUnsigned(arg)
 		if !ok {
-			return 0, false
+			return p.leaveAt(fallback.Error, "a %u, %o or %x operand bash reports as invalid or out of range")
 		}
 		base := map[byte]int{'u': 10, 'o': 8, 'x': 16, 'X': 16}[verb]
 		digits := strconv.FormatUint(value, base)
@@ -363,13 +404,19 @@ flags:
 		p.out.WriteString(text)
 		return i, true
 	}
-	return 0, false
+	switch verb {
+	case 'a', 'A':
+		return p.leaveAt(fallback.Missing, "%a")
+	case '(':
+		return p.leaveAt(fallback.Missing, "%(...)T")
+	}
+	return p.leaveAt(fallback.Error, "a conversion bash does not know")
 }
 
 // text prints a string conversion: cut to the precision when cut, then padded to the width, as bash counts both in bytes.
 func (p *printfer) text(text string, s printfSpec, cut bool) bool {
 	if (cut || s.width > 0) && !printfASCII(text) {
-		return false
+		return p.leave(fallback.Machine, "a width or precision of text past ASCII")
 	}
 	if cut && s.precision < len(text) {
 		text = text[:s.precision]
@@ -482,33 +529,42 @@ func printfUnsigned(arg string) (uint64, bool) {
 // printfDecimal is a float operand bash's strtold reads whole: decimal digits with a point and an exponent, leading white space allowed.
 var printfDecimal = regexp.MustCompile(`^[ \t\n\v\f\r]*([+-]?)((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]{1,4})?)$`)
 
+// printfSpecial is a float operand strtold reads that nib's printf does not: infinity, not a number, or a hex float.
+var printfSpecial = regexp.MustCompile(`(?i)^[ \t\n\v\f\r]*[+-]?(inf|nan|0x)`)
+
 // float formats a float conversion as glibc does from the long double bash reads: the operand rounded to the long double nearest it, then
 // its exact decimal value rounded to the precision, half to even.
 func (p *printfer) float(arg string, verb byte, s printfSpec) (string, bool) {
-	if longDoubleBits == 0 || !p.locale.point {
-		return "", false
+	if longDoubleBits == 0 {
+		return "", p.leave(fallback.Machine, "a float on a platform not checked against bash")
+	}
+	if !p.locale.point {
+		return "", p.leave(fallback.Machine, "a float outside the C numeric locale")
 	}
 	value := new(big.Float).SetPrec(longDoubleBits).SetMode(big.ToNearestEven)
 	negative := false
 	if code, quoted, ok := printfCharacter(arg); quoted {
 		if !ok {
-			return "", false
+			return "", p.leave(fallback.Machine, "a float of a character code past ASCII")
 		}
 		value.SetInt64(code)
 	} else {
 		m := printfDecimal.FindStringSubmatch(arg)
 		if m == nil {
-			return "", false
+			if printfSpecial.MatchString(arg) {
+				return "", p.leave(fallback.Missing, "a float operand inf, nan or in hex")
+			}
+			return "", p.leave(fallback.Error, "a float operand bash reports as invalid")
 		}
 		exact, ok := new(big.Rat).SetString(m[2])
 		if !ok {
-			return "", false
+			return "", p.leave(fallback.Error, "a float operand bash reports as invalid")
 		}
 		value.SetRat(exact)
 		negative = m[1] == "-"
 		// Far from 1 a long double's range and subnormals, which big.Float lacks, would matter.
 		if exponent := value.MantExp(nil); value.Sign() != 0 && (exponent < -16000 || exponent > 16000) {
-			return "", false
+			return "", p.leave(fallback.Missing, "a float past the range nib's printf covers")
 		}
 	}
 	precision := 6
@@ -535,7 +591,7 @@ func (p *printfer) float(arg string, verb byte, s printfSpec) (string, bool) {
 			// glibc's %#g drops the zeros of a long double that rounding carried to the next power of ten (999999.5 is 1.e+06).
 			unrounded := value.Text('e', 40)
 			if before, _ := strconv.Atoi(unrounded[strings.IndexByte(unrounded, 'e')+1:]); s.alt && before != exponent {
-				return "", false
+				return "", p.leave(fallback.Missing, "glibc's %#g after a carry to the next power of ten")
 			}
 		}
 		if exponent < precision && exponent >= -4 {

@@ -188,11 +188,11 @@ subcommand:
 			name = a
 		}
 		if !ok {
-			return nil, errUnsupported
+			return nil, unsupported("git " + p.subcommand + " option " + optionName(a))
 		}
 		if spec.takesNext(name) {
 			if k+1 >= len(rest) {
-				return nil, errUnsupported
+				return nil, unsupported("git " + p.subcommand + " option " + name + " without its value")
 			}
 			k++
 		}

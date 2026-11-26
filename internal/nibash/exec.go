@@ -22,6 +22,7 @@ import (
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 
+	"github.com/11ways/nib/internal/fallback"
 	"github.com/11ways/nib/internal/platform"
 )
 
@@ -270,6 +271,13 @@ func (c *call) runNib(ctx context.Context, mode string, name string, args []stri
 		}
 	}
 	if err != nil {
+		if !errors.Is(err, errForeign) {
+			kind := fallback.Missing
+			if errors.Is(err, errUncounted) {
+				kind = fallback.Machine
+			}
+			c.fellBack(name, kind, fallbackReason(err), fallbackForm(name, args[1:]))
+		}
 		// An option the command line or an expansion gave it that nib's own lacks. With no other nib command reading or writing its records,
 		// the system program runs, as it would have, and says so when its output reaches the model; joined to one, it cannot stand in, so the
 		// command says why. Bytes a nib reader takes in band are such a program's to write.

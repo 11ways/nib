@@ -364,6 +364,14 @@ the command and its description, and what came of it (windows picked, each rule'
 the summary's ranges). It holds no program output. `nib stats [--since 7d|12h|DATE] [--limit N]` counts it by call and
 model and lists the latest refusals and close calls; `jq` reads the rest.
 
+Every form nib's own commands hand to a real program is counted in `~/.local/state/nib/fallbacks.jsonl`: an option or
+pattern feature `grep`, `sed`, `cut` and the others lack, a `printf` form left to bash, by its reason (`option -P`,
+`a backreference \1`, `%(...)T`, `a float outside the C numeric locale`) and its shape, with every operand and option
+value as `...` and the words of a `sed` script too, so it holds no data. A call writes one line per form with its count.
+`nib stats fallbacks [--since 7d] [--limit N] [--host HOST]...` lists the reasons by count, what nib lacks first, then
+what follows the locale or the machine, then errors bash or the program reports; each `--host` adds that machine's log,
+read over ssh by its own nib.
+
 ### Command rules
 
 A `nib.json` can forbid commands:
@@ -454,6 +462,7 @@ above the prompt and a toast when a job ends. Its slash commands open panes: `/n
 | `NIB_DECIDER_OPENCODE` | `opencode` | the OpenCode 2 binary |
 | `NIB_DECIDER_CACHE` | unset | directory to cache decisions and summaries on disk |
 | `NIB_DECIDER_LEDGER` | `~/.local/state/nib/models.jsonl` | the ledger of model calls `nib stats` reads; `off` keeps none |
+| `NIB_FALLBACK_LOG` | `~/.local/state/nib/fallbacks.jsonl` | the log of fallbacks `nib stats fallbacks` reads; `off` keeps none |
 | `NIB_DECIDER_SANDBOX` | unset | `1` allows `openrouter` under `NIB_SANDBOX=1` |
 
 nib keeps its files under the home folder on every OS (`XDG_*` variables move them): settings in `~/.config/nib`,

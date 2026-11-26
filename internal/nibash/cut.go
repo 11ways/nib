@@ -37,11 +37,11 @@ func prepareCut(name string, args []string) (plan, error) {
 	}
 	// Without a list, or with two, cut only complains; the system program says how.
 	if len(options) != 1 {
-		return nil, errUnsupported
+		return nil, unsupported("cut without one -c list")
 	}
 	ranges, ok := cutList(options[0].value)
 	if !ok {
-		return nil, errUnsupported
+		return nil, unsupported("a cut list nib's own does not read")
 	}
 	return &cutPlan{ranges: ranges, operands: operands}, nil
 }

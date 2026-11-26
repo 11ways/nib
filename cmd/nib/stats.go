@@ -68,11 +68,17 @@ func sinceTime(value string, now time.Time) (time.Time, error) {
 	if t, err := time.ParseInLocation("2006-01-02", value, time.Local); err == nil {
 		return t, nil
 	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, nil
+	}
 	return time.Time{}, fmt.Errorf("--since takes a span such as 7d or 12h, or a date such as 2026-10-30, not %q", value)
 }
 
 // runStats prints what the decision models and summarizers did, from the ledger every nib appends to.
 func runStats(args []string) int {
+	if len(args) > 0 && args[0] == "fallbacks" {
+		return runFallbacks(args[1:])
+	}
 	r, err := statsFlags(args, time.Now())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nib stats: %v\n", err)

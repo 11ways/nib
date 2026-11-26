@@ -18,6 +18,9 @@ const (
 // errUntranslatable marks a pattern feature RE2 cannot run exactly, such as a backreference; the command then runs as the real program.
 var errUntranslatable = errors.New("pattern needs the system grep")
 
+// untranslatable is errUntranslatable for the feature reason names.
+func untranslatable(reason string) error { return formError{errUntranslatable, reason} }
+
 // translate turns a GNU grep pattern into RE2 syntax. Features without an exact RE2 meaning (backreferences, \< and \>, \` and \') refuse.
 func translate(pattern string, d dialect) (string, error) {
 	if d == fixed {
@@ -37,10 +40,10 @@ func translate(pattern string, d dialect) (string, error) {
 			case r == '[' && i+1 < len(runes) && (runes[i+1] == ':' || runes[i+1] == '=' || runes[i+1] == '.'):
 				end := strings.Index(string(runes[i+2:]), string(runes[i+1])+"]")
 				if end < 0 {
-					return "", errUntranslatable
+					return "", untranslatable("an unclosed [" + string(runes[i+1]) + " class")
 				}
 				if runes[i+1] != ':' {
-					return "", errUntranslatable
+					return "", untranslatable("a [" + string(runes[i+1]) + "...] bracket element")
 				}
 				name := string(runes[i : i+2+end+2])
 				out.WriteString(name)
@@ -70,15 +73,15 @@ func translate(pattern string, d dialect) (string, error) {
 			}
 		case '\\':
 			if i+1 >= len(runes) {
-				return "", errUntranslatable
+				return "", untranslatable("a trailing backslash")
 			}
 			i++
 			next := runes[i]
 			switch {
 			case next >= '1' && next <= '9':
-				return "", errUntranslatable
+				return "", untranslatable(`a backreference \` + string(next))
 			case strings.ContainsRune("<>`'", next):
-				return "", errUntranslatable
+				return "", untranslatable(`the anchor \` + string(next))
 			case d == basic && strings.ContainsRune("|(){}+?", next):
 				// In basic syntax these are operators only when escaped.
 				out.WriteRune(next)
@@ -116,7 +119,7 @@ func translate(pattern string, d dialect) (string, error) {
 		}
 	}
 	if inClass {
-		return "", errUntranslatable
+		return "", untranslatable("an unclosed bracket expression")
 	}
 	return out.String(), nil
 }
@@ -150,7 +153,7 @@ func newMatcher(patterns []string, d dialect, ignoreCase, word, line bool) (*mat
 	}
 	re, err := regexp.Compile(expression)
 	if err != nil {
-		return nil, errUntranslatable
+		return nil, untranslatable("a pattern RE2 does not compile, such as a repeat past 1000")
 	}
 	return &matcher{re: re, word: word, empty: empty && !word && !line}, nil
 }

@@ -55,10 +55,10 @@ func prepareFind(name string, args []string) (plan, error) {
 	for ; i < len(args); i++ {
 		words, ok := findTests[args[i]]
 		if !ok {
-			return nil, errUnsupported
+			return nil, unsupported("find " + optionName(args[i]))
 		}
 		if i+words >= len(args) {
-			return nil, errUnsupported
+			return nil, unsupported("find " + args[i] + " without its operands")
 		}
 		i += words
 	}
@@ -89,10 +89,10 @@ func prepareLs(name string, args []string) (plan, error) {
 		case a == "--color=never" || a == "--group-directories-first" || a == "--all" || a == "--almost-all" || a == "--human-readable" ||
 			a == "--reverse" || a == "--recursive" || a == "--directory":
 		case strings.HasPrefix(a, "--"):
-			return nil, errUnsupported
+			return nil, unsupported("ls option " + optionName(a))
 		case strings.HasPrefix(a, "-") && a != "-":
 			if strings.Trim(a[1:], lsFlags) != "" {
-				return nil, errUnsupported
+				return nil, unsupported("ls option " + a)
 			}
 		}
 	}

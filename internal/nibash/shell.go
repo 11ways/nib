@@ -46,6 +46,8 @@ type Shell struct {
 	decider    decider.Decider
 	summarizer decider.Summarizer
 	logs       *logDirectory
+	// fallbacks is the log of the forms nib's own commands hand to a real program; "" keeps none.
+	fallbacks string
 	// recall is what each agent was shown in its latest calls, which output shown again folds against.
 	recall   *recall
 	mu       sync.Mutex
@@ -364,6 +366,8 @@ type call struct {
 	commands int
 	// answered is set as the call's answer is made: the jobs it started print to their logs alone from then on.
 	answered atomic.Bool
+	// fallbacks counts the forms the call handed to a real program, for the log its end writes; mu guards it.
+	fallbacks map[fallbackKey]int
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something

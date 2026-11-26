@@ -35,8 +35,9 @@ func (s *Shell) register(c *call) {
 // end marks that c's run, a job's included, is over.
 func (c *call) end() {
 	c.session.shell.mu.Lock()
-	defer c.session.shell.mu.Unlock()
 	c.ranTo = time.Now()
+	c.session.shell.mu.Unlock()
+	c.writeFallbacks()
 }
 
 // running says whether c's run, a job's included, goes on.

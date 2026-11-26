@@ -34,6 +34,8 @@ const usage = `nib: hashline file tools and a shell for coding agents
                        print what nibash would show of a program whose whole output is the log at PATH, for tools that keep their own logs
   nib stats [--since 7d|12h|DATE] [--limit N]
                        count what the decision models and summarizers did, from the ledger every nib keeps of them
+  nib stats fallbacks [--since 7d|12h|DATE] [--limit N] [--host HOST]... [--json]
+                       count the forms nib's own commands handed to a real program, by reason, here and on each HOST over ssh
   nib --version        print the version`
 
 // Keep the release name stable even when Go stamps an untagged checkout with a pseudo-version.
