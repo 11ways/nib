@@ -98,7 +98,7 @@ Behavior is ported, not redesigned:
 ```
 nibash
   command      string, required
-  description  string, optional: what the command is for, in 5 to 12 words
+  description  string, optional: what the command is for, in 5 to 12 words, none for a one-liner
   timeout      number, ms; default 120000 (600000 for a call that only waits), at most 600000
   background   boolean; run detached, return a job id and log path at once
 ```

@@ -2506,3 +2506,17 @@ func (e *Engine) Write(ctx *Context, path, content string, tagValue string) (res
 		return Result{Text: texts[0]}, nil
 	}, nil)
 }
+
+// Append adds content's lines at the end of the file at path, as an edit's PUT >$: does and so without a tag, or creates the file.
+func (e *Engine) Append(ctx *Context, path, content string) (result Result, err error) {
+	if _, err := os.Lstat(ctx.resolve(path)); missing(err) {
+		return e.Write(ctx, path, content, "")
+	}
+	if content == "" {
+		return Result{}, fmt.Errorf("nothing to append to %s: content is empty", path)
+	}
+	defer func() { result.Text = e.teachRowNotes(ctx, result.Text) }()
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	tail := snapshots.LineEdit{Start: snapshots.Tail, End: snapshots.Tail, Operation: snapshots.After, Edge: true, Content: lines}
+	return e.apply(ctx, []*patch.Section{{Path: path, Edits: []snapshots.LineEdit{tail}}}, nil)
+}

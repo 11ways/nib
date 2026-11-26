@@ -40,7 +40,7 @@ func findSchema(expect bool) string {
 
 const editSchema = `{"type":"object","properties":{"input":{"description":"The complete hashline patch, or REAPPLY TOKEN from a refusal or a grep replace","type":"string"}},"required":["input"]}`
 
-const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"tag":{"description":"Required to overwrite an existing file","type":"string"}},"required":["path","content"]}`
+const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"tag":{"description":"Required to overwrite an existing file","type":"string"},"append":{"description":"Add content at the file's end; no tag","type":"boolean"}},"required":["path","content"]}`
 
 // nibashSchema is the nibash tool's schema, with expect only where a decision model or a summarizer reads it.
 func nibashSchema(expect bool) string {
@@ -48,14 +48,11 @@ func nibashSchema(expect bool) string {
 	if expect {
 		arg = `"expect":{"description":"For long output: what you expect or want to learn, like all pass; if not, which and why; of a diff, what matters in it","type":"string"},`
 	}
-	return `{"type":"object","properties":{"command":{"type":"string"},"description":{"description":"What it is for, in 5 to 12 words","type":"string"},` + arg +
+	return `{"type":"object","properties":{"command":{"type":"string"},"description":{"description":"What it is for, in 5 to 12 words; none for a one-liner","type":"string"},` + arg +
 		`"timeout":{"description":"Milliseconds before it goes on as a job; default 120000, at most 600000","type":"integer"},"background":{"description":"Run as a job; returns its id and log at once","type":"boolean"}},"required":["command"]}`
 }
 
-const statusSchema = `{"type":"object","properties":{"tail":{"description":"Last lines of each one's output; default 0, at most 50","type":"integer"},"view":{"description":"List for a pane: trash, seen, names, tokens","type":"string"},"restore":{"description":"Trashed path to put back","type":"string"},"summaries":{"description":"Summaries of long output on or off","type":"boolean"}}}`
-
-// statusOutputSchema is ShellStatus as JSON Schema, declared so clients pass nibash_status's structured content on.
-const statusOutputSchema = `{"type":"object","properties":{"commands":{"type":"array","items":{"type":"object","properties":{"agent":{"type":"string"},"command":{"type":"string"},"description":{"type":"string"},"started":{"type":"integer"},"tail":{"type":"array","items":{"type":"string"}}},"required":["agent","command","started"]}},"jobs":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"agent":{"type":"string"},"command":{"type":"string"},"started":{"type":"integer"},"ended":{"type":"integer"},"running":{"type":"boolean"},"exit":{"type":"integer"},"log":{"type":"string"},"tail":{"type":"array","items":{"type":"string"}}},"required":["id","agent","command","started","running","log"]}},"models":{"type":"array"},"calls":{"type":"array"},"summaries":{"type":"object"},"restore":{"type":"object"},"trash":{"type":"object"},"seen":{"type":"object"},"names":{"type":"object"},"tokens":{"type":"object"}},"required":["commands","jobs"]}`
+const statusSchema = `{"type":"object","properties":{"tail":{"description":"Last lines of each one's output; default 0, at most 50","type":"integer"},"view":{"description":"List for a pane: trash, seen, names, tokens","type":"string"},"restore":{"description":"Trashed path to put back","type":"string"},"summaries":{"description":"Summaries of long output on or off","type":"boolean"},"json":{"type":"boolean"}}}`
 
 // statusDescription is the nibash_status tool's description.
-const statusDescription = "List what nibash runs for you and your subagents: commands still in their call and background jobs (running, or ended in the last 10 minutes), with how long each ran and its log; tail adds the last lines of each one's output. The nib mod's panes also use view, restore and summaries."
+const statusDescription = "List what nibash runs for you and your subagents: commands still in their call and background jobs (running, or ended in the last 10 minutes), with how long each ran and its log; tail adds the last lines of each one's output. The nib mod's panes also use view, restore, summaries and json."

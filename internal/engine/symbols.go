@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/11ways/nib/internal/js"
 	"github.com/11ways/nib/internal/syntax"
 )
 
@@ -17,9 +18,12 @@ const symbolPart = `[A-Za-z_$][\w$]*`
 var templateTag = regexp.MustCompile(`\{%-?\s*(/?)(block|snippet)\b\s*(?:"([^"]*)"|(` + symbolPart + `))?`)
 
 // symbolRanges are the lines of each declaration of symbol in lines, as the file's syntax tree has them (Outer.inner names inner declared
-// in Outer); a Hawkeye template's are its blocks and snippets. A file nib has no grammar for, or a declaration that did not parse cleanly,
-// is refused rather than guessed at.
+// in Outer); a Hawkeye template's are its blocks and snippets, and a Markdown heading's its section. A file nib has no grammar for, or a
+// declaration that did not parse cleanly, is refused rather than guessed at.
 func symbolRanges(display string, lines []string, symbol string) ([]lineRange, error) {
+	if strings.HasPrefix(symbol, "#") {
+		return headingRanges(display, lines, symbol)
+	}
 	names := strings.Split(symbol, ".")
 	if strings.EqualFold(filepath.Ext(display), ".hwk") {
 		if len(names) > 1 {
@@ -81,4 +85,50 @@ func templateEnd(lines []string, index int, kind string) int {
 		}
 	}
 	return -1
+}
+
+// headingsNamed caps the headings a miss lists.
+const headingsNamed = 12
+
+// headingRanges are the sections of the Markdown headings wanted names, each from its heading to the line before the next heading of its
+// level or a higher one: the headings that read exactly wanted, whatever the case, else those that begin with it.
+func headingRanges(display string, lines []string, wanted string) ([]lineRange, error) {
+	level := func(line int) int { return len(lines[line-1]) - len(strings.TrimLeft(lines[line-1], "#")) }
+	all := headings(lines)
+	var exact, begins []int
+	for at, line := range all {
+		text := strings.ToLower(js.Trim(lines[line-1]))
+		if text == strings.ToLower(wanted) {
+			exact = append(exact, at)
+		} else if strings.HasPrefix(text, strings.ToLower(wanted)) {
+			begins = append(begins, at)
+		}
+	}
+	if len(exact) == 0 {
+		exact = begins
+	}
+	if len(exact) == 0 {
+		var same []string
+		for _, line := range all {
+			if level(line) == len(wanted)-len(strings.TrimLeft(wanted, "#")) && len(same) < headingsNamed {
+				same = append(same, js.Trim(lines[line-1]))
+			}
+		}
+		if len(same) == 0 {
+			return nil, fmt.Errorf("%s has no heading that begins with %q, and none of that level; read %s for its outline", display, wanted, display)
+		}
+		return nil, fmt.Errorf("%s has no heading that begins with %q; of that level it has: %s", display, wanted, strings.Join(same, " | "))
+	}
+	var ranges []lineRange
+	for _, at := range exact {
+		end := len(lines)
+		for _, next := range all[at+1:] {
+			if level(next) <= level(all[at]) {
+				end = next - 1
+				break
+			}
+		}
+		ranges = append(ranges, lineRange{all[at], end})
+	}
+	return ranges, nil
 }

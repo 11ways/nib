@@ -268,7 +268,8 @@ func (s *scan) command(words []string, known []bool, depth int) {
 	switch {
 	case program == gitEach:
 		// git-each runs git in every repository below its directory: rules on git judge that git, and each repository's own rules count.
-		s.commands = append(s.commands, simpleCommand{"git", words[1:]})
+		_, git := eachWords(words[1:])
+		s.commands = append(s.commands, simpleCommand{"git", git})
 		if repositories, _, err := engine.Repositories(s.ctx, s.directory); err == nil {
 			s.dirs = append(s.dirs, repositories...)
 		}

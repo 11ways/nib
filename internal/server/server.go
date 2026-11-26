@@ -307,7 +307,7 @@ func New(options Options) *Server {
 	s.AddTool(&mcp.Tool{Name: "write", Description: writeDescription, InputSchema: json.RawMessage(writeSchema), Annotations: writes, Meta: always}, s.handle(s.write, true))
 	if options.Shell != nil {
 		s.AddTool(&mcp.Tool{Name: "nibash", Description: options.Shell.Description(), InputSchema: json.RawMessage(nibashSchema(options.Shell.Expects())), Annotations: writes, Meta: always}, s.handle(s.nibash, false))
-		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), OutputSchema: json.RawMessage(statusOutputSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
+		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
 		s.AddTool(&mcp.Tool{Name: engine.Skim, Description: skimDescription, InputSchema: json.RawMessage(skimSchema), Annotations: readOnly, Meta: always}, s.handle(s.skim, false))
 	}
 	for _, p := range options.Providers {
@@ -792,14 +792,14 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 			return failure(notes, err), nil
 		}
 		text := result.Text
-		if len(notes) > 0 {
+		if len(notes) > 0 && !result.Verbatim {
 			text = strings.Join(notes, "\n") + "\n\n" + text
 		}
 		content := []mcp.Content{&mcp.TextContent{Text: text}}
 		for _, image := range result.Images {
 			content = append(content, &mcp.ImageContent{Data: image.Data, MIMEType: image.MimeType})
 		}
-		return &mcp.CallToolResult{Content: content, StructuredContent: result.Structured}, nil
+		return &mcp.CallToolResult{Content: content}, nil
 	}
 }
 
@@ -1270,11 +1270,21 @@ func (s *Server) write(ctx *engine.Context, args arguments, notes *[]string, _ *
 	if tagValue != "" && !tagPattern(tagValue) {
 		return engine.Result{}, errors.New("tag is 4 hex digits, like 3C4D")
 	}
+	appends, _, err := args.flag("append", notes)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	if appends {
+		if tagValue != "" {
+			return engine.Result{}, errors.New("append adds to the file's end whatever it holds, so it takes no tag")
+		}
+		return s.engine.Append(ctx, path, content)
+	}
 	return s.engine.Write(ctx, path, content, tagValue)
 }
 
-// nibashStatus lists what nibash runs for the calling client, every agent of it included: in text, and as a ShellStatus for a client's own
-// display (Claude Code's nib mod polls it).
+// nibashStatus lists what nibash runs for the calling client, every agent of it included: in text, or with json as a ShellStatus for a
+// client's own display (Claude Code's nib mod polls it). Never as structured content, which Claude Code would show the model in the text's place.
 func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]string, c *call) (engine.Result, error) {
 	tail, err := args.number("tail", 0)
 	if err != nil {
@@ -1301,6 +1311,10 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 	}
 	if set {
 		s.options.Shell.SetSummaries(summaries)
+	}
+	asJSON, _, err := args.flag("json", notes)
+	if err != nil {
+		return engine.Result{}, err
 	}
 	status := s.options.Shell.Status(func(key any) (string, bool) {
 		k, ok := key.(shellKey)
@@ -1332,7 +1346,14 @@ func (s *Server) nibashStatus(ctx *engine.Context, args arguments, notes *[]stri
 	if view == "names" {
 		status.Names = s.namesView(ctx, &s.state(c.key).usage)
 	}
-	return engine.Result{Text: statusText(status, time.Now()), Structured: status}, nil
+	if asJSON {
+		data, err := json.Marshal(status)
+		if err != nil {
+			return engine.Result{}, err
+		}
+		return engine.Result{Text: string(data), Verbatim: true}, nil
+	}
+	return engine.Result{Text: statusText(status, time.Now())}, nil
 }
 
 // statusText is a status as the model reads it: one row per command and job, its output lines after it behind "| ", which no anchor starts with.

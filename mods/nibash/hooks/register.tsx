@@ -308,7 +308,7 @@ export function rows(s: Status, ended: boolean | number, waiting: readonly strin
   return out
 }
 
-/** The structured content Claude Code passes on in its place: the JSON of it as the answer's one text block; undefined for anything else. */
+/** nib's answer to a call with json: the JSON as its one text block (an older nib's structured content came the same way); undefined for anything else. */
 export function structuredText(content: readonly unknown[]): unknown {
   const block = content[0] as { type?: unknown; text?: unknown } | undefined
   if (content.length !== 1 || block?.type !== 'text' || typeof block.text !== 'string') return undefined
@@ -345,7 +345,7 @@ async function poll($: EngineInterface): Promise<void> {
   asking = true
   try {
     const name = await read($, server)
-    const answer = await $.mcp.call(name, 'nibash_status', { tail: TAIL })
+    const answer = await $.mcp.call(name, 'nibash_status', { tail: TAIL, json: true })
     const next = answer.isError ? undefined : parse(answer.structuredContent ?? structuredText(answer.content), await $.clock.now())
     if (next === undefined) {
       stop()
@@ -381,7 +381,7 @@ let viewTimer: Timer | undefined
 
 /** Asks nib for a list, and for a restore when given; the structured answer, undefined when nib gave none in its shape. */
 async function ask($: EngineInterface, view: ViewName, extra: Record<string, unknown> = {}): Promise<unknown> {
-  const answer = await $.mcp.call(await read($, server), 'nibash_status', { view, ...extra })
+  const answer = await $.mcp.call(await read($, server), 'nibash_status', { view, json: true, ...extra })
   return answer.isError ? undefined : (answer.structuredContent ?? structuredText(answer.content))
 }
 
@@ -430,7 +430,7 @@ async function setSummaries($: EngineInterface, args: string): Promise<string> {
   try {
     const name = await read($, server)
     const ask = async (extra: Record<string, unknown>) => {
-      const answer = await $.mcp.call(name, 'nibash_status', extra)
+      const answer = await $.mcp.call(name, 'nibash_status', { json: true, ...extra })
       return answer.isError ? undefined : parse(answer.structuredContent ?? structuredText(answer.content), await $.clock.now())
     }
     let on = setting === undefined ? undefined : setting === 'on'

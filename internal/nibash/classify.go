@@ -645,12 +645,15 @@ func parseMarker(name string) (mode, command string, ok bool) {
 }
 
 // heredocs are the texts the model typed whole: the bodies of the command's here-documents and here-strings when they are plain text, and
-// what an echo of plain words prints.
+// what an echo or a printf of plain words prints.
 func heredocs(file *syntax.File) []string {
 	var bodies []string
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if call, ok := node.(*syntax.CallExpr); ok {
 			if text, ok := echoed(call); ok {
+				bodies = append(bodies, text)
+			}
+			if text, ok := printfed(call); ok {
 				bodies = append(bodies, text)
 			}
 			return true
@@ -676,27 +679,76 @@ func heredocs(file *syntax.File) []string {
 	return bodies
 }
 
-// echoed is what an echo prints when every word is plain text that nothing expands, a glob, brace or tilde included, and no option comes
-// first.
-func echoed(call *syntax.CallExpr) (string, bool) {
+// plainWords are the words after the command's name name when every one is plain text that nothing expands, a glob, brace or tilde
+// included, and no option comes first.
+func plainWords(call *syntax.CallExpr, name string) ([]string, bool) {
 	if len(call.Args) == 0 {
-		return "", false
+		return nil, false
 	}
-	if name, ok := wordLiteral(call.Args[0]); !ok || name != "echo" {
-		return "", false
+	if called, ok := wordLiteral(call.Args[0]); !ok || called != name {
+		return nil, false
 	}
 	words := make([]string, 0, len(call.Args)-1)
 	for i, arg := range call.Args[1:] {
 		value, ok := wordLiteral(arg)
 		if !ok || (i == 0 && strings.HasPrefix(value, "-")) {
-			return "", false
+			return nil, false
 		}
 		for _, part := range arg.Parts {
 			if lit, isLit := part.(*syntax.Lit); isLit && strings.ContainsAny(lit.Value, "*?[{~") {
-				return "", false
+				return nil, false
 			}
 		}
 		words = append(words, value)
 	}
+	return words, true
+}
+
+// echoed is what an echo of plain words prints.
+func echoed(call *syntax.CallExpr) (string, bool) {
+	words, ok := plainWords(call, "echo")
+	if !ok {
+		return "", false
+	}
 	return strings.Join(words, " ") + "\n", true
+}
+
+// printfed is what a printf of plain words prints when its format holds nothing but text, %s, %% and the escapes \n, \t and \\, the
+// format used again while arguments are left, as printf does.
+func printfed(call *syntax.CallExpr) (string, bool) {
+	words, ok := plainWords(call, "printf")
+	if !ok || len(words) == 0 {
+		return "", false
+	}
+	format, args := words[0], words[1:]
+	var out strings.Builder
+	for {
+		took := false
+		for i := 0; i < len(format); i++ {
+			switch c := format[i]; {
+			case c != '%' && c != '\\':
+				out.WriteByte(c)
+			case i+1 == len(format):
+				return "", false
+			case c == '%' && format[i+1] == 's':
+				if len(args) > 0 {
+					out.WriteString(args[0])
+					args = args[1:]
+				}
+				took = true
+				i++
+			case c == '%' && format[i+1] == '%':
+				out.WriteByte('%')
+				i++
+			case c == '\\' && strings.IndexByte(`nt\`, format[i+1]) >= 0:
+				out.WriteByte("\n\t\\"[strings.IndexByte(`nt\`, format[i+1])])
+				i++
+			default:
+				return "", false
+			}
+		}
+		if len(args) == 0 || !took {
+			return out.String(), len(args) == 0
+		}
+	}
 }

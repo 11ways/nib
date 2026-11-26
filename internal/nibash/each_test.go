@@ -46,6 +46,26 @@ func TestGitEachStatusIsOneLinePerCleanRepository(t *testing.T) {
 	expect(t, f.run("git-each status -sb"), "==> alpha <==\n## main\n M a.txt\napps/gamma: ## main\nbeta: ## main")
 }
 
+func TestGitEachPendingRunsOnlyWhereWorkIsNotLevelWithTheUpstream(t *testing.T) {
+	f := eachFixture(t)
+	// alpha has a changed file, beta is level with its upstream, apps/gamma is one commit ahead of its own.
+	for _, repository := range []string{"alpha", "beta", "apps/gamma"} {
+		f.git("-C", repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+		f.git("-C", repository, "config", "branch.main.remote", "origin")
+		f.git("-C", repository, "config", "branch.main.merge", "refs/heads/main")
+		f.git("-C", repository, "config", "remote.origin.url", "nowhere")
+		f.git("-C", repository, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+	}
+	f.git("-C", "apps/gamma", "commit", "-q", "--allow-empty", "-m", "ahead in gamma")
+	expect(t, f.run("git-each --pending"), "==> alpha <==\n## main...origin/main\n M a.txt\napps/gamma: ## main...origin/main [ahead 1]")
+	expect(t, f.run("git-each --pending log --format=%s -1"), "alpha: first in alpha\napps/gamma: ahead in gamma")
+	// A branch with no upstream cannot be told level, so it shows.
+	f.git("-C", "beta", "config", "--unset", "branch.main.merge")
+	if out := f.run("git-each --pending"); !strings.Contains(out, "beta: ## main") {
+		t.Errorf("got:\n%s", out)
+	}
+}
+
 func TestGitEachGivesEachRepositoryItsBaseOrSaysWhyItHasNone(t *testing.T) {
 	f := eachFixture(t)
 	// alpha's base is what origin/HEAD points at; it is one commit ahead of it.

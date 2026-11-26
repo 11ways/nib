@@ -117,11 +117,11 @@ type Image struct {
 	MimeType string
 }
 
-// Result is a tool's output; Structured, when set, is a machine-readable twin of Text for the MCP result's structuredContent.
+// Result is a tool's output; Verbatim marks a Text a program parses, which no note goes before.
 type Result struct {
-	Text       string
-	Images     []Image
-	Structured any
+	Text     string
+	Images   []Image
+	Verbatim bool
 }
 
 // NotFound is a path that names nothing; read, grep and find note it and still serve their other paths.

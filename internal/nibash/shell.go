@@ -138,7 +138,8 @@ func (s *Shell) Expects() bool {
 // eachHint tells an agent whose server directory holds several repositories of git-each.
 const eachHint = "nibash's " + gitEach + " ARGS runs git ARGS in every repository below the shell's directory and prints only those with output, " +
 	"a single line beside its repository's name (git-each status -sb: a row per clean repository with its branch, ahead and behind; " +
-	"git-each log --oneline --branches --not --remotes: commits on no remote); " +
+	"git-each log --oneline --branches --not --remotes: commits on no remote; git-each " + eachPending + ": a short status of only those with " +
+	"changed files or a branch not level with its upstream, and before other ARGS git in only those); " +
 	eachBase + " is each one's integration branch (\"base\" in its nib.json, else an upstream of another name, else origin/HEAD)."
 
 // Hint is the line on git-each where directory holds two repositories or more.

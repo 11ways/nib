@@ -111,8 +111,7 @@ func TestStatusTellsOfAHostedCallWhileItRunsAndOfNoOtherTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := func() []any {
-		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status"})
-		listed, _ := result.StructuredContent.(map[string]any)["calls"].([]any)
+		listed, _ := c.status(t, &mcp.CallToolParams{Name: "nibash_status"})["calls"].([]any)
 		return listed
 	}
 	if got := calls(); got != nil {

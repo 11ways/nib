@@ -83,7 +83,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
     const call = $.tool.call({ tool: 'mcp__nib__nibash', command: 'go test ./...' })
     await clock.settle()
-    expect(asked.at(-1)).toEqual({ server: 'nib', tool: 'nibash_status', args: { tail: 12 } })
+    expect(asked.at(-1)).toEqual({ server: 'nib', tool: 'nibash_status', args: { tail: 12, json: true } })
     const band = await $.ui.mount({
       plugin: 'nibash',
       surface,
@@ -201,9 +201,9 @@ describe('the trash pane', () => {
     const pane = await $.ui.mount({ plugin: 'nibash', surface: 'terminal', component: 'Pane', requestId: 'trash', props: { title: 'trash', isFocused: false } as never })
     expect(await pane.find({ text: /gone\.txt/ })).toBeDefined()
     expect(await pane.find({ text: /\(directory\)/ })).toBeDefined()
-    expect(calls[0]).toEqual({ view: 'trash' })
+    expect(calls[0]).toEqual({ view: 'trash', json: true })
     await pane.press({ key: 'restore:/work/gone.txt' })
-    expect(calls.at(-1)).toEqual({ view: 'trash', restore: '/work/gone.txt' })
+    expect(calls.at(-1)).toEqual({ view: 'trash', json: true, restore: '/work/gone.txt' })
     expect(await pane.find({ text: /restored gone\.txt/ })).toBeDefined()
     expect(await pane.find({ key: 'restore:/work/gone.txt' })).toBeUndefined()
     expect(await pane.find({ key: 'restore:/work/old' })).toBeDefined()
@@ -356,10 +356,10 @@ describe('the summary indicator and its switch', () => {
     })
     const say = async (args: string) => ((await $.command.run({ command: 'nibash', args })) as { text?: string }).text
     expect(await say('summaries off')).toContain('are off')
-    expect(sent).toEqual([{ summaries: false }])
+    expect(sent).toEqual([{ json: true, summaries: false }])
     expect(await say('summaries')).toContain('are on')
-    expect(sent.at(-1)).toEqual({ summaries: true })
-    expect(sent.slice(-2)[0]).toEqual({})
+    expect(sent.at(-1)).toEqual({ json: true, summaries: true })
+    expect(sent.slice(-2)[0]).toEqual({ json: true })
     expect(await say('summaries sometimes')).toBe('usage: /nibash summaries [on|off]')
     expect(await say('whatever')).toBe('usage: /nibash summaries [on|off]')
     // A nib without a summary model has no state to turn.

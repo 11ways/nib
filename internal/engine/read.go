@@ -37,8 +37,14 @@ var rangePart = regexp.MustCompile(`^(\d+)(?:([-+])(\d*))?$`)
 
 var symbolList = regexp.MustCompile(`^(.*):(` + symbolPart + `(?:\.` + symbolPart + `)*(?:,` + symbolPart + `(?:\.` + symbolPart + `)*)*)$`)
 
+// headingSelector is path:HEADING, a Markdown heading as its line begins: its hashes, a space and its text or the start of it.
+var headingSelector = regexp.MustCompile(`^(.*?):(#{1,6} .*\S)$`)
+
 // splitSelector splits path:selector; an existing literal path wins over selector parsing.
 func splitSelector(entry string, ctx *Context) (string, selection, error) {
+	if found := headingSelector.FindStringSubmatch(entry); found != nil && markdown.MatchString(found[1]) && !exists(ctx.resolve(entry)) {
+		return found[1], selection{symbols: []string{found[2]}}, nil
+	}
 	match := selectorPattern.FindStringSubmatch(entry)
 	if match == nil {
 		if symbols := symbolList.FindStringSubmatch(entry); symbols != nil && symbols[1] != "" && !exists(ctx.resolve(entry)) {

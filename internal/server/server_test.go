@@ -90,6 +90,25 @@ func text(result *mcp.CallToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
+// status is nibash_status's answer as the mod asks for it: the JSON its text is with json.
+func (c *client) status(t *testing.T, params *mcp.CallToolParams) map[string]any {
+	t.Helper()
+	arguments, _ := params.Arguments.(map[string]any)
+	asked := map[string]any{"json": true}
+	for name, value := range arguments {
+		asked[name] = value
+	}
+	result := c.call(t, &mcp.CallToolParams{Name: params.Name, Arguments: asked, Meta: params.Meta})
+	if result.IsError || result.StructuredContent != nil {
+		t.Fatalf("%s: %s (structured %v)", params.Name, text(result), result.StructuredContent)
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(text(result)), &status); err != nil {
+		t.Fatalf("no JSON: %v\n%s", err, text(result))
+	}
+	return status
+}
+
 // seen is the snapshot store's state for the main session: every path with its versions' tags and seen and known lines.
 func (c *client) seen() string { return c.seenBy("main") }
 
@@ -239,6 +258,38 @@ func TestDeclinedEditWritesNothing(t *testing.T) {
 	for _, path := range []string{filepath.Join(one, "a.txt"), filepath.Join(two, "b.txt")} {
 		if _, err := os.Stat(path); err == nil {
 			t.Fatalf("%s must not be written when a confirmation is declined", path)
+		}
+	}
+}
+
+func TestWriteAppendsWithoutATagAndCreatesAMissingFile(t *testing.T) {
+	directory := resolvedPath(t, t.TempDir())
+	c := connect(t, Options{Directory: directory}, []string{directory}, nil, false)
+	log := filepath.Join(directory, "log.md")
+	write := func(arguments map[string]any) *mcp.CallToolResult {
+		arguments["path"] = log
+		return c.call(t, &mcp.CallToolParams{Name: "write", Arguments: arguments})
+	}
+	// A file nobody read grows by the lines given, a missing one is created, and the answer anchors the new rows.
+	for _, content := range []string{"one\n", "two\nthree", "four\n"} {
+		if result := write(map[string]any{"content": content, "append": true}); result.IsError {
+			t.Fatalf("append of %q: %s", content, text(result))
+		}
+	}
+	if data, _ := os.ReadFile(log); string(data) != "one\ntwo\nthree\nfour\n" {
+		t.Fatalf("the file holds %q", data)
+	}
+	last := write(map[string]any{"content": "five\n", "append": true})
+	tag := regexp.MustCompile(`#([0-9A-F]{4})\]`).FindStringSubmatch(text(last))
+	if tag == nil {
+		t.Fatalf("no tag in %q", text(last))
+	}
+	if edited := c.call(t, editCall(fmt.Sprintf("[%s#%s]\nPUT 5:\n+FIVE", log, tag[1]))); edited.IsError {
+		t.Fatalf("an edit of the appended row: %s", text(edited))
+	}
+	for _, arguments := range []map[string]any{{"content": "x\n", "append": true, "tag": tag[1]}, {"content": "", "append": true}} {
+		if refused := write(arguments); !refused.IsError {
+			t.Fatalf("%v must be refused, got %q", arguments, text(refused))
 		}
 	}
 }
@@ -577,8 +628,11 @@ func TestEachAgentHasJobsEndedWithTheConnection(t *testing.T) {
 	if got := text(status); !strings.HasPrefix(got, "[main] running 0:00: fake\n[agent:a1] running 0:00: fake\n") {
 		t.Fatalf("status text: %q", got)
 	}
-	if listed, _ := status.StructuredContent.(map[string]any)["commands"].([]any); len(listed) != 5 {
-		t.Fatalf("structured status: %#v", status.StructuredContent)
+	if status.StructuredContent != nil {
+		t.Fatalf("structured content takes the text's place for the model: %#v", status.StructuredContent)
+	}
+	if listed, _ := c.status(t, r.as("a1", &mcp.CallToolParams{Name: "nibash_status"}))["commands"].([]any); len(listed) != 5 {
+		t.Fatalf("status as JSON: %#v", listed)
 	}
 	// Another connection, with the same shell behind it, sees none of them.
 	other := connect(t, Options{Directory: directory, Shell: shell, Agent: r.take}, []string{directory}, nil, false)
@@ -615,23 +669,23 @@ func TestStatusListsTheTrashAndRestoresFromIt(t *testing.T) {
 		}
 	}
 	c := connect(t, Options{Directory: directory, Shell: &fakeShell{}, Engine: e}, []string{directory}, nil, false)
-	entries := func(result *mcp.CallToolResult) []any {
-		trash, _ := result.StructuredContent.(map[string]any)["trash"].(map[string]any)
+	entries := func(status map[string]any) []any {
+		trash, _ := status["trash"].(map[string]any)
 		listed, _ := trash["entries"].([]any)
 		return listed
 	}
-	listed := entries(c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "trash"}}))
+	listed := entries(c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "trash"}}))
 	if len(listed) != 2 || listed[0].(map[string]any)["path"] != gone || listed[0].(map[string]any)["shown"] != "gone.txt" {
 		t.Fatalf("trash view: %#v", listed)
 	}
-	if plain := entries(c.call(t, &mcp.CallToolParams{Name: "nibash_status"})); plain != nil {
+	if plain := entries(c.status(t, &mcp.CallToolParams{Name: "nibash_status"})); plain != nil {
 		t.Fatalf("a status without a view lists no trash, got %#v", plain)
 	}
 	// Restoring puts the file back through the trash code, and the view no longer lists it.
-	restored := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": gone, "view": "trash"}})
-	got, _ := restored.StructuredContent.(map[string]any)["restore"].(map[string]any)
+	restored := c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": gone, "view": "trash"}})
+	got, _ := restored["restore"].(map[string]any)
 	if got["done"] != true || got["message"] != "restored gone.txt" || len(entries(restored)) != 1 {
-		t.Fatalf("restore: %#v", restored.StructuredContent)
+		t.Fatalf("restore: %#v", restored)
 	}
 	if data, err := os.ReadFile(gone); err != nil || string(data) != "one\n" {
 		t.Fatalf("restored file: %q %v", data, err)
@@ -639,10 +693,10 @@ func TestStatusListsTheTrashAndRestoresFromIt(t *testing.T) {
 	// A file now at the path is refused, never replaced, and so is a path this server did not trash.
 	file(t, kept, "newer\n")
 	for path, want := range map[string]string{kept: "cannot restore kept.txt: a file is there now", filepath.Join(directory, "never.txt"): "this session did not move it to the trash", "relative.txt": "is not an absolute path"} {
-		refused := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": path}})
-		got, _ := refused.StructuredContent.(map[string]any)["restore"].(map[string]any)
+		refused := c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"restore": path}})
+		got, _ := refused["restore"].(map[string]any)
 		if got["done"] != false || !strings.Contains(fmt.Sprint(got["message"]), want) {
-			t.Fatalf("restore of %s: %#v", path, refused.StructuredContent)
+			t.Fatalf("restore of %s: %#v", path, refused)
 		}
 	}
 	if data, _ := os.ReadFile(kept); string(data) != "newer\n" {
@@ -1288,8 +1342,7 @@ func TestStatusCountsWhatEachAgentsCallsReturned(t *testing.T) {
 	sub := c.call(t, r.as("a1", &mcp.CallToolParams{Name: "nibash", Arguments: map[string]any{"command": "pwd"}}))
 	c.call(t, &mcp.CallToolParams{Name: "nibash_status"})
 	tokens := func() map[string]any {
-		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "tokens"}})
-		view, _ := result.StructuredContent.(map[string]any)["tokens"].(map[string]any)
+		view, _ := c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "tokens"}})["tokens"].(map[string]any)
 		return view
 	}
 	view := tokens()
@@ -1327,8 +1380,7 @@ func TestStatusListsEachAgentsNamedDirectoriesWithTheirUses(t *testing.T) {
 	c.call(t, readCall(path))
 	c.call(t, r.as("a1", readCall(path)))
 	c.call(t, r.as("a1", readCall(path)))
-	result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "names"}})
-	view, _ := result.StructuredContent.(map[string]any)["names"].(map[string]any)
+	view, _ := c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "names"}})["names"].(map[string]any)
 	agents, _ := view["agents"].([]any)
 	if len(agents) != 2 {
 		t.Fatalf("names view: %#v", view)
@@ -1359,8 +1411,7 @@ func TestStatusListsTheLinesEachAgentHoldsAsSeenWithoutChangingThem(t *testing.T
 	c.call(t, r.as("a1", readCall(path)))
 	before := c.seen()
 	ask := func() []any {
-		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "seen"}})
-		view, _ := result.StructuredContent.(map[string]any)["seen"].(map[string]any)
+		view, _ := c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: map[string]any{"view": "seen"}})["seen"].(map[string]any)
 		agents, _ := view["agents"].([]any)
 		return agents
 	}
@@ -1393,11 +1444,7 @@ func TestStatusTellsOfModelCallsAndTurnsSummariesOnAndOff(t *testing.T) {
 	shell := &fakeShell{models: []ModelCall{{Kind: "summary", Model: "deepseek/deepseek-v4.1-flash-1017", Started: 1_000}}}
 	c := connect(t, Options{Directory: directory, Shell: shell}, []string{directory}, nil, false)
 	ask := func(arguments map[string]any) map[string]any {
-		result := c.call(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: arguments})
-		if result.IsError {
-			t.Fatalf("%s", text(result))
-		}
-		return result.StructuredContent.(map[string]any)
+		return c.status(t, &mcp.CallToolParams{Name: "nibash_status", Arguments: arguments})
 	}
 	status := ask(nil)
 	models, _ := status["models"].([]any)

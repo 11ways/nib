@@ -2,6 +2,9 @@ package engine
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -118,6 +121,35 @@ func TestACallIsNotADeclaration(t *testing.T) {
 	}
 	if _, err := symbolRanges("notes.txt", lines, "describe"); err == nil || !strings.Contains(err.Error(), "has no grammar for .txt files") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAMarkdownHeadingReadsItsSection(t *testing.T) {
+	text := "# Report\nintro\n## Fix round\none\n### Detail\ntwo\n```\n## not a heading\n```\n## Fix round 2\nthree\n# Other\nfour\n"
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	for wanted, want := range map[string][]lineRange{
+		"## Fix round":   {{3, 9}},
+		"## fix round 2": {{10, 11}},
+		"## Fix":         {{3, 9}, {10, 11}},
+		"### Detail":     {{5, 9}},
+		"# Other":        {{12, 13}},
+		"# Report":       {{1, 11}},
+	} {
+		if got, err := symbolRanges("r.md", lines, wanted); err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s: got %v %v, want %v", wanted, got, err, want)
+		}
+	}
+	if _, err := symbolRanges("r.md", lines, "## Missing"); err == nil || !strings.Contains(err.Error(), `no heading that begins with "## Missing"; of that level it has: ## Fix round | ## Fix round 2`) {
+		t.Fatalf("got %v", err)
+	}
+	// Through a read: the section's rows, and a path that exists under the whole name wins.
+	e, ctx, path := showFixture(t, "x\n")
+	report := filepath.Join(filepath.Dir(path), "r.md")
+	if err := os.WriteFile(report, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := readText(t, e, ctx, report+":## Fix round 2"); !strings.Contains(out, "]\n10:## Fix round 2\n11:three\n") || strings.Contains(out, "12:") {
+		t.Fatalf("got:\n%s", out)
 	}
 }
 

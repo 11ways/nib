@@ -22,10 +22,46 @@ const gitEach = "git-each"
 // eachBase is the word git-each replaces in its arguments with each repository's integration branch.
 const eachBase = "{base}"
 
+// eachPending is git-each's own option, before git's words: only the repositories that hold pending work (pendingWork) run git.
+const eachPending = "--pending"
+
 // eachPlan runs git with args in each repository at and below the shell's directory, in path order, and prints only those whose git
 // printed anything, each under a header naming it; through nib's git, so what reaches the model is shaped as git's own output is.
 type eachPlan struct {
 	args []string
+}
+
+// eachWords splits git-each's arguments into whether it asks for pending work only and git's words, which are a short status when
+// eachPending comes alone.
+func eachWords(args []string) (pending bool, git []string) {
+	if len(args) == 0 || args[0] != eachPending {
+		return false, args
+	}
+	if len(args) == 1 {
+		return true, []string{"status", "-sb"}
+	}
+	return true, args[1:]
+}
+
+// pendingWork says whether repository holds work its upstream lacks or might: a changed or untracked file, commits ahead of or behind the
+// upstream, or no upstream to tell by; true as well when git cannot say.
+func pendingWork(inv *invocation, repository string) bool {
+	var out bytes.Buffer
+	args := []string{"git", "-C", repository, "status", "--porcelain=v2", "--branch"}
+	if inv.call.runProgramTo(inv.ctx, args, &out, io.Discard, nil) != nil {
+		return true
+	}
+	level := false
+	for line := range strings.Lines(out.String()) {
+		line = strings.TrimRight(line, "\n")
+		switch {
+		case line == "# branch.ab +0 -0":
+			level = true
+		case line != "" && !strings.HasPrefix(line, "# "):
+			return true
+		}
+	}
+	return !level
 }
 
 func prepareGitEach(_ string, args []string) (plan, error) {
@@ -36,10 +72,12 @@ func prepareGitEach(_ string, args []string) (plan, error) {
 }
 
 func (p *eachPlan) run(inv *invocation) int {
-	if len(p.args) == 0 {
-		inv.fail("usage: git-each GIT-ARGUMENTS... (%s stands for each repository's integration branch)", eachBase)
+	pending, words := eachWords(p.args)
+	if len(words) == 0 {
+		inv.fail("usage: git-each [%s] GIT-ARGUMENTS... (%s stands for each repository's integration branch; %s runs only where work is pending, alone a short status)", eachPending, eachBase, eachPending)
 		return 2
 	}
+	p = &eachPlan{args: words}
 	// git rm and git clean send what they delete to the trash only as nibash's own git runs them, one repository at a time.
 	if _, _, subcommand, _, ok := gitArgs(append([]string{"git"}, p.args...)); ok && (subcommand == "rm" || subcommand == "clean") {
 		inv.fail("runs no git %s: what it deletes goes to the trash only when it runs in one repository, as git -C REPOSITORY %s", subcommand, subcommand)
@@ -61,6 +99,9 @@ func (p *eachPlan) run(inv *invocation) int {
 	defer func() { inv.stderr = stderr }()
 	status := 0
 	for _, repository := range repositories {
+		if pending && !pendingWork(inv, repository) {
+			continue
+		}
 		// A repository whose git printed one line shows it on its header's line, so a one-line answer per repository reads as a table.
 		shown := p.shown(inv, repository)
 		inv.out.pending, inv.out.fold = []record{{text: "==> " + shown + " <=="}}, shown

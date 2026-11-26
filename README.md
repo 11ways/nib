@@ -90,9 +90,9 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | `grep` | `pattern`, optional `paths[]`, `glob`, `ignoreCase`, `literal`, `before`, `after`, `mode`, `noIgnore`, `maxLineLength`, `skip`, `replace` | ripgrep search; match rows are edit anchors; `replace` previews a replacement. |
 | `find` | optional `paths[]`, `glob`, `minSize`, `newer`, `sort`, `noIgnore`, `skip`, `limit`, `expect` | Lists files with line counts, sizes and ages. |
 | `edit` | `input` (a patch, or `REAPPLY TOKEN`) | Edits, creates, copies, moves and deletes files. |
-| `write` | `path`, `content`, optional `tag` | Creates a file, or overwrites one given its current tag. |
+| `write` | `path`, `content`, optional `tag`, `append` | Creates a file, or overwrites one given its current tag; with `append: true` adds `content` at its end without a tag, as `PUT >$:` does. |
 | `nibash` | `command`, optional `description`, `expect`, `timeout`, `background` | Runs a command in nibash. |
-| `nibash_status` | optional `tail`, `view`, `restore`, `summaries` | Lists running commands and jobs, each `tail` from the last 64 KB of output with lines cut at 2000 bytes; used by the nibash mod. |
+| `nibash_status` | optional `tail`, `view`, `restore`, `summaries`, `json` | Lists running commands and jobs as text rows, or with `json` as the JSON the mod reads (never as structured content, which Claude Code shows the model in the text's place), each `tail` from the last 64 KB of output with lines cut at 2000 bytes; used by the nibash mod. |
 | `skim` | `paths[]`, `expect` | Reads long files (logs, test reports) for what `expect` asks, without edit anchors. |
 
 `skim` is offered only with nibash. Tool arguments are lenient: numbers as strings, another tool's argument names
@@ -114,6 +114,7 @@ one becomes an error for its call, since Claude Code drops a stdio server that w
 | --- | --- |
 | `path:A`, `path:A-B`, `path:A+N`, `path:A-`, `path:-N`, `path:A-B,C-D` | lines |
 | `path:name`, `path:Type.member`, `path:a,b` | declarations, with their comments and annotations |
+| `notes.md:## Setup` | a Markdown heading's section, to the next heading of its level or higher; the heading as its line reads or begins, whatever the case |
 | `path#TAG` | what changed since that version (nib keeps 4 per file) |
 | `path@REV` | the file at a git revision; a folder gives the commit and its diff; `path@A...B` or `path@A..B` the diff between them, a folder's files first (`.@main...topic:Foo.java` for one file) |
 | `file.db:TABLE`, `file.db:TABLE:-15`, `file.db:SELECT ...` | rows of a SQLite database file, or a read-only query |
@@ -287,7 +288,9 @@ pattern RE2 cannot run exactly as sed would, or any other command, runs the syst
   --remotes` the commits that are on no remote. `{base}` is the repository's `base` in `nib.json`, else the upstream of
   its branch when that tracks a branch of another name, else `origin/HEAD`. In a folder its repository does not track
   (a workspace that ignores its lanes of worktrees) the repositories are found by walking the folder, worktrees
-  included; with none found it says so and fails.
+  included; with none found it says so and fails. `git-each --pending ARGS` runs git only in the repositories with
+  changed or untracked files, a branch ahead of or behind its upstream, or no upstream; `git-each --pending` alone is
+  their `status -sb`, so one short call lists what is unlanded.
 - **Deletes go to the trash.** `rm`, `unlink`, `git rm`, `git clean`, `find -delete` and `edit`'s `REM` move files to
   the user's trash. `trash list` shows them, `trash restore [-f] PATH` puts one back. What a memory filesystem holds
   (tmpfs, ramfs; Linux only) is deleted instead, since a trash there would keep the memory in use, and the call says so.
