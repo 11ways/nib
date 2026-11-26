@@ -251,6 +251,8 @@ var (
 func (t *gitTidier) line(text string) (shown string, keep bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// ssh ends its own lines with \r\n.
+	text = strings.TrimSuffix(text, "\r")
 	if at := strings.LastIndexByte(text, '\r'); at >= 0 && at < len(text)-1 {
 		text = text[at+1:]
 	}

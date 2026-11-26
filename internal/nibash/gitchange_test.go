@@ -190,8 +190,9 @@ func TestGitCherryPickLeavesOutTheDateItsSummaryRepeats(t *testing.T) {
 func TestGitPrintsALineItsSSHRepeatsOnce(t *testing.T) {
 	f := gitFixture(t, map[string]string{"a.txt": "a\n"})
 	warn := filepath.Join(t.TempDir(), "ssh")
-	script := "#!/bin/sh\necho 'warning: odd option' >&2\necho 'warning: odd option' >&2\necho 'X11 forwarding request failed on channel 0' >&2\n" +
-		"echo \"Warning: Permanently added 'example.invalid' (ED25519) to the list of known hosts.\" >&2\nexit 1\n"
+	// ssh ends its own messages with \r\n.
+	script := "#!/bin/sh\necho 'warning: odd option' >&2\necho 'warning: odd option' >&2\nprintf 'X11 forwarding request failed on channel 0\\r\\n' >&2\n" +
+		"printf \"Warning: Permanently added 'example.invalid' (ED25519) to the list of known hosts.\\r\\n\" >&2\nexit 1\n"
 	if err := os.WriteFile(warn, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
