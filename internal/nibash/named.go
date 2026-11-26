@@ -26,6 +26,46 @@ type namer interface {
 	Observe(path string)
 	// Worked notes a directory the agent changed into, so a long directory holding it is named at once.
 	Worked(directory string)
+	// Work pins the agent's calls to directory; kept is "" when that is the server's own, which takes the pin away.
+	Work(directory string) (kept string, err error)
+}
+
+// cdKeep is nibash's own option of cd, which bash's lacks: the directory it changes into is where the agent's later calls start too.
+const cdKeep = "--keep"
+
+// keepDirectory pins the agent's calls, every nib tool's, to the one directory operands name and returns the cd into it, or what fails in
+// its place. The server's own directory takes the pin away.
+func (c *call) keepDirectory(ctx context.Context, operands []string) []string {
+	hc := interp.HandlerCtx(ctx)
+	refuse := func(format string, args ...any) []string {
+		fmt.Fprintf(hc.Stderr, "cd: "+cdKeep+": "+format+"\n", args...)
+		return []string{"false"}
+	}
+	if c.names == nil {
+		return refuse("a directory cannot be kept here")
+	}
+	if len(operands) != 1 {
+		return refuse("takes one directory, where your later calls and every nib tool then start")
+	}
+	target := absolute(hc.Dir, operands[0])
+	if c.tools.Sandbox {
+		if refused, err := c.tools.Refused(target); err != nil || refused != "" {
+			if refused == "" {
+				refused = err.Error()
+			}
+			return refuse("%s", refused)
+		}
+	}
+	pinned, err := c.names.Work(target)
+	if err != nil {
+		return refuse("%v", err)
+	}
+	if pinned == "" {
+		fmt.Fprintf(hc.Stdout, "[your calls start in the project directory again]\n")
+	} else {
+		fmt.Fprintf(hc.Stdout, "[from now on your nibash calls start in %s and relative paths in every nib tool mean it, for you and the subagents you start]\n", c.tools.Display(pinned))
+	}
+	return []string{"cd", target}
 }
 
 // homePrefix starts the "HOME name" lookups tilde expansion makes for ~name.

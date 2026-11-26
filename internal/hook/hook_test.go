@@ -62,7 +62,7 @@ func TestAResendRunsAndStateMustBePrivate(t *testing.T) {
 		data, _ := json.Marshal(Input{SessionID: session, Cwd: directory, ToolName: "Read", ToolInput: args})
 		return data
 	}
-	first := Run(input("s1", map[string]any{"file_path": "a.ts", "limit": 5}), state, nil)
+	first := Run(input("s1", map[string]any{"file_path": "a.ts", "limit": 5}), state, nil, nil)
 	var decision struct {
 		HookSpecificOutput map[string]string `json:"hookSpecificOutput"`
 	}
@@ -70,13 +70,13 @@ func TestAResendRunsAndStateMustBePrivate(t *testing.T) {
 		t.Fatalf("first %q", first)
 	}
 	// The same call again runs, whatever order its arguments come in; another session is refused once on its own.
-	if got := Run(input("s1", map[string]any{"limit": 5, "file_path": "a.ts"}), state, nil); got != "" {
+	if got := Run(input("s1", map[string]any{"limit": 5, "file_path": "a.ts"}), state, nil, nil); got != "" {
 		t.Fatalf("resend %q", got)
 	}
-	if got := Run(input("s2", map[string]any{"file_path": "a.ts", "limit": 5}), state, nil); !strings.Contains(got, `"deny"`) {
+	if got := Run(input("s2", map[string]any{"file_path": "a.ts", "limit": 5}), state, nil, nil); !strings.Contains(got, `"deny"`) {
 		t.Fatalf("other session %q", got)
 	}
-	if Run([]byte("not json"), state, nil) != "" {
+	if Run([]byte("not json"), state, nil, nil) != "" {
 		t.Fatal("bad input must pass")
 	}
 	// Windows keeps no permission bits a folder could let others in by; its folders are judged by their owner.
@@ -85,7 +85,7 @@ func TestAResendRunsAndStateMustBePrivate(t *testing.T) {
 		if err := os.Mkdir(open, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if got := Run(input("s1", map[string]any{"file_path": "a.ts"}), open, nil); got != "" {
+		if got := Run(input("s1", map[string]any{"file_path": "a.ts"}), open, nil, nil); got != "" {
 			t.Fatalf("state others can write must turn refusals off, got %q", got)
 		}
 	}
@@ -96,7 +96,7 @@ func TestAResendRunsAndStateMustBePrivate(t *testing.T) {
 	if err := os.Symlink(filepath.Join(directory, "elsewhere"), filepath.Join(private, "s3.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if got := Run(input("s3", map[string]any{"file_path": "a.ts"}), private, nil); got != "" {
+	if got := Run(input("s3", map[string]any{"file_path": "a.ts"}), private, nil, nil); got != "" {
 		t.Fatalf("a linked state file must not be written through, got %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(directory, "elsewhere")); err == nil {
@@ -113,11 +113,11 @@ func TestNibToolCallsAreFiledForSubagentsAndNeverRefused(t *testing.T) {
 		})
 		return data
 	}
-	if got := Run(input("mcp__nib__read", "toolu_sub", "a1d576263ade979e4"), state, nil); got != "" {
+	if got := Run(input("mcp__nib__read", "toolu_sub", "a1d576263ade979e4"), state, nil, nil); got != "" {
 		t.Fatalf("a subagent's nib call must pass untouched, got %q", got)
 	}
 	main, _ := json.Marshal(map[string]any{"session_id": "6d0b", "hook_event_name": "PreToolUse", "tool_name": "mcp__nib__read", "tool_input": map[string]any{}, "tool_use_id": "toolu_main"})
-	if got := Run(main, state, nil); got != "" {
+	if got := Run(main, state, nil, nil); got != "" {
 		t.Fatalf("the main agent's nib call must pass untouched, got %q", got)
 	}
 	agents := hookstate.OpenAgents(state)
@@ -128,7 +128,7 @@ func TestNibToolCallsAreFiledForSubagentsAndNeverRefused(t *testing.T) {
 		t.Fatalf("the subagent's call must be filed under its tool_use id, got %+v", got)
 	}
 	// A subagent's Read is still Read: refused once, and filed for nobody.
-	if got := Run(input("Read", "toolu_read", "a1d576263ade979e4"), state, nil); !strings.Contains(got, `"deny"`) {
+	if got := Run(input("Read", "toolu_read", "a1d576263ade979e4"), state, nil, nil); !strings.Contains(got, `"deny"`) {
 		t.Fatalf("a subagent's Read must be refused like the main agent's, got %q", got)
 	}
 	if got := agents.Take("toolu_read"); got != (hookstate.Agent{}) {
@@ -142,7 +142,7 @@ func TestNibToolCallsAreFiledForSubagentsAndNeverRefused(t *testing.T) {
 	if err := os.Mkdir(open, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := Run(input("mcp__nib__edit", "toolu_open", "a1"), open, nil); got != "" {
+	if got := Run(input("mcp__nib__edit", "toolu_open", "a1"), open, nil, nil); got != "" {
 		t.Fatalf("a call the hook cannot file must still pass, got %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(open, "agents")); err == nil {
@@ -199,7 +199,7 @@ func TestASubagentIsFiledWithItsParent(t *testing.T) {
 			"session_id": "f223c386", "transcript_path": c.transcript, "hook_event_name": "PreToolUse", "tool_name": "mcp__nib__read",
 			"tool_input": map[string]any{}, "tool_use_id": "toolu_x", "agent_id": c.agent, "agent_type": c.agentType,
 		})
-		if got := Run(data, state, nil); got != "" {
+		if got := Run(data, state, nil, nil); got != "" {
 			t.Fatalf("a fork's nib call must pass untouched, got %q", got)
 		}
 		if got := agents.Take("toolu_x"); got != c.want {
@@ -286,7 +286,7 @@ func TestAForksSpawnMomentIsReadFromItsParentsTranscript(t *testing.T) {
 			"session_id": "f223c386", "transcript_path": transcript, "hook_event_name": "PreToolUse", "tool_name": "mcp__nib__read",
 			"tool_input": map[string]any{}, "tool_use_id": "toolu_x", "agent_id": agent, "agent_type": kind,
 		})
-		if got := Run(data, state, nil); got != "" {
+		if got := Run(data, state, nil, nil); got != "" {
 			t.Fatalf("a fork's nib call must pass untouched, got %q", got)
 		}
 		return agents.Take("toolu_x")
@@ -325,7 +325,7 @@ func TestContextDropsAreNotedAndFiledWithEveryNibCall(t *testing.T) {
 	run := func(fields map[string]any) {
 		t.Helper()
 		data, _ := json.Marshal(fields)
-		if got := Run(data, state, nil); got != "" {
+		if got := Run(data, state, nil, nil); got != "" {
 			t.Fatalf("%v must pass untouched, got %q", fields, got)
 		}
 	}
@@ -411,18 +411,36 @@ func TestAMessageGetsTheNamedDirectoriesItUsesThatTheServerTells(t *testing.T) {
 		data, _ := json.Marshal(map[string]any{"session_id": "f223c386", "hook_event_name": "UserPromptSubmit", "prompt": prompt})
 		return data
 	}
-	if got := Run(message("no names here, only ~/home and a~b"), state, ask); got != "" || len(asked) != 0 {
+	var told []string
+	tell := func(event, agent string) { told = append(told, event+":"+agent) }
+	if got := Run(message("no names here, only ~/home and a~b"), state, ask, tell); got != "" || len(asked) != 0 {
 		t.Fatalf("a message without names asked %v, got %q", asked, got)
 	}
 	// A /clear the hook filed goes with the question, so the server drops what the agent had first.
 	clear, _ := json.Marshal(map[string]any{"session_id": "f223c386", "hook_event_name": "SessionStart", "source": "clear"})
-	Run(clear, state, nil)
-	got := Run(message("go on in ~w/core and ~g"), state, ask)
+	Run(clear, state, nil, nil)
+	got := Run(message("go on in ~w/core and ~g"), state, ask, tell)
 	want := `{"hookSpecificOutput":{"additionalContext":"nib's named directories in this message, which work in every nib tool and in nibash:\n~w = /src/widgets","hookEventName":"UserPromptSubmit"}}`
 	if got != want || len(asked) != 1 || !slices.Equal(asked[0], []string{"w", "g"}) || drops[0].IsZero() {
 		t.Fatalf("asked %v after %v, got %s", asked, drops, got)
 	}
-	if got := Run(message("~w"), state, func([]string, time.Time) []string { return nil }); got != "" {
+	if got := Run(message("~w"), state, func([]string, time.Time) []string { return nil }, nil); got != "" {
 		t.Fatalf("nothing to tell adds %q", got)
+	}
+	// The server hears of each message, each tool call's end with its subagent, and the main agent's turn ending, and nothing is refused.
+	for _, event := range []map[string]any{
+		{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "toolu_1", "agent_id": "a1d576263ade979e4"},
+		{"hook_event_name": "PostToolUse", "tool_name": "mcp__nib__read", "tool_use_id": "toolu_2"},
+		{"hook_event_name": "Stop"},
+	} {
+		event["session_id"] = "f223c386"
+		data, _ := json.Marshal(event)
+		if got := Run(data, state, nil, tell); got != "" {
+			t.Fatalf("%v answered %q", event, got)
+		}
+	}
+	want = hookstate.EventPrompt + ":, " + hookstate.EventPrompt + ":, " + hookstate.EventTool + ":a1d576263ade979e4, " + hookstate.EventTool + ":, " + hookstate.EventStop + ":"
+	if strings.Join(told, ", ") != want {
+		t.Fatalf("told %v, want %s", told, want)
 	}
 }

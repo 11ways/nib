@@ -168,6 +168,9 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 		if c == nil || len(args) < 2 || args[1] == "-" {
 			return args, nil
 		}
+		if args[1] == cdKeep {
+			return c.keepDirectory(ctx, args[2:]), nil
+		}
 		hc := interp.HandlerCtx(ctx)
 		target := absolute(hc.Dir, args[len(args)-1])
 		if c.tools.Sandbox {

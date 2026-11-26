@@ -119,3 +119,36 @@ func TestPersistLeavesTheNamesAnAgentAlreadyHas(t *testing.T) {
 		t.Fatalf("its own name: %q", shown)
 	}
 }
+
+func TestAPinnedDirectoryIsInheritedAndOutlivesTheServer(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	lane := deep(t, root, "lane")
+	dir := filepath.Join(t.TempDir(), "agents")
+	first := NewDefined()
+	first.Keep(dir)
+	first.Persist("builder", "key")
+	view := (&Table{Base: root}).For(first, "builder")
+	if kept, err := view.Work(lane); err != nil || kept != lane || view.Workdir() != lane {
+		t.Fatalf("got %q %v, then %q", kept, err, view.Workdir())
+	}
+	// A subagent spawned before the pin does not start with it; one spawned after does.
+	first.Inherit("early", "builder", time.Unix(1, 0))
+	first.Inherit("late", "builder", time.Time{})
+	if early, late := (&Table{Base: root}).For(first, "early").Workdir(), (&Table{Base: root}).For(first, "late").Workdir(); early != "" || late != lane {
+		t.Fatalf("early %q, late %q", early, late)
+	}
+	second := NewDefined()
+	second.Keep(dir)
+	second.Persist("builder", "key")
+	again := (&Table{Base: root}).For(second, "builder")
+	if got := again.Workdir(); got != lane {
+		t.Fatalf("after a restart: %q", got)
+	}
+	// The server's own directory takes the pin away, and a relative path is refused.
+	if kept, err := again.Work(root); err != nil || kept != "" || again.Workdir() != "" {
+		t.Fatalf("got %q %v, then %q", kept, err, again.Workdir())
+	}
+	if _, err := again.Work("lane"); err == nil {
+		t.Fatal("a relative path must be refused")
+	}
+}

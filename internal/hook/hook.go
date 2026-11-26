@@ -33,13 +33,16 @@ type Matcher struct{ Event, Matcher, Selects string }
 
 // Matchers are the hook's registrations: the built-in Read it guards, nib's own tools, whose calls it files for the server, the events
 // that drop an agent's context: every session start (a new conversation, /clear, a resume, or a compaction) and every compaction, whose
-// matchers select by trigger, and every message the user sends, whose named directories it tells the agent of.
+// matchers select by trigger, every message the user sends, whose named directories it tells the agent of, and with that message every
+// tool call's end and every end of the main agent's turn, which it tells the server, so that it knows when the session is idle.
 var Matchers = []Matcher{
 	{"PreToolUse", "Read", "Read"},
 	{"PreToolUse", "mcp__nib__.*", "mcp__nib__read"},
 	{"SessionStart", "", "clear"},
 	{"PostCompact", "", "auto"},
 	{"UserPromptSubmit", "", "prompt"},
+	{"PostToolUse", "", "Bash"},
+	{"Stop", "", "stop"},
 }
 
 // Input is the part of Claude Code's hook input the hook uses; AgentID and AgentType are set only for a subagent's call, Prompt only for a
@@ -60,6 +63,9 @@ type Input struct {
 // Ask asks the session's nib server what the main agent must be told of mentioned, the named directories a message the user sent uses,
 // after its context was last dropped at dropped (zero for never): lines ~name = directory, none when no server answered.
 type Ask func(mentioned []string, dropped time.Time) []string
+
+// Tell tells the session's nib server that the hook saw event (the server's names for them) of the subagent agent, "" for the main agent.
+type Tell func(event, agent string)
 
 // metaLimit bounds the read of a subagent's meta file, a few hundred bytes in Claude Code 2.1.
 const metaLimit = 64 * 1024
@@ -341,8 +347,9 @@ func firstTime(session, call, directory string) bool {
 // Run reads one hook call and returns Claude Code's deny decision when nib should take the call, or "" to let it run. An MCP tool's call is
 // never refused; a subagent's is filed under its tool_use id, with its parent, spawn moment and whether it is a fork when those are known,
 // and a failure to file it only leaves that call to the main agent's state. A session start or compaction is noted for the agent it drops
-// the context of. A message the user sent gets, as context for the agent, the named directories it uses that ask says to tell.
-func Run(stdin []byte, state string, ask Ask) string {
+// the context of. A message the user sent gets, as context for the agent, the named directories it uses that ask says to tell. tell hears
+// of that message, of each tool call's end and of the main agent's turn ending.
+func Run(stdin []byte, state string, ask Ask, tell Tell) string {
 	var input Input
 	if json.Unmarshal(stdin, &input) != nil {
 		return ""
@@ -358,7 +365,11 @@ func Run(stdin []byte, state string, ask Ask) string {
 		}
 		return ""
 	case "UserPromptSubmit":
+		heard(tell, events[input.HookEventName], "")
 		return prompted(input, state, ask)
+	case "PostToolUse", "Stop":
+		heard(tell, events[input.HookEventName], input.AgentID)
+		return ""
 	}
 	if strings.HasPrefix(input.ToolName, "mcp__") {
 		var found origin
@@ -385,6 +396,15 @@ func Run(stdin []byte, state string, ask Ask) string {
 		"permissionDecisionReason": reason,
 	}})
 	return string(encoded)
+}
+
+// events are the names the server knows the hook's events by.
+var events = map[string]string{"UserPromptSubmit": hookstate.EventPrompt, "PostToolUse": hookstate.EventTool, "Stop": hookstate.EventStop}
+
+func heard(tell Tell, event, agent string) {
+	if tell != nil {
+		tell(event, agent)
+	}
 }
 
 // contextKey is the Contexts file of the agent a hook call comes from: its subagent's, else its session's main agent's.

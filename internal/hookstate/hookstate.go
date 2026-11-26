@@ -19,6 +19,16 @@ import (
 // RecordAge is how long an agent record waits for its call; a call the user refused or that failed before reaching nib leaves one behind.
 const RecordAge = 24 * time.Hour
 
+// What the hook tells the session's server it saw, so that the server knows when the session is idle.
+const (
+	// EventPrompt is a message the user sent, which begins the main agent's turn.
+	EventPrompt = "prompt"
+	// EventTool is a tool call of any agent's that ended.
+	EventTool = "tool"
+	// EventStop is the main agent's turn ending.
+	EventStop = "stop"
+)
+
 // Directory is the per-user runtime folder when there is one, else the user's cache; never a folder another user could have made.
 func Directory() string {
 	if runtime := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(runtime) {

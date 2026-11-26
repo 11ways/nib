@@ -46,8 +46,8 @@ nib setup --dry-run   # show what would change
 
 - `.mcp.json`: the `nib` server.
 - `.claude/settings.local.json`: approval of that server, nib's hook (for `Read`, nib's own tools, `SessionStart`,
-  `PostCompact` and `UserPromptSubmit`), deny rules for `Bash`, `Grep`, `Glob`, `Edit` and `Write`, and an allow rule
-  for `mcp__nib__nibash_status`.
+  `PostCompact`, `UserPromptSubmit`, and `PostToolUse` and `Stop`, which tell the server when the session is idle), deny
+  rules for `Bash`, `Grep`, `Glob`, `Edit` and `Write`, and an allow rule for `mcp__nib__nibash_status`.
 - `opencode.json`, if the project has one: the `nib` server with `codemode: false`, and deny rules for `shell`, `read`,
   `grep`, `glob` and `edit`.
 
@@ -94,6 +94,7 @@ hooks matching `Edit|Write` only run for them when they also match `mcp__nib__.*
 | `nibash` | `command`, optional `description`, `expect`, `timeout`, `background` | Runs a command in nibash. |
 | `nibash_status` | optional `tail`, `view`, `restore`, `summaries`, `json` | Lists running commands and jobs as text rows, or with `json` as the JSON the mod reads (never as structured content, which Claude Code shows the model in the text's place), each `tail` from the last 64 KB of output with lines cut at 2000 bytes; used by the nibash mod. |
 | `skim` | `paths[]`, `expect` | Reads long files (logs, test reports) for what `expect` asks, without edit anchors. |
+| `timer` | optional `message`, `every`, `idle`, `once`, `cancel` | Only with nib's channel, and only for the main agent: sends it `message` later. |
 
 `skim` is offered only with nibash. Tool arguments are lenient: numbers as strings, another tool's argument names
 (`file_path`, `offset`, `limit`), and JSON lists sent as strings are accepted with a note. No reply is written over 8 MiB: a larger
@@ -296,9 +297,22 @@ pattern RE2 cannot run exactly as sed would, or any other command, runs the syst
   (tmpfs, ramfs; Linux only) is deleted instead, since a trash there would keep the memory in use, and the call says so.
 - **A failed `cd`** (or `pushd`, `popd`) ends the call unless the command line handles it (`if`, `&&`, `||`), as under
   `set -e`.
+- **`cd --keep DIR`** changes into `DIR` and keeps the agent there: its later nibash calls start in `DIR`, and relative
+  paths in `read`, `grep`, `find`, `edit` and `write` mean it, for that agent and the subagents it starts from then on
+  (each is told on its first call), across a restart of nib too. A builder working in another checkout than the
+  project's sends it once and can no longer write to the main checkout by a short path. Keeping the project directory
+  takes it away. `~name/` paths mean what they did.
 - **Jobs.** `background: true` or `cmd &` start a job, wherever the `&` stands; `jobs`, `wait`, `kill` and `disown` work on
   them as bash's do, and `$!` and `jobs -p` give a job spec (`%3`). A job is a shell of its own, which knows the jobs it
   started. Finished jobs are reported at the next call; a disowned one runs past the session's end.
+- **Timers.** Where Claude Code was started with nib's channel, the `timer` tool sends the main agent a message later:
+  `every: 50` each 50 minutes whatever happens, `idle: 5` only once the session has been idle for 5 minutes, and again
+  after each further idle stretch, so `idle: 50` keeps the prompt cache warm without interrupting work; `once` sends
+  only the first, `cancel` takes a timer's id, and a call without arguments lists them. The session is idle while no
+  nib call runs and the main agent's turn has ended, since the last sign of work: a nib call, a message of the user's,
+  any tool call's end, any agent's. A turn whose end no hook told (one the user interrupted) counts as running for 30
+  more minutes. Timers are the main agent's only, as a channel message lands in the main conversation: the tool is not
+  offered without the channel, and a subagent's call of it is refused. They end with the session's nib server.
 - **`kill`** is bash's: signal names and numbers, `-l`, job specs such as `%+`, `%-` and `%?text`, and bash's messages.
   The shell it would signal is the call: `kill $$` ends the call, `kill 0` ends it and what it started, as their traps
   allow. `kill -1`, the client that started nib and the client's process group are refused, so a kill cannot end the

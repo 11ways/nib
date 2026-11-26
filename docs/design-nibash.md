@@ -542,6 +542,17 @@ When the command finishes or its time runs out, the sink is rendered once:
     detached call's lines are left out and named), shaped as long output is, with the call's description as purpose.
   - The end is told once: a push claims it, a `wait` running on the job keeps it from being pushed, and a push that
     fails leaves it to the next call's report.
+- **Timers.** The same channel carries the `timer` tool's messages: one sent every so many minutes, or each time the
+  session has been idle that long, which is what keeps a prompt cache warm without a cron's fixed minutes. The tool is
+  registered only when the channel is on and refuses a call that has no way to push, a subagent's above all, in words
+  that tell it not to retry: a subagent is given the tool list, and its timer's message would land in the main
+  conversation. What idle means is the server's `activity`: no nib call in flight (the mod's status polls aside), the
+  main agent's turn ended, and the minutes since the last sign of work. The hook supplies what the server cannot see,
+  through the session socket: `UserPromptSubmit` begins the main agent's turn, `Stop` ends it, and `PostToolUse` of
+  any tool and agent is work (the main agent's also shows its turn runs). A user's interrupt ends a turn with no
+  `Stop`, so an open turn counts as running only for 30 minutes after the last sign of it; a long call of another
+  server's tool by a subagent, between whose start and end no hook speaks, looks idle. A sent message begins a turn.
+  No `PreToolUse` for every tool was added: it would run beside the matchers for `Read` and nib's tools, twice a call.
 - **Connection end:** jobs are killed when the connection ends, never sooner.
 
 ### 5.8 Sandbox [M5, M8]
@@ -741,6 +752,13 @@ Where the implementation departed from the text above, deliberately:
   directory; the table's names inside the server's directory are moved into the worktree, and one the worktree lacks is
   dropped rather than left naming the main checkout. A subagent's first call starts with its directory, its names and
   the `hash -d` line.
+- **A directory an agent keeps (`cd --keep DIR`).** Lanes of worktrees made outside Claude Code got no worktree from
+  the hook, so builders there still needed absolute paths in every brief. The agent now says once where it works: the
+  server's `directory` for a call is that pin before the hook's worktree, so nibash starts there and the file tools
+  resolve there. It lives beside the agent's defined names (`names.Defined`): inherited by the subagents started after
+  it, told in their greeting, and saved under the agent's lasting key. It is not a persisting `cd`, which was removed
+  for running later commands in the wrong checkout: only this explicit form outlives its call. The server's names are
+  not moved into the kept directory as they are into a worktree, since it need not be a checkout of the project.
 - **Roots.** A failed `roots/list` keeps the last list that worked; with none yet, the sandbox allows nothing instead of
   the server's directory (the second review's finding 2).
 - **Asking the client (MCP 2026-07-28).** That protocol forbids a server's own requests (SEP-2322), so for clients on it

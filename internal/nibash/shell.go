@@ -34,10 +34,10 @@ const (
 
 // description is the nibash tool's description, with %s for nib's own commands and for how long output is cut; a test holds every variant
 // under 2048 characters.
-const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory (no cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
+const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory, or the one cd --keep DIR set for your nib tools and subagents (no other cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commits, no git hints, %s, with the whole kept in a log to read. Changed files list new tags.
-Unlike bash: deletes go to the trash; a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! and jobs -p give a job's %%N, and the next call reports its end; kill never signals nib's client; no DEBUG or RETURN traps. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash (a RAM disk's are final); a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! and jobs -p give a job's %%N, and the next call reports its end; kill never signals nib's client; no DEBUG or RETURN traps. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {

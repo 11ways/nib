@@ -210,6 +210,8 @@ type Server struct {
 	shapes usageLog
 	// channel is where channel messages go out, nil without Options.Channel.
 	channel *channel
+	// activity is what the server knows of the session's work, which the timers wait on.
+	activity *activity
 }
 
 // originDepth bounds how far up a chain of OpenCode sessions that never called nib a session's start goes to start them first.
@@ -268,7 +270,7 @@ func New(options Options) *Server {
 	if e == nil {
 		e = engine.New()
 	}
-	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, last: map[string]string{}, defined: names.NewDefined()}
+	s := &Server{options: options, engine: e, sessions: map[*mcp.ServerSession]*session{}, started: map[string]bool{}, children: map[string]bool{}, greeted: map[string]bool{}, last: map[string]string{}, defined: names.NewDefined(), activity: newActivity()}
 	if options.NamesFile != "" && options.Names != nil {
 		s.defined.Automatic(options.NamesFile, options.Names.Base)
 		s.defined.Ignored = engine.Ignored
@@ -310,6 +312,9 @@ func New(options Options) *Server {
 		s.AddTool(&mcp.Tool{Name: "nibash_status", Description: statusDescription, InputSchema: json.RawMessage(statusSchema), Annotations: readOnly}, s.handle(s.nibashStatus, false))
 		s.AddTool(&mcp.Tool{Name: engine.Skim, Description: skimDescription, InputSchema: json.RawMessage(skimSchema), Annotations: readOnly, Meta: always}, s.handle(s.skim, false))
 	}
+	if options.Channel {
+		s.AddTool(&mcp.Tool{Name: timerTool, Description: timerDescription, InputSchema: json.RawMessage(timerSchema)}, s.handle(s.timer, false))
+	}
 	for _, p := range options.Providers {
 		for _, tool := range p.Tools {
 			s.AddTool(&mcp.Tool{Name: p.Name + "_" + tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, Annotations: tool.Annotations}, s.handle(s.hosted(p, tool.Name), false))
@@ -326,6 +331,7 @@ func (s *Server) Close() {
 	for _, key := range keys {
 		s.forget(key)
 	}
+	s.activity.close()
 	s.engine.Store.Flush()
 }
 
@@ -444,7 +450,10 @@ func (s *Server) open(request *mcp.CallToolRequest) *call {
 // which named directories it has.
 func (s *Server) greeting(c *call) string {
 	var text string
-	if c.worktree != "" {
+	switch pinned := s.pinned(c); {
+	case pinned != "":
+		text = fmt.Sprintf("You work in %s, where the agent that started you keeps its calls (cd --keep): relative paths in every nib tool mean it, and nibash calls start there.", pinned)
+	case c.worktree != "":
 		text = fmt.Sprintf("You work in your worktree %s: relative paths in every nib tool mean it, and nibash calls start there.", c.worktree)
 	}
 	view := s.options.Names.For(s.defined, s.engineSession(c.agent)).In(c.worktree)
@@ -459,8 +468,16 @@ func (s *Server) greeting(c *call) string {
 	return strings.TrimPrefix(text, "\n")
 }
 
-// directory is where the agent making a call works: its worktree, else the server's directory.
+// pinned is the directory the agent making a call keeps its calls in with nibash's cd --keep, its own or the one it started with; "" for none.
+func (s *Server) pinned(c *call) string {
+	return s.options.Names.For(s.defined, s.engineSession(c.agent)).Workdir()
+}
+
+// directory is where the agent making a call works: the directory it keeps its calls in, else its worktree, else the server's directory.
 func (s *Server) directory(c *call) string {
+	if pinned := s.pinned(c); pinned != "" {
+		return pinned
+	}
 	if c.worktree != "" {
 		return c.worktree
 	}
@@ -756,6 +773,10 @@ func (s *Server) handle(run action, writes bool) mcp.ToolHandler {
 		c := s.open(request)
 		counted := true
 		end := s.state(c.key).usage.begin(c.agent, request.Params.Name, s.isHosted(request.Params.Name), request.Params.Arguments)
+		// The mod's own polls of the status are no work of the session's.
+		if request.Params.Name != "nibash_status" {
+			defer s.activity.begin(c.agent == "")()
+		}
 		defer func() {
 			if counted {
 				end(res)

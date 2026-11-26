@@ -24,7 +24,7 @@ import (
 
 // ShapeRequest is what nib shape asks the session's server: the log, the run's description, its exit status and the command that wrote it.
 // nib's hook asks with Mentioned instead of a log: the named directories a message the user sent uses, which the main agent's context last
-// dropped at Dropped (Unix nanoseconds, 0 for never).
+// dropped at Dropped (Unix nanoseconds, 0 for never). Or it tells with Event what it saw the session do, of the subagent Agent names.
 type ShapeRequest struct {
 	Log       string   `json:"log,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"`
@@ -32,6 +32,8 @@ type ShapeRequest struct {
 	Exit      int      `json:"exit,omitempty"`
 	Mentioned []string `json:"mentioned,omitempty"`
 	Dropped   int64    `json:"dropped,omitempty"`
+	Event     string   `json:"event,omitempty"`
+	Agent     string   `json:"agent,omitempty"`
 }
 
 // ShapeAnswer is the server's answer: the shaped text, or with Status 2 why the log was refused.
@@ -146,13 +148,16 @@ func (s *Server) answerShape(ctx context.Context, conn net.Conn) {
 	if err == nil {
 		err = json.Unmarshal(line, &request)
 	}
-	if err == nil && request.Mentioned == nil && !filepath.IsAbs(request.Log) {
+	if err == nil && request.Mentioned == nil && request.Event == "" && !filepath.IsAbs(request.Log) {
 		err = fmt.Errorf("the log %q is not an absolute path", request.Log)
 	}
 	answer := ShapeAnswer{Status: 2}
 	switch {
 	case err != nil:
 		answer.Error = err.Error()
+	case request.Event != "":
+		s.activity.told(request.Event, request.Agent)
+		answer = ShapeAnswer{}
 	case request.Mentioned != nil:
 		answer = s.promptAnswer(request)
 	default:

@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/11ways/nib/internal/hookstate"
 	"github.com/11ways/nib/internal/names"
 )
 
@@ -160,6 +161,44 @@ func TestPromptNamesAfterADrop(t *testing.T) {
 	}
 	if text := ask(cleared); text != "" {
 		t.Fatalf("told twice: %q", text)
+	}
+}
+
+// nib's hook tells what it saw the session do, which is how the server knows a turn runs or ended.
+func TestTheHookTellsTheServerOfTurnsAndToolCalls(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	directory, _ := filepath.EvalSymlinks(t.TempDir())
+	s := New(Options{Directory: directory})
+	serving(t, s, "claude-pid-1")
+	tell := func(event, agent string) {
+		t.Helper()
+		if answer, ok := AskShape(context.Background(), sockets("claude-pid-1"), ShapeRequest{Event: event, Agent: agent}); !ok || answer.Status != 0 {
+			t.Fatalf("answer %+v %v", answer, ok)
+		}
+	}
+	turn := func() bool {
+		s.activity.mu.Lock()
+		defer s.activity.mu.Unlock()
+		return s.activity.turn
+	}
+	tell(hookstate.EventPrompt, "")
+	if !turn() {
+		t.Fatal("a message the user sent begins the main agent's turn")
+	}
+	tell(hookstate.EventStop, "")
+	if turn() {
+		t.Fatal("the turn ended")
+	}
+	// A subagent's tool call is work, but no turn of the main agent's.
+	before := s.activity.last
+	time.Sleep(2 * time.Millisecond)
+	tell(hookstate.EventTool, "a1")
+	if turn() || !s.activity.last.After(before) {
+		t.Fatalf("turn %v, last %v after %v", turn(), s.activity.last, before)
+	}
+	tell(hookstate.EventTool, "")
+	if !turn() {
+		t.Fatal("a tool call of the main agent's shows its turn runs")
 	}
 }
 

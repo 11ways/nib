@@ -130,6 +130,59 @@ func TestADefinitionIsTheDefinersAndLaterSubagentsOnly(t *testing.T) {
 	}
 }
 
+func TestCdKeepPinsAnAgentsCallsAndItsLaterSubagents(t *testing.T) {
+	directory := agentDirectory(t)
+	lane := filepath.Join(directory, "lanes", "one")
+	for _, folder := range []string{lane, filepath.Join(lane, "apps")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	agents := map[string]hookstate.Agent{}
+	file := func(toolUse string, agent hookstate.Agent) {
+		mu.Lock()
+		defer mu.Unlock()
+		agents[toolUse] = agent
+	}
+	run := connectRaw(t, directory, &names.Table{Base: directory}, func(toolUse string) hookstate.Agent {
+		mu.Lock()
+		defer mu.Unlock()
+		return agents[toolUse]
+	})
+	// A builder keeps its lane: that call changes into it, and its later calls start there.
+	file("toolu_b1", hookstate.Agent{ID: "b1", Spawned: true})
+	file("toolu_b2", hookstate.Agent{ID: "b1"})
+	file("toolu_b3", hookstate.Agent{ID: "b1"})
+	out := run("toolu_b1", "cd --keep lanes/one && pwd")
+	if !strings.Contains(out, "[from now on your nibash calls start in lanes/one and relative paths in every nib tool mean it, for you and the subagents you start]\n"+lane) {
+		t.Fatalf("got %q", out)
+	}
+	if out := run("toolu_b2", "pwd; echo x > apps/made.txt; ls apps"); !strings.HasPrefix(strings.TrimSpace(out), lane+"\nmade.txt\n[changed by this command: apps/made.txt#") {
+		t.Fatalf("got %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(lane, "apps", "made.txt")); err != nil {
+		t.Fatalf("the relative path must mean the lane: %v", err)
+	}
+	// The main agent, and a subagent of it, stay in the project directory; the builder's own subagent starts in the lane and is told.
+	expect(t, strings.TrimSpace(run("toolu_m1", "pwd")), directory)
+	file("toolu_c1", hookstate.Agent{ID: "c1", Spawned: true, Parent: "b1"})
+	if out := run("toolu_c1", "pwd"); !strings.Contains(out, "You work in "+lane+", where the agent that started you keeps its calls") || !strings.HasSuffix(strings.TrimSpace(out), lane) {
+		t.Fatalf("the builder's subagent: %q", out)
+	}
+	// What cannot be kept is refused, ends the call as a failed cd does, and changes nothing; the project directory takes the pin away.
+	for command, want := range map[string]string{"cd --keep missing": "does not exist", "cd --keep apps/made.txt": "is not a directory", "cd --keep": "takes one directory", "cd --keep a b": "takes one directory"} {
+		if out := run("toolu_b3", command+"; pwd"); !strings.Contains(out, "cd: --keep: ") || !strings.Contains(out, want) || !strings.Contains(out, "so nothing after it ran]") {
+			t.Errorf("%s: %q", command, out)
+		}
+	}
+	expect(t, strings.TrimSpace(run("toolu_b2", "pwd")), lane)
+	if out := run("toolu_b3", "cd --keep "+directory); !strings.Contains(out, "[your calls start in the project directory again]") {
+		t.Fatalf("got %q", out)
+	}
+	expect(t, strings.TrimSpace(run("toolu_b2", "pwd")), directory)
+}
+
 func TestALongPathIsNamedOnItsSecondUseOrAtACd(t *testing.T) {
 	f := newFixture(t, nil)
 	skill := filepath.Join(t.TempDir(), "claude-1000", "bundled-skills", "2.1.302", "fc11d6128293e2a1c2935a66fffdd589", "plugin-authoring", "types")

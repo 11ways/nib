@@ -22,10 +22,13 @@ type kept struct {
 	keys map[string]string
 }
 
-// keptFile is one agent's saved names and the latest moment its context was dropped, which the harness reports only once.
+// keptFile is one agent's saved names, the latest moment its context was dropped, which the harness reports only once, and the directory
+// it pinned its calls to.
 type keptFile struct {
 	Names   []keptName `json:"names"`
 	Dropped int64      `json:"dropped,omitempty"`
+	Work    string     `json:"work,omitempty"`
+	WorkAt  int64      `json:"workAt,omitempty"`
 }
 
 type keptName struct {
@@ -65,7 +68,7 @@ func (d *Defined) Persist(agent, key string) {
 		return
 	}
 	k.keys[agent] = key
-	if names := d.agents[agent]; names != nil && len(names.list) > 0 {
+	if names := d.agents[agent]; names != nil && (len(names.list) > 0 || names.work != "") {
 		return
 	}
 	restored := &defined{}
@@ -82,7 +85,10 @@ func (d *Defined) Persist(agent, key string) {
 			restored.auto++
 		}
 	}
-	if len(restored.list) > 0 {
+	if filepath.IsAbs(file.Work) {
+		restored.work, restored.workAt = file.Work, file.WorkAt
+	}
+	if len(restored.list) > 0 || restored.work != "" {
 		if file.Dropped > 0 {
 			restored.forget(file.Dropped)
 		}
@@ -101,7 +107,7 @@ func (d *Defined) saveLocked(agent string) {
 	if !ok || names == nil {
 		return
 	}
-	file := keptFile{Dropped: names.dropped}
+	file := keptFile{Dropped: names.dropped, Work: names.work, WorkAt: names.workAt}
 	for _, entry := range names.list {
 		file.Names = append(file.Names, keptName{entry.Name, entry.Directory, entry.at, entry.told, entry.kind})
 	}

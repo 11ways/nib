@@ -50,7 +50,7 @@ func runHook() int {
 	if err != nil {
 		return 0
 	}
-	fmt.Print(hook.Run(input, "", askNames))
+	fmt.Print(hook.Run(input, "", askNames, tellServer))
 	return 0
 }
 
@@ -70,6 +70,13 @@ func askNames(mentioned []string, dropped time.Time) []string {
 		return nil
 	}
 	return strings.Split(answer.Text, "\n")
+}
+
+// tellServer tells the session's nib server what the hook saw, within promptWait; a session without one hears nothing.
+func tellServer(event, agent string) {
+	ctx, cancel := context.WithTimeout(context.Background(), promptWait)
+	defer cancel()
+	server.AskShape(ctx, shapeSockets(), server.ShapeRequest{Event: event, Agent: agent})
 }
 
 func runSetup(args []string) int { return setup.Main(args) }

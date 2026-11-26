@@ -62,6 +62,9 @@ type defined struct {
 	retell    []made
 	// dropped is the latest moment the agent's context was dropped, saved with its names.
 	dropped int64
+	// work is the directory the agent pinned its calls to (View.Work), "" for none, and workAt when; its subagents start with it.
+	work   string
+	workAt int64
 }
 
 // made is a name nib made and has not told of yet, with the shown paths that ran through its directory.
@@ -102,6 +105,9 @@ func (d *Defined) Inherit(agent, parent string, asOf time.Time) {
 			entry.kind = "inherited"
 			to.list = append(to.list, entry)
 		}
+	}
+	if from.workAt < moment {
+		to.work, to.workAt = from.work, from.workAt
 	}
 	d.agents[agent] = to
 	d.saveLocked(agent)
@@ -290,4 +296,46 @@ func (v *View) Define(name, directory string) error {
 		return fmt.Errorf("%s is not a directory", directory)
 	}
 	return v.defined.define(v.agent, Entry{name, canonical})
+}
+
+// Work pins the agent's calls to directory, an absolute path to an existing directory: where its relative paths start in every tool, for
+// it and the agents it spawns from now on. The server's own directory takes the pin away. kept is the pin as it stands, canonical.
+func (v *View) Work(directory string) (kept string, err error) {
+	if !filepath.IsAbs(directory) {
+		return "", errors.New("the directory must be an absolute path")
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", fmt.Errorf("%s does not exist", directory)
+	}
+	if info, err := os.Stat(canonical); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", directory)
+	}
+	if v.server != nil && canonical == v.server.Base {
+		canonical = ""
+	}
+	d := v.defined
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	names := d.agents[v.agent]
+	if names == nil {
+		names = &defined{}
+		d.agents[v.agent] = names
+	}
+	names.work, names.workAt = canonical, d.Now().UnixNano()
+	d.saveLocked(v.agent)
+	return canonical, nil
+}
+
+// Workdir is the directory the agent's calls are pinned to, its own pin or the one it started with; "" for none.
+func (v *View) Workdir() string {
+	if v == nil || v.defined == nil {
+		return ""
+	}
+	v.defined.mu.Lock()
+	defer v.defined.mu.Unlock()
+	if names := v.defined.agents[v.agent]; names != nil {
+		return names.work
+	}
+	return ""
 }

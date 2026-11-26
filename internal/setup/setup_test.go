@@ -86,7 +86,7 @@ func TestFreshProjectGetsServerHookApprovalAndDenyRules(t *testing.T) {
 	directory := t.TempDir()
 	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{
 		".mcp.json: added the nib MCP server",
-		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact and UserPromptSubmit hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
+		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
 	})
 	equal(t, readJSON(t, filepath.Join(directory, ".mcp.json")), map[string]any{"mcpServers": map[string]any{"nib": map[string]any{"type": "stdio", "command": "nib", "args": []any{}}}})
 	equal(t, readJSON(t, filepath.Join(directory, ".claude/settings.local.json")), map[string]any{
@@ -99,6 +99,8 @@ func TestFreshProjectGetsServerHookApprovalAndDenyRules(t *testing.T) {
 			"SessionStart":     []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}}},
 			"UserPromptSubmit": []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}}},
 			"PostCompact":      []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}}},
+			"PostToolUse":      []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}}},
+			"Stop":             []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "nib hook", "timeout": float64(10)}}}},
 		},
 		"permissions": map[string]any{"allow": []any{"mcp__nib__nibash_status"}, "deny": []any{"Bash", "Grep", "Glob", "Edit", "Write"}},
 	})
@@ -114,7 +116,7 @@ func TestExistingConfigsKeepTheirOrderAndContent(t *testing.T) {
 	report := Setup(Options{Directory: directory, Command: []string{install}})
 	equal(t, report, []string{
 		".mcp.json: added the nib MCP server",
-		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact and UserPromptSubmit hooks and deny rules for Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
+		".claude/settings.local.json: added approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and deny rules for Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
 		"opencode.json: added the nib MCP server and deny rules for read, grep, glob, edit (permissions for shell set there already, so OpenCode keeps those tools as configured)",
 	})
 	settings, _ := os.ReadFile(filepath.Join(directory, ".claude/settings.local.json"))
@@ -138,7 +140,7 @@ func TestDryRunDisabledServerAndNonJSON(t *testing.T) {
 	directory := t.TempDir()
 	equal(t, Setup(Options{Directory: directory, Command: nib, DryRun: true}), []string{
 		".mcp.json: would add the nib MCP server",
-		".claude/settings.local.json: would add approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact and UserPromptSubmit hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
+		".claude/settings.local.json: would add approval of the nib server in .mcp.json and nib's PreToolUse, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status",
 	})
 	if _, err := os.Stat(filepath.Join(directory, ".mcp.json")); err == nil {
 		t.Fatal("a dry run wrote")
@@ -147,7 +149,7 @@ func TestDryRunDisabledServerAndNonJSON(t *testing.T) {
 	writeFile(t, filepath.Join(directory, ".mcp.json"), "{ // comment\n}")
 	equal(t, Setup(Options{Directory: directory, Command: nib}), []string{
 		".mcp.json: left untouched, since it is not plain JSON (comments?)",
-		".claude/settings.local.json: added nib's PreToolUse, SessionStart, PostCompact and UserPromptSubmit hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status (nib is in disabledMcpjsonServers there, so it stays off until you remove it)",
+		".claude/settings.local.json: added nib's PreToolUse, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status (nib is in disabledMcpjsonServers there, so it stays off until you remove it)",
 	})
 }
 
@@ -163,7 +165,7 @@ func TestUserSetup(t *testing.T) {
 	options := Options{Directory: home, User: true, Command: nib, Home: home, Env: func(k string) string { return env[k] }, Claude: claude}
 	equal(t, Setup(options), []string{
 		"~/.local/share/nib/mods/nibash: installed the nibash mod of this nib",
-		"~/configs/nib/settings.json: added nib's PreToolUse, SessionStart, PostCompact and UserPromptSubmit hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status and the nibash mod in env.CLAUDE_CODE_PLUGIN_DIRS",
+		"~/configs/nib/settings.json: added nib's PreToolUse, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and deny rules for Bash, Grep, Glob, Edit, Write and allow rules for mcp__nib__nibash_status and the nibash mod in env.CLAUDE_CODE_PLUGIN_DIRS",
 		"claude mcp: added nib for this user",
 		"~/xdg/opencode/opencode.json: added the nib MCP server and deny rules for shell, read, grep, glob, edit",
 	})
@@ -242,9 +244,9 @@ func TestOlderHooksGetTheToolsMatcherAndLoseMultiEdit(t *testing.T) {
 	writeFile(t, settings, `{"enabledMcpjsonServers": ["nib"], "hooks": {"PreToolUse": [{"matcher": "Bash|Read|Grep", "hooks": [{"type": "command", "command": "nib hook"}]}]}, "permissions": {"deny": ["Bash", "MultiEdit", "Grep", "Glob", "Edit", "Write"]}}`)
 	writeFile(t, filepath.Join(directory, ".mcp.json"), `{"mcpServers": {"nib": {"command": "nib"}}}`)
 	equal(t, Setup(Options{Directory: directory, Command: nib, DryRun: true})[1],
-		".claude/settings.local.json: would add nib's PreToolUse for mcp__nib__.*, SessionStart, PostCompact and UserPromptSubmit hooks and allow rules for mcp__nib__nibash_status; would remove the deny rule for MultiEdit, a tool Claude Code no longer has")
+		".claude/settings.local.json: would add nib's PreToolUse for mcp__nib__.*, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and allow rules for mcp__nib__nibash_status; would remove the deny rule for MultiEdit, a tool Claude Code no longer has")
 	equal(t, Setup(Options{Directory: directory, Command: nib})[1],
-		".claude/settings.local.json: added nib's PreToolUse for mcp__nib__.*, SessionStart, PostCompact and UserPromptSubmit hooks and allow rules for mcp__nib__nibash_status; removed the deny rule for MultiEdit, a tool Claude Code no longer has")
+		".claude/settings.local.json: added nib's PreToolUse for mcp__nib__.*, SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks and allow rules for mcp__nib__nibash_status; removed the deny rule for MultiEdit, a tool Claude Code no longer has")
 	written := readJSON(t, settings)
 	equal(t, written["permissions"], map[string]any{"allow": []any{"mcp__nib__nibash_status"}, "deny": []any{"Bash", "Grep", "Glob", "Edit", "Write"}})
 	entries := written["hooks"].(map[string]any)["PreToolUse"].([]any)
@@ -259,7 +261,7 @@ func TestContextHooksJoinAnEarlierSetupOnce(t *testing.T) {
 	// What setup wrote before nib noticed compactions, plus a SessionStart hook of the user's own, which stays.
 	writeFile(t, settings, `{"enabledMcpjsonServers": ["nib"], "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": "nib hook", "timeout": 10}]}, {"matcher": "mcp__nib__.*", "hooks": [{"type": "command", "command": "nib hook", "timeout": 10}]}], "SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "echo hi"}]}]}, "permissions": {"allow": ["mcp__nib__nibash_status"], "deny": ["Bash", "Grep", "Glob", "Edit", "Write"]}}`)
 	writeFile(t, filepath.Join(directory, ".mcp.json"), `{"mcpServers": {"nib": {"command": "nib"}}}`)
-	equal(t, Setup(Options{Directory: directory, Command: nib})[1], ".claude/settings.local.json: added nib's SessionStart, PostCompact and UserPromptSubmit hooks")
+	equal(t, Setup(Options{Directory: directory, Command: nib})[1], ".claude/settings.local.json: added nib's SessionStart, PostCompact, UserPromptSubmit, PostToolUse and Stop hooks")
 	hooks := readJSON(t, settings)["hooks"].(map[string]any)
 	equal(t, hooks["SessionStart"], []any{
 		map[string]any{"matcher": "startup", "hooks": []any{map[string]any{"type": "command", "command": "echo hi"}}},
