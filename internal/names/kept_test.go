@@ -128,8 +128,8 @@ func TestAPinnedDirectoryIsInheritedAndOutlivesTheServer(t *testing.T) {
 	first.Keep(dir)
 	first.Persist("builder", "key")
 	view := (&Table{Base: root}).For(first, "builder")
-	if kept, err := view.Work(lane); err != nil || kept != lane || view.Workdir() != lane {
-		t.Fatalf("got %q %v, then %q", kept, err, view.Workdir())
+	if now, pinned, err := view.Work(lane); err != nil || now != lane || !pinned || view.Workdir() != lane {
+		t.Fatalf("got %q %v %v, then %q", now, pinned, err, view.Workdir())
 	}
 	// A subagent spawned before the pin does not start with it; one spawned after does.
 	first.Inherit("early", "builder", time.Unix(1, 0))
@@ -144,11 +144,20 @@ func TestAPinnedDirectoryIsInheritedAndOutlivesTheServer(t *testing.T) {
 	if got := again.Workdir(); got != lane {
 		t.Fatalf("after a restart: %q", got)
 	}
-	// The server's own directory takes the pin away, and a relative path is refused.
-	if kept, err := again.Work(root); err != nil || kept != "" || again.Workdir() != "" {
-		t.Fatalf("got %q %v, then %q", kept, err, again.Workdir())
+	// The directory the agent works in without a pin takes the pin away, and a relative path is refused.
+	if now, pinned, err := again.Work(root); err != nil || now != root || pinned || again.Workdir() != "" {
+		t.Fatalf("got %q %v %v, then %q", now, pinned, err, again.Workdir())
 	}
-	if _, err := again.Work("lane"); err == nil {
+	// In a worktree, the server's directory is a pin of its own and the worktree takes it away.
+	worktree := deep(t, t.TempDir(), "worktree")
+	inside := again.In(worktree)
+	if now, pinned, err := inside.Work(root); err != nil || now != root || !pinned || inside.Workdir() != root {
+		t.Fatalf("server directory from a worktree: %q %v %v, then %q", now, pinned, err, inside.Workdir())
+	}
+	if now, pinned, err := inside.Work(worktree); err != nil || now != worktree || pinned || inside.Workdir() != "" {
+		t.Fatalf("the worktree: %q %v %v, then %q", now, pinned, err, inside.Workdir())
+	}
+	if _, _, err := again.Work("lane"); err == nil {
 		t.Fatal("a relative path must be refused")
 	}
 }

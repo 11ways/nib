@@ -26,8 +26,8 @@ type namer interface {
 	Observe(path string)
 	// Worked notes a directory the agent changed into, so a long directory holding it is named at once.
 	Worked(directory string)
-	// Work pins the agent's calls to directory; kept is "" when that is the server's own, which takes the pin away.
-	Work(directory string) (kept string, err error)
+	// Work pins the agent's calls to directory, or takes the pin away when that is where they start without one; now is where they start.
+	Work(directory string) (now string, pinned bool, err error)
 }
 
 // cdKeep is nibash's own option of cd, which bash's lacks: the directory it changes into is where the agent's later calls start too.
@@ -56,15 +56,17 @@ func (c *call) keepDirectory(ctx context.Context, operands []string) []string {
 			return refuse("%s", refused)
 		}
 	}
-	pinned, err := c.names.Work(target)
+	now, pinned, err := c.names.Work(target)
 	if err != nil {
 		return refuse("%v", err)
 	}
-	if pinned == "" {
-		fmt.Fprintf(hc.Stdout, "[your calls start in the project directory again]\n")
+	if pinned {
+		fmt.Fprintf(hc.Stdout, "[from now on your nibash calls start in %s and relative paths in every nib tool mean it, for you and the subagents you start]\n", c.tools.Display(now))
 	} else {
-		fmt.Fprintf(hc.Stdout, "[from now on your nibash calls start in %s and relative paths in every nib tool mean it, for you and the subagents you start]\n", c.tools.Display(pinned))
+		fmt.Fprintf(hc.Stdout, "[your calls start in %s again, where they start without cd --keep]\n", c.tools.Display(now))
 	}
+	// The rest of the call prints paths as the agent's later calls read them.
+	c.tools.Directory = now
 	return []string{"cd", target}
 }
 

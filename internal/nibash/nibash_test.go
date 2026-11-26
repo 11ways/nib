@@ -405,7 +405,7 @@ func TestATailLeavingOutFewLinesSaysNothingOfThem(t *testing.T) {
 func TestJobsRunDetachedAndReportWhenDone(t *testing.T) {
 	f := newFixture(t, nil)
 	out := f.run("sleep 0.2 &\necho $!")
-	expect(t, out, "%1")
+	expect(t, out, "%1\n"+f.runsOn(1))
 	expect(t, f.run("wait %1; echo waited $?"), "waited 0")
 	// The wait told the job's end, so the next call does not report it again.
 	expect(t, f.run("echo next"), "next")
@@ -513,7 +513,7 @@ func TestAFailedDirectoryChangeTheCommandLeavesUnhandledEndsTheCall(t *testing.T
 		"! cd missing; echo ran":                         missing + "\nran",
 		"while cd missing; do echo no; done; echo ran":   missing + "\nran",
 		"x=$(cd missing && pwd); echo ran":               missing + "\nran",
-		"cd missing & wait; echo ran":                    "ran",
+		"cd missing & wait; echo ran":                    missing + "\nran",
 		"cd sub; cat a.txt | head -1; cd ..; echo ran":   "",
 		"cd sub && cd missing 2>/dev/null || echo again": "again",
 	} {

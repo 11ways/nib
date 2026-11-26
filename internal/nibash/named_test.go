@@ -177,7 +177,9 @@ func TestCdKeepPinsAnAgentsCallsAndItsLaterSubagents(t *testing.T) {
 		}
 	}
 	expect(t, strings.TrimSpace(run("toolu_b2", "pwd")), lane)
-	if out := run("toolu_b3", "cd --keep "+directory); !strings.Contains(out, "[your calls start in the project directory again]") {
+	// The rest of a call that takes the pin away prints paths as its later calls read them.
+	out = run("toolu_b3", "cd --keep "+directory+" && rm "+filepath.Join(lane, "apps", "made.txt"))
+	if !strings.Contains(out, "[your calls start in "+directory+" again, where they start without cd --keep]") || !strings.Contains(out, "[changed by this command: lanes/one/apps/made.txt (in the trash)]") {
 		t.Fatalf("got %q", out)
 	}
 	expect(t, strings.TrimSpace(run("toolu_b2", "pwd")), directory)

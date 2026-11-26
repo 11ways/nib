@@ -162,13 +162,29 @@ func TestAWaitWaitsOnlyForTheJobsItsShellStarted(t *testing.T) {
 	if data, err := os.ReadFile(log); err != nil || !regexp.MustCompile(`^started=%2\nwaited\n\[2\]  Done \(exit 0\)  sleep 0\.2 &  \(output: \S+\)\n$`).Match(data) {
 		t.Errorf("the job's log: %q, %v", data, err)
 	}
-	// A job's shell knows the jobs it started and no others, as a bash subshell starts with an empty table.
+	// A job's shell knows the jobs it started and no others, as a bash subshell starts with an empty table. Its output reaches the call that
+	// waits for it, as a bash job prints where its shell does, and its log keeps it.
 	f.run("sleep 30 &")
-	expect(t, f.quiet("(jobs; wait; kill %3 2>&1; sleep 0.1 & wait; echo inner) & wait %4; echo $?"), "0")
+	expect(t, f.quiet("(jobs; wait; kill %3 2>&1; sleep 0.1 & wait; echo inner) & wait %4; echo $?"), "kill: %3: no such job\ninner\n0")
 	if data, err := os.ReadFile(f.jobLog(4)); err != nil || string(data) != "kill: %3: no such job\ninner\n" {
 		t.Errorf("job 4's log: %q, %v", data, err)
 	}
 	expect(t, f.quiet("kill %3; wait %3; echo $?"), "143")
+}
+
+// TestAJobPrintsWhereItsStatementPrints pins that a job started with & prints where bash's would: into the call while it runs, in whole lines,
+// and into a pipe or file its statement printed to until it ends; what comes after the call answers goes to the job's log alone, as a note says.
+func TestAJobPrintsWhereItsStatementPrints(t *testing.T) {
+	f := newFixture(t, nil)
+	expect(t, f.quiet("for i in 1 3; do { sleep 0.$i; echo out$i; } & done; wait; echo after"), "out1\nout3\nafter")
+	expect(t, f.quiet("{ sleep 0.1; printf tail; } & wait; echo"), "tail")
+	expect(t, f.quiet("{ { sleep 0.1; echo piped; } & } | cat"), "piped")
+	expect(t, f.quiet("{ { sleep 0.1; echo filed; } & } > out.txt; wait; read v < out.txt; echo $v"), "filed\n[changed by this command: out.txt#015D (new)]")
+	expect(t, f.quiet("{ sleep 0.3; echo late; } & echo now"), "now\n"+f.runsOn(6))
+	ended(t, f, "%6")
+	if data, err := os.ReadFile(f.jobLog(6)); err != nil || string(data) != "late\n" {
+		t.Errorf("job 6's log: %q, %v", data, err)
+	}
 }
 
 func TestAmpersandStartsANibashJobWhereverItStands(t *testing.T) {
@@ -176,7 +192,7 @@ func TestAmpersandStartsANibashJobWhereverItStands(t *testing.T) {
 	// In a function, with its local variables, as bash forks the shell where & runs.
 	expect(t, f.quiet("f() { local d=0.1; sleep $d & echo started $!; }; f; wait %1; echo $?"), "started %1\n0")
 	expect(t, f.quiet("echo $(sleep 0.1 & echo in $!); wait %2; echo $?"), "in %2\n0")
-	expect(t, f.quiet("(sleep 0.1 & wait $!; echo nested $?) & wait %3; echo $?"), "0")
+	expect(t, f.quiet("(sleep 0.1 & wait $!; echo nested $?) & wait %3; echo $?"), "nested 0\n0")
 	if data, err := os.ReadFile(f.jobLog(3)); err != nil || string(data) != "nested 0\n" {
 		t.Errorf("job 3's log: %q, %v", data, err)
 	}
@@ -196,8 +212,8 @@ func TestDisownLetsAJobOutliveTheSession(t *testing.T) {
 	gone := f.run("sleep 30 & sleep 0.1; jobs -x echo %%; disown; jobs; kill %1 2>&1")
 	lines := strings.Split(gone, "\n")
 	kept := f.run("sleep 30 & sleep 0.1; jobs -x echo %%; disown -h %2; jobs -p")
-	ended := f.run("sleep 30 & sleep 0.1; jobs -x echo %%")
-	if len(lines) < 2 || lines[1] != "kill: %1: no such job" || !strings.HasSuffix(kept, "\n%2") {
+	ended := strings.Split(f.run("sleep 30 & sleep 0.1; jobs -x echo %%"), "\n")[0]
+	if len(lines) < 2 || lines[1] != "kill: %1: no such job" || !strings.HasSuffix(kept, "\n%2\n"+f.runsOn(2)) {
 		t.Fatalf("disowned: %q; kept: %q", gone, kept)
 	}
 	pids := []string{lines[0], strings.Split(kept, "\n")[0], ended}

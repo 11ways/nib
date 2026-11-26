@@ -161,7 +161,7 @@ func TestAFailedPushLeavesTheEndToTheNextCallsReport(t *testing.T) {
 func TestAJobStartedWithAmpersandIsNeverPushed(t *testing.T) {
 	f := newFixture(t, nil)
 	p := newPushes()
-	expect(t, f.call(server.ShellCall{Command: "sleep 0.1 &", Push: p.push}), "(no output)")
+	expect(t, f.call(server.ShellCall{Command: "sleep 0.1 &", Push: p.push}), f.runsOn(1))
 	ended(t, f, "%1")
 	if out := f.run("echo next"); !strings.HasPrefix(out, "[job %1 finished, exit 0; output: ") || !strings.HasSuffix(out, "]\nnext") {
 		t.Errorf("got %s", out)

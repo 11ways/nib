@@ -310,6 +310,11 @@ func (f *fixture) quiet(command string) string {
 	return out
 }
 
+// runsOn is the note a call ends with for job n, which it started and which still runs.
+func (f *fixture) runsOn(n int) string {
+	return fmt.Sprintf("[job %%%d runs on; its output from now on goes only to %s]", n, f.jobLog(n))
+}
+
 func TestKillOfTheShellFromAJob(t *testing.T) {
 	f := newFixture(t, nil)
 	start := time.Now()

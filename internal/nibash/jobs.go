@@ -1,6 +1,7 @@
 package nibash
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -426,8 +427,9 @@ func (j *job) finish(err error, out *cappedWriter) {
 
 // launch runs node in runner as a new job, with its output in a log and its processes in groups the job can signal; push, when set, tells the
 // agent its end, with purpose as what the call was for. jobs are the statements the command line's & started (startJobs), which the job's own
-// & starts from; origin is the call whose statement node is, nil for a command run with background: true.
-func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string, origin *call, jobs map[int]*syntax.Stmt) (*job, error) {
+// & starts from; origin is the call whose statement node is, nil for a command run with background: true. stdout and stderr, when set, get
+// the job's output too while origin runs, as a bash job shares its shell's.
+func (sess *session) launch(runner *interp.Runner, node syntax.Node, command string, tools *engine.Context, names namer, push func(string, map[string]string) error, purpose string, origin *call, jobs map[int]*syntax.Stmt, stdout, stderr io.Writer) (*job, error) {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return nil, err
@@ -437,14 +439,19 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 	if err == nil {
 		j.push, j.purpose = push, purpose
 	}
+	jobStdout, jobStderr := &jobOutput{log: out, mirror: stdout, origin: origin}, &jobOutput{log: out, mirror: stderr, origin: origin}
 	if err != nil {
 		cancel()
 		devnull.Close()
+		jobStdout.close()
+		jobStderr.close()
 		return nil, err
 	}
-	if err := interp.StdIO(devnull, out, out)(runner); err != nil {
+	if err := interp.StdIO(devnull, jobStdout, jobStderr)(runner); err != nil {
 		cancel()
 		devnull.Close()
+		jobStdout.close()
+		jobStderr.close()
 		j.finish(err, out)
 		return nil, err
 	}
@@ -468,21 +475,24 @@ func (sess *session) launch(runner *interp.Runner, node syntax.Node, command str
 	file := &syntax.File{Stmts: append([]*syntax.Stmt{startShell()}, stmts...)}
 	go func() {
 		defer devnull.Close()
-		j.finish(c.jobError(runner.Run(ctx, file), out), out)
+		err := c.jobError(runner.Run(ctx, file), out)
+		jobStdout.close()
+		jobStderr.close()
+		j.finish(err, out)
 		c.end()
 		sess.shell.pushEnd(sess, j)
 	}()
 	return j, nil
 }
 
-// startJob starts the statement an & put away as a job, in a copy of the interpreter the & ran in as it is now, as bash forks, and prints the
-// job's spec for $!.
-func (c *call) startJob(ctx context.Context, args []string) error {
+// startJob starts the statement an & put away as a job, in a copy of the interpreter the & ran in as it is now, as bash forks, and returns
+// the job's spec for $!; it runs from the call handler, whose output is the statement's, which the job prints to while the call runs.
+func (c *call) startJob(ctx context.Context, args []string) (string, error) {
 	hc := interp.HandlerCtx(ctx)
 	key, err := strconv.Atoi(args[0])
 	stmt := c.jobs[key]
 	if err != nil || stmt == nil {
-		return interp.ExitStatus(1)
+		return "", interp.ExitStatus(1)
 	}
 	here := runnerOf(ctx)
 	if here == nil {
@@ -490,18 +500,112 @@ func (c *call) startJob(ctx context.Context, args []string) error {
 	}
 	runner := here.Subshell()
 	if err := interp.Dir(hc.Dir)(runner); err != nil {
-		return err
+		return "", err
 	}
 	var text strings.Builder
 	syntax.NewPrinter().Print(&text, stmt)
-	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "", c, c.jobs)
+	j, err := c.session.launch(runner, stmt, strings.TrimSpace(text.String())+" &", c.tools, c.names, nil, "", c, c.jobs, mirrored(hc.Stdout), mirrored(hc.Stderr))
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "nibash: %v\n", err)
-		return interp.ExitStatus(1)
+		return "", interp.ExitStatus(1)
 	}
-	fmt.Fprintf(hc.Stdout, "%%%d", j.id)
+	return fmt.Sprintf("%%%d", j.id), nil
+}
+
+// jobOutput is where a job started with & prints: its log, and what the statement printed to, in whole lines, as a program's write of a line
+// is one there while the interpreter's echo writes the newline apart. A call's output gets them while the call runs; a file or pipe, which
+// the job holds a copy of as bash's does, until the job ends.
+type jobOutput struct {
+	log    io.Writer
+	mirror io.Writer
+	origin *call
+	mu     sync.Mutex
+	// pending is the start of a line not mirrored yet.
+	pending []byte
+}
+
+func (o *jobOutput) Write(p []byte) (int, error) {
+	_, _ = o.log.Write(p)
+	if o.mirror == nil {
+		return len(p), nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.pending = append(o.pending, p...)
+	if end := bytes.LastIndexByte(o.pending, '\n'); end >= 0 {
+		o.send(o.pending[:end+1])
+		o.pending = append(o.pending[:0], o.pending[end+1:]...)
+	}
+	return len(p), nil
+}
+
+// close mirrors the last line the job left without a newline, as it ends, and lets go of the file it holds.
+func (o *jobOutput) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.pending) > 0 {
+		o.send(o.pending)
+		o.pending = nil
+	}
+	if file, ok := o.mirror.(*os.File); ok {
+		file.Close()
+	}
+}
+
+func (o *jobOutput) send(p []byte) {
+	if o.mirror == nil {
+		return
+	}
+	if _, held := o.mirror.(*os.File); held || (!o.origin.answered.Load() && o.origin.running()) {
+		_, _ = o.mirror.Write(p)
+	}
+}
+
+// mirrored is what a job prints to besides its log, for w its statement printed to: a call's own output or another job's, which take writes
+// from any goroutine; a copy of a file or pipe; nil for a command substitution's buffer, which the interpreter reads once the substitution
+// ends.
+func mirrored(w io.Writer) io.Writer {
+	switch file := w.(type) {
+	case *sink, *jobOutput:
+		return w
+	case *os.File:
+		if held, err := platform.Duplicate(file); err == nil {
+			return held
+		}
+	}
 	return nil
 }
+
+// jobsRunningOn are the notes on the jobs the call started that still run as it answers, whose later output only their logs get; a disowned
+// job is no longer the shell's to name. A job a kill is ending gets a moment to end first, as a kill 0 of the call ends what it started.
+func (c *call) jobsRunningOn() []string {
+	var notes []string
+	table := c.session.jobs
+	for _, j := range table.all() {
+		table.mu.Lock()
+		disowned := j.disowned
+		table.mu.Unlock()
+		if r := j.runner(); r == nil || r.origin != c || disowned {
+			continue
+		}
+		j.mu.Lock()
+		killed := j.killed != 0
+		j.mu.Unlock()
+		if killed {
+			select {
+			case <-j.done:
+			case <-time.After(killedJobEnds):
+			}
+		}
+		if j.running() {
+			notes = append(notes, fmt.Sprintf("[job %%%d runs on; its output from now on goes only to %s]", j.id, j.log))
+		}
+	}
+	return notes
+}
+
+// killedJobEnds is how long a call waits as it answers for a job a kill is ending to end.
+const killedJobEnds = 200 * time.Millisecond
 
 func errorText(err error) string {
 	text := err.Error()

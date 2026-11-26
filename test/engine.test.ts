@@ -664,6 +664,13 @@ async function realpathOf(directory: string, name: string) {
   return realpath(path.join(directory, name))
 }
 
+// inMemory says whether directory is on tmpfs or ramfs, where nib deletes rather than trashes; nib tells them only on Linux.
+async function inMemory(directory: string) {
+  if (process.platform !== "linux") return false
+  const kind = Bun.spawnSync(["stat", "-f", "-c", "%T", directory]).stdout.toString().trim()
+  return kind === "tmpfs" || kind === "ramfs"
+}
+
 describe("multi-file patches", () => {
   test("edits several files, creates, moves and deletes in one call", async () => {
     const f = await fixture()
@@ -685,10 +692,14 @@ describe("multi-file patches", () => {
     await expect(stat(path.join(f.directory, "b.txt"))).rejects.toThrow()
     await expect(stat(path.join(f.directory, "gone.txt"))).rejects.toThrow()
     expect(result.text).toContain(`Moved b.txt to [nested/dir/c.txt#${fileTag("bee\ncee\n")}]\n1:bee\n[line 2 as you sent it]`)
-    expect(result.text).toContain("Moved gone.txt to the trash; trash restore gone.txt in nibash puts it back")
-    const info = path.join(process.env.XDG_DATA_HOME!, "Trash", "info")
-    const records = await Promise.all((await readdir(info)).map((name) => readFile(path.join(info, name), "utf8")))
-    expect(records.some((record) => record.includes("/gone.txt\nDeletionDate="))).toBe(true)
+    if (await inMemory(f.directory)) {
+      expect(result.text).toContain("Deleted gone.txt, which a memory filesystem held: nothing of it is in the trash")
+    } else {
+      expect(result.text).toContain("Moved gone.txt to the trash; trash restore gone.txt in nibash puts it back")
+      const info = path.join(process.env.XDG_DATA_HOME!, "Trash", "info")
+      const records = await Promise.all((await readdir(info)).map((name) => readFile(path.join(info, name), "utf8")))
+      expect(records.some((record) => record.includes("/gone.txt\nDeletionDate="))).toBe(true)
+    }
     expect(result.text).toContain(`Created [new/created.txt#${fileTag("hello\n\n")}] (2 lines, 1 non-blank, 1 shown)\n1~hello`)
     const followUp = await f.patch(`[nested/dir/c.txt#${fileTag("bee\ncee\n")}]\nPUT 2.=2:\n+CEE`)
     expect(followUp.text).toContain("1:bee\n[line 2 as you sent it]")

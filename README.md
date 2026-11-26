@@ -300,11 +300,15 @@ pattern RE2 cannot run exactly as sed would, or any other command, runs the syst
 - **`cd --keep DIR`** changes into `DIR` and keeps the agent there: its later nibash calls start in `DIR`, and relative
   paths in `read`, `grep`, `find`, `edit` and `write` mean it, for that agent and the subagents it starts from then on
   (each is told on its first call), across a restart of nib too. A builder working in another checkout than the
-  project's sends it once and can no longer write to the main checkout by a short path. Keeping the project directory
-  takes it away. `~name/` paths mean what they did.
+  project's sends it once and can no longer write to the main checkout by a short path. Keeping the directory it works in
+  without a pin, the project's or its Claude Code worktree, takes it away; the rest of that call prints paths as later
+  calls read them. `~name/` paths mean what they did.
 - **Jobs.** `background: true` or `cmd &` start a job, wherever the `&` stands; `jobs`, `wait`, `kill` and `disown` work on
   them as bash's do, and `$!` and `jobs -p` give a job spec (`%3`). A job is a shell of its own, which knows the jobs it
-  started. Finished jobs are reported at the next call; a disowned one runs past the session's end.
+  started. A job's output goes to its log, and while its call runs also into the call's output, so `cmd & wait` shows it
+  as bash would, and into a pipe or file its statement printed to; a call ends naming the log of each job it started that
+  still runs. Inside `$(...)` a job prints to its log only. Finished jobs are reported at the next call; a disowned one
+  runs past the session's end.
 - **Timers.** Where Claude Code was started with nib's channel, the `timer` tool sends the main agent a message later:
   `every: 50` each 50 minutes whatever happens, `idle: 5` only once the session has been idle for 5 minutes, and again
   after each further idle stretch, so `idle: 50` keeps the prompt cache warm without interrupting work; `once` sends

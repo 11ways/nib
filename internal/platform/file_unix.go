@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // NonBlock opens a FIFO without waiting for a writer.
@@ -16,6 +18,24 @@ const NonBlock = syscall.O_NONBLOCK
 
 // NoFollow refuses a symbolic link as the last element of the path an open names.
 const NoFollow = syscall.O_NOFOLLOW
+
+// Duplicate is a second descriptor of file, closed on exec, that outlives the first's close, as a forked shell's copy of it does.
+func Duplicate(file *os.File) (*os.File, error) {
+	conn, err := file.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	duplicate, failed := -1, error(nil)
+	if err := conn.Control(func(fd uintptr) {
+		duplicate, failed = unix.FcntlInt(fd, unix.F_DUPFD_CLOEXEC, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if failed != nil {
+		return nil, failed
+	}
+	return os.NewFile(uintptr(duplicate), file.Name()), nil
+}
 
 // OpenFilesBlockReplace is false: a rename replaces a file whatever has it open.
 const OpenFilesBlockReplace = false

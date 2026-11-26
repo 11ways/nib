@@ -37,7 +37,7 @@ const (
 const description = `Run a command in nibash, nib's shell: a bash interpreter. Calls start afresh in the project directory, or the one cd --keep DIR set for your nib tools and subagents (no other cd, variable or function persists), in parallel. Programs are real processes, stdin empty.
 %s are nib's own when their output reaches you or another of them and they know each option: file lines print as [PATH#TAG] and N:TEXT rows to edit from, a log's as plain text. Otherwise the system program runs, noted if it printed (not as /usr/bin/grep); type and command -v name it.
 Output is shaped: colors stripped, repeats collapsed, git/find/ls folders named once, git diffs as file rows (+N: added), one-line commits, no git hints, %s, with the whole kept in a log to read. Changed files list new tags.
-Unlike bash: deletes go to the trash (a RAM disk's are final); a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! and jobs -p give a job's %%N, and the next call reports its end; kill never signals nib's client; no DEBUG or RETURN traps. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
+Unlike bash: deletes go to the trash (a RAM disk's are final); a failed cd outside if/&&/|| ends the call; programs don't start in a deleted folder; a command past its timeout goes on as a job; $! and jobs -p give a job's %%N, and the next call reports its end; a job in $(...) prints only to its log; kill never signals nib's client; no DEBUG or RETURN traps. ~name/ paths expand only unquoted (in sh -c too); hash -d name=dir adds one for later calls and subagents; hash -d and ${!HOME*} list them. A pipeline's last stage runs in the shell (... | read v sets v).`
 
 // Shell is nibash for an MCP server: one session of jobs per key the server passes, one per agent of each client.
 type Shell struct {
@@ -362,6 +362,8 @@ type call struct {
 	failures []failedStep
 	// commands counts the command line's simple commands, which decides whether its closing line names the one that failed.
 	commands int
+	// answered is set as the call's answer is made: the jobs it started print to their logs alone from then on.
+	answered atomic.Bool
 }
 
 // held is a file the session held a version of before a call: its facts then, and the tag of that version. foreign marks one something
@@ -500,7 +502,7 @@ func (s *Shell) Run(ctx context.Context, key any, request server.ShellCall, tool
 	if request.Background {
 		jobs := startJobs(file)
 		leaveAll(file, jobs)
-		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description, nil, jobs)
+		j, err := sess.launch(runner, file, request.Command, tools, view, request.Push, request.Description, nil, jobs, nil, nil)
 		if err != nil {
 			return engine.Result{}, err
 		}
@@ -609,6 +611,8 @@ wait:
 		fmt.Fprintf(c.sink, "nibash: %v\n", err)
 		status = 1
 	}
+	c.answered.Store(true)
+	tail = append(tail, c.jobsRunningOn()...)
 	callTools.Ctx = ctx
 	failed := c.failureNote(status)
 	text := c.sink.render(s.engine, &callTools, s.logs, decision{decider: s.decider, summarizer: s.activeSummarizer(), recall: s.recall, command: request.Command, purpose: purpose(request.Description), expect: purpose(request.Expect), exit: status, failed: failed != ""})

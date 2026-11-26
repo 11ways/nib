@@ -62,8 +62,6 @@ func (sess *session) execMiddleware(next interp.ExecHandlerFunc) interp.ExecHand
 		mode, marked, ok := parseMarker(args[0])
 		if ok {
 			switch marked {
-			case internalJob:
-				return c.startJob(ctx, args[1:])
 			case internalKill:
 				return c.kill(ctx, args[1:])
 			case internalJobs:
@@ -127,6 +125,14 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 			}
 			return exit, nil
 		}
+		if args[0] == marker+internalJob {
+			// Started here, where the output is the statement's, and $! set as the assignment the & became would.
+			spec, err := c.startJob(ctx, args[1:])
+			if err != nil {
+				return []string{"false"}, nil
+			}
+			return []string{"eval", jobVariable + "=" + spec}, nil
+		}
 		if shell {
 			if wrapped := c.withTraps(args); wrapped != nil {
 				return wrapped, nil
@@ -161,6 +167,9 @@ func (sess *session) callHandler(ctx context.Context, args []string) ([]string, 
 			}
 		}
 		return renamed, nil
+	}
+	if at := printfAt(args); at >= 0 {
+		return printfCall(ctx, args[at+1:]), nil
 	}
 	switch args[0] {
 	case "cd":

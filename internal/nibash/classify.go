@@ -143,9 +143,9 @@ func leaveSubshells(node syntax.Node) {
 	})
 }
 
-// startJobs turns every `X &` in file into `NIBASH_JOB=$(job k)`, with X kept in jobs under k, and makes $! read NIBASH_JOB: wherever it
-// stands, in a function body, a $(...) or the statement of another job too, so each runs as one of nibash's jobs, which wait, kill and jobs
-// know, rather than as mvdan's own background run.
+// startJobs turns every `X &` in file into `job k`, with X kept in jobs under k, which starts it and sets NIBASH_JOB, and makes $! read
+// NIBASH_JOB: wherever it stands, in a function body, a $(...) or the statement of another job too, so each runs as one of nibash's jobs,
+// which wait, kill and jobs know, rather than as mvdan's own background run.
 func startJobs(file *syntax.File) map[int]*syntax.Stmt {
 	jobs := map[int]*syntax.Stmt{}
 	var rewrite func(node syntax.Node)
@@ -165,14 +165,10 @@ func startJobs(file *syntax.File) map[int]*syntax.Stmt {
 				job.Background = false
 				jobs[key] = &job
 				rewrite(&job)
-				start := &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalJob), literal(strconv.Itoa(key))}}
 				n.Background = false
 				n.Redirs = nil
 				n.Negated = false
-				n.Cmd = &syntax.CallExpr{Assigns: []*syntax.Assign{{
-					Name:  &syntax.Lit{Value: jobVariable},
-					Value: &syntax.Word{Parts: []syntax.WordPart{&syntax.CmdSubst{Stmts: []*syntax.Stmt{{Cmd: start}}}}},
-				}}}
+				n.Cmd = &syntax.CallExpr{Args: []*syntax.Word{literal(marker + internalJob), literal(strconv.Itoa(key))}}
 				return false
 			}
 			return true

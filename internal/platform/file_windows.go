@@ -93,6 +93,26 @@ func PipeKey(file *os.File) (string, bool) {
 	return windows.UTF16ToString(buffer[2 : 2+length]), true
 }
 
+// Duplicate is a second handle of file, not inherited, that outlives the first's close, as a forked shell's copy of it does.
+func Duplicate(file *os.File) (*os.File, error) {
+	conn, err := file.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var duplicate windows.Handle
+	var failed error
+	if err := conn.Control(func(handle uintptr) {
+		process := windows.CurrentProcess()
+		failed = windows.DuplicateHandle(process, windows.Handle(handle), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS)
+	}); err != nil {
+		return nil, err
+	}
+	if failed != nil {
+		return nil, failed
+	}
+	return os.NewFile(uintptr(duplicate), file.Name()), nil
+}
+
 // Umask is 0: Windows creates files with no mask.
 var Umask = 0
 

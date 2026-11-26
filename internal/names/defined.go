@@ -299,20 +299,22 @@ func (v *View) Define(name, directory string) error {
 }
 
 // Work pins the agent's calls to directory, an absolute path to an existing directory: where its relative paths start in every tool, for
-// it and the agents it spawns from now on. The server's own directory takes the pin away. kept is the pin as it stands, canonical.
-func (v *View) Work(directory string) (kept string, err error) {
+// it and the agents it spawns from now on. The directory the agent works in without a pin, its worktree or the server's, takes the pin
+// away. now is where its calls start from then on, canonical, and pinned whether that is a pin.
+func (v *View) Work(directory string) (now string, pinned bool, err error) {
 	if !filepath.IsAbs(directory) {
-		return "", errors.New("the directory must be an absolute path")
+		return "", false, errors.New("the directory must be an absolute path")
 	}
 	canonical, err := filepath.EvalSymlinks(directory)
 	if err != nil {
-		return "", fmt.Errorf("%s does not exist", directory)
+		return "", false, fmt.Errorf("%s does not exist", directory)
 	}
 	if info, err := os.Stat(canonical); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("%s is not a directory", directory)
+		return "", false, fmt.Errorf("%s is not a directory", directory)
 	}
-	if v.server != nil && canonical == v.server.Base {
-		canonical = ""
+	now, kept := canonical, canonical
+	if v.static != nil && canonical == v.static.Base {
+		kept = ""
 	}
 	d := v.defined
 	d.mu.Lock()
@@ -322,9 +324,9 @@ func (v *View) Work(directory string) (kept string, err error) {
 		names = &defined{}
 		d.agents[v.agent] = names
 	}
-	names.work, names.workAt = canonical, d.Now().UnixNano()
+	names.work, names.workAt = kept, d.Now().UnixNano()
 	d.saveLocked(v.agent)
-	return canonical, nil
+	return now, kept != "", nil
 }
 
 // Workdir is the directory the agent's calls are pinned to, its own pin or the one it started with; "" for none.

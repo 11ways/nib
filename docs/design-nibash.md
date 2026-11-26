@@ -309,6 +309,11 @@ see `git-each ARGS` as `git ARGS` too, and add every repository it runs in to th
 - **`kill`, `jobs` and `wait`** are interp builtins that mvdan does not support for real processes (`builtin.go:1026`).
   nibash's `CallHandler` renames them to its own commands, also after `builtin` or `command`, which act on real process
   groups and on the job table (section 5.7) [B2].
+- **`printf`** is mvdan's builtin only where it prints what bash's does (`printf.go`, pinned against bash by
+  `printf_test.go`): plain text and escapes, `%s`, `%d`, `%i`, `%u`, `%o`, `%x` with the flags and widths mvdan reads as
+  C does, `%b` and `%c` of plain operands. Any other form (`%q`, `%f`, precision, `%*d`, `%(...)T`, a number bash reads
+  otherwise, such as `'a` or `1_000`) runs real bash's `printf`, and `printf -v NAME` assigns through `eval` in the
+  caller's scope, a function's local variable included; mvdan's builtin has no `-v` at all.
 - **Deleting commands** (`rm`, `unlink`, `git rm`, `git clean`, `find -delete`) and nibash's `trash list` /
   `trash restore` are caught in the exec handler before classification matters, wherever their output goes, so what they
   delete goes to the user's trash (`internal/trash`, shared with `edit`'s `REM`; the record of what this server
@@ -441,10 +446,18 @@ When the command finishes or its time runs out, the sink is rendered once:
 - **`cmd &`** is rewritten before running into a job start for that statement, wherever it stands (`startJobs`): in a
   function body, a `$(...)`, or the statement of another job too, so mvdan's own background runs, which no `wait`,
   `kill` or `jobs` would know, never happen. The statement runs in a copy of the interpreter the `&` ran in at that
-  moment, a function's local variables included, as bash forks, with the same log and process-group handling.
+  moment, a function's local variables included, as bash forks, with the same log and process-group handling. The
+  call handler starts it, where the output is the statement's, and sets `$!` through `eval`.
   - `$!` is rewritten to the job's spec, `%3`, which nibash's `kill` and `wait` accept. The description states this
     difference from bash.
-  - The call returns when its foreground part ends. Jobs keep running.
+  - **Its output** goes to its log, and, as a bash job prints where its shell does, also where its statement printed, in
+    whole lines (mvdan's `echo` writes the newline apart, which would interleave two jobs' lines): into the call's
+    output while the call runs, so `cmd & wait` shows it, and into a pipe or file the statement printed to, which the job
+    holds a copy of (`platform.Duplicate`) until it ends, so `{ cmd & } | grep x` reads it. Inside a `$(...)` it prints
+    to its log only, where bash's substitution would wait for it; the description states this.
+  - The call returns when its foreground part ends. Jobs keep running, and the call ends with
+    `[job %3 runs on; its output from now on goes only to <log>]` for each job it started that still runs (one a kill
+    is ending gets 200 ms to end first).
 - **A job is a shell of its own**, as a bash subshell starts with an empty job table: it knows only the jobs it started,
   for `jobs`, `wait`, `kill %N` and `disown`, while a call of the session's shell knows every job of the session but its
   own. A job's shell keeps the signals its starter ignores and drops its traps.
@@ -758,7 +771,9 @@ Where the implementation departed from the text above, deliberately:
   resolve there. It lives beside the agent's defined names (`names.Defined`): inherited by the subagents started after
   it, told in their greeting, and saved under the agent's lasting key. It is not a persisting `cd`, which was removed
   for running later commands in the wrong checkout: only this explicit form outlives its call. The server's names are
-  not moved into the kept directory as they are into a worktree, since it need not be a checkout of the project.
+  not moved into the kept directory as they are into a worktree, since it need not be a checkout of the project. The
+  directory the agent works in without a pin (its worktree, else the server's) takes the pin away, and from the
+  `cd --keep` on the call's own `Directory` is the new one, so its closing notes name paths as later calls read them.
 - **Roots.** A failed `roots/list` keeps the last list that worked; with none yet, the sandbox allows nothing instead of
   the server's directory (the second review's finding 2).
 - **Asking the client (MCP 2026-07-28).** That protocol forbids a server's own requests (SEP-2322), so for clients on it
