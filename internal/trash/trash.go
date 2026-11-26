@@ -26,7 +26,7 @@ var ErrExists = errors.New("a file is there already")
 // ErrNotTrashed is a restore of a path this session did not trash, or whose entry left the trash since.
 var ErrNotTrashed = errors.New("not in the trash from this session")
 
-// Entry is one path this process moved to the trash.
+// Entry is one path this process moved to the trash, or deleted.
 type Entry struct {
 	// Original is the absolute path it had.
 	Original string
@@ -34,7 +34,16 @@ type Entry struct {
 	File, Info string
 	When       time.Time
 	Dir        bool
+	// Deleted is a path that was on a memory filesystem and so is gone, with no File or Info.
+	Deleted bool
 }
+
+// Memory says whether the filesystem holding a directory keeps its files in memory; a test replaces it.
+var Memory = platform.InMemory
+
+// Discards says whether a delete of path, absolute, is final: on a memory filesystem a trashed file would go on taking the memory its
+// delete was to free, as that filesystem's own trash is in memory too.
+func Discards(path string) bool { return Memory(filepath.Dir(path)) }
 
 // Can is the trash as this process uses it.
 type Can struct {
@@ -60,8 +69,10 @@ func freedesktop(dir, top string) trashDir {
 	return trashDir{filepath.Join(dir, "files"), filepath.Join(dir, "info"), top}
 }
 
-// Isolated points the home trash at a new temporary directory, for a test binary that must never touch the user's; call the result at exit.
+// Isolated points the home trash at a new temporary directory, for a test binary that must never touch the user's, and takes no
+// filesystem for one in memory, as the temporary folder may be; call the result at exit.
 func Isolated() func() {
+	Memory = func(string) bool { return false }
 	dir, err := os.MkdirTemp("", "nib-test-data-")
 	if err != nil {
 		panic(err)
@@ -72,17 +83,23 @@ func Isolated() func() {
 
 // Put moves what location names to the trash, recording original, its absolute path. A file on another filesystem than the home trash
 // goes to that filesystem's own trash, as the specification says, unless homeOnly, as under the sandbox; where neither takes it by
-// renaming, it is copied into the home trash and then removed.
+// renaming, it is copied into the home trash and then removed. What Discards says of original is deleted instead.
 func (c *Can) Put(location, original string, homeOnly bool) (Entry, error) {
-	return c.PutBy(location, func(target string) error { return c.rename(location, target) }, original, homeOnly)
+	return c.PutBy(location, func(target string) error { return c.rename(location, target) }, func() error { return os.RemoveAll(location) }, original, homeOnly)
 }
 
-// PutBy is Put with the rename into the trash made by move, as from a directory pinned by its descriptor; location still names the entry,
-// for its facts and for a copy across filesystems.
-func (c *Can) PutBy(location string, move func(target string) error, original string, homeOnly bool) (Entry, error) {
+// PutBy is Put with the rename into the trash made by move and the delete by remove, as from a directory pinned by its descriptor;
+// location still names the entry, for its facts and for a copy across filesystems.
+func (c *Can) PutBy(location string, move func(target string) error, remove func() error, original string, homeOnly bool) (Entry, error) {
 	info, err := os.Lstat(location)
 	if err != nil {
 		return Entry{}, err
+	}
+	if Discards(original) {
+		if err := remove(); err != nil {
+			return Entry{}, err
+		}
+		return Entry{Original: original, When: c.now(), Dir: info.IsDir(), Deleted: true}, nil
 	}
 	home := homeTrash()
 	entry, err := c.into(home, location, original, info, move, false)

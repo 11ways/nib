@@ -226,9 +226,29 @@ func repositoriesBelow(ctx context.Context, root string) ([]string, bool, error)
 	return repositories, false, nil
 }
 
+// untracked says whether within, a folder inside repository, lies in a folder the repository holds no tracked file of, ignored or not:
+// git lists such a folder as one entry and tells nothing of what is below it.
+func untracked(ctx context.Context, repository, within string) bool {
+	within = filepath.ToSlash(within)
+	for _, ignored := range []bool{true, false} {
+		args := []string{"ls-files", "-z", "--others", "--exclude-standard", "--directory"}
+		if ignored {
+			args = append(args, "--ignored")
+		}
+		output, _ := gitIn(ctx, repository, append(args, "--", within)...).Output()
+		for _, entry := range strings.Split(string(output), "\x00") {
+			if folder, ok := strings.CutSuffix(entry, "/"); ok && (folder == within || strings.HasPrefix(within, folder+"/")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Repositories are the git repositories at and below root, a canonical folder, sorted by path: root itself when it is a repository's own
 // folder, the repositories searches find below it, ignored or untracked ones nested in a repository included, and theirs in turn; capped
-// is true when the walk outside git stopped early. A repository's worktrees are left out, as a submodule is.
+// is true when the walk outside git stopped early. A root in a folder its repository does not track is walked as one outside git, since git
+// lists nothing below such a folder. A repository's worktrees inside it are left out, as a submodule is.
 func Repositories(ctx context.Context, root string) (found []string, capped bool, err error) {
 	seen := map[string]bool{}
 	var visit func(repository, within string) error
@@ -250,7 +270,14 @@ func Repositories(ctx context.Context, root string) (found []string, capped bool
 		}
 		return nil
 	}
-	if repository := repositoryOf(root); repository != "" {
+	repository := repositoryOf(root)
+	if repository != "" && repository != root {
+		within, _ := inside(repository, root)
+		if untracked(ctx, repository, within) {
+			repository = ""
+		}
+	}
+	if repository != "" {
 		within := ""
 		if repository == root {
 			seen[root] = true

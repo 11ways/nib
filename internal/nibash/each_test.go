@@ -89,6 +89,14 @@ func TestGitEachFailsWhenAnyRepositorysGitFails(t *testing.T) {
 	}
 }
 
+func TestGitEachSaysWhenItFoundNoRepository(t *testing.T) {
+	f := eachFixture(t)
+	f.write("empty/x.txt", "x\n")
+	if out := f.run("cd empty && git-each status -sb; echo status $?"); !strings.Contains(out, "git-each: no repository at or below") || !strings.HasSuffix(out, "status 1") {
+		t.Errorf("got:\n%s", out)
+	}
+}
+
 func TestGitEachShapesWhatReachesTheModelAsNibsGitDoes(t *testing.T) {
 	f := eachFixture(t)
 	out := f.run("git-each show --stat HEAD")

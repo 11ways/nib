@@ -117,6 +117,34 @@ func trashed(t *testing.T) []string {
 	return names
 }
 
+func TestWhatAMemoryFilesystemHoldsIsDeletedNotTrashed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	f := newFixture(t, map[string]string{"ram/a.txt": "a\n", "ram/tree/b.txt": "b\n", "ram/c.txt": "c\n", "disk.txt": "d\n"})
+	ram := filepath.Join(f.directory, "ram")
+	before := trash.Memory
+	trash.Memory = func(dir string) bool { return dir == ram }
+	t.Cleanup(func() { trash.Memory = before })
+	out := f.run("rm -rv ram/a.txt ram/tree disk.txt")
+	for _, want := range []string{"removed 'ram/a.txt'", "[moved to the trash, not deleted: disk.txt;", "[deleted, not in the trash, as a memory filesystem held it: ram/a.txt, ram/tree]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("no %q in:\n%s", want, out)
+		}
+	}
+	if got, want := trashed(t), []string{escapeForTest(filepath.Join(f.directory, "disk.txt"))}; !slices.Equal(got, want) {
+		t.Fatalf("trash holds %v, want %v", got, want)
+	}
+	if got := tree(t, ram); got != "c.txt" {
+		t.Fatalf("left in ram: %s", got)
+	}
+	if list := f.run("trash list"); strings.Contains(list, "ram") {
+		t.Fatalf("list: %s", list)
+	}
+	// The lesson is told once.
+	if out := f.run("rm ram/c.txt"); !strings.Contains(out, "[deleted: ram/c.txt]") {
+		t.Fatalf("got %s", out)
+	}
+}
+
 func TestDeletedFilesGoToTheTrashAndComeBack(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	f := newFixture(t, map[string]string{"keep/a.txt": "a\n", "keep/b.txt": "b\n", "it's here.txt": "c\n"})

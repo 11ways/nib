@@ -53,7 +53,8 @@ func statusError(status int) error {
 	return interp.ExitStatus(status)
 }
 
-// trashOne moves the file at path, absolute, to the trash, once the sandbox allows its directory; a link goes, never its target.
+// trashOne moves the file at path, absolute, to the trash, once the sandbox allows its directory, or deletes it where the trash would
+// (trash.Discards); a link goes, never its target.
 func (c *call) trashOne(path string) error {
 	if c.tools.Sandbox {
 		if why, err := c.tools.Refused(filepath.Dir(path)); err != nil || why != "" {
@@ -63,11 +64,16 @@ func (c *call) trashOne(path string) error {
 			return errors.New(why)
 		}
 	}
-	if _, err := c.engine.Trash.Put(path, path, c.tools.Sandbox); err != nil {
+	entry, err := c.engine.Trash.Put(path, path, c.tools.Sandbox)
+	if err != nil {
 		return err
 	}
 	c.mu.Lock()
-	c.trashed = append(c.trashed, path)
+	if entry.Deleted {
+		c.deleted = append(c.deleted, path)
+	} else {
+		c.trashed = append(c.trashed, path)
+	}
 	c.mu.Unlock()
 	return nil
 }
@@ -82,26 +88,40 @@ func (c *call) wasTrashed(path string) bool {
 // trashLesson tells an agent once what the deleting commands do; later calls get trashNote's short form.
 const trashLesson = "moved to the trash, not deleted: %s; trash list shows what this session trashed, trash restore PATH puts one back"
 
-// trashNote is the closing note of a call that trashed paths, "" when it trashed none.
+// deletedLesson tells an agent once why a deleting command left nothing in the trash; later calls get trashNote's short form.
+const deletedLesson = "deleted, not in the trash, as a memory filesystem held it: %s"
+
+// trashNote is the closing note of a call that trashed or deleted paths, "" when it did neither.
 func (c *call) trashNote() string {
 	c.mu.Lock()
-	paths := slices.Clone(c.trashed)
+	trashed, deleted := slices.Clone(c.trashed), slices.Clone(c.deleted)
 	c.mu.Unlock()
-	if len(paths) == 0 {
-		return ""
-	}
-	what := fmt.Sprintf("%d paths", len(paths))
-	if len(paths) <= 3 {
+	what := func(paths []string) string {
+		if len(paths) > 3 {
+			return fmt.Sprintf("%d paths", len(paths))
+		}
 		shown := make([]string, len(paths))
 		for i, p := range paths {
 			shown[i] = c.tools.Display(p)
 		}
-		what = strings.Join(shown, ", ")
+		return strings.Join(shown, ", ")
 	}
-	if c.engine.Store.Teach(c.tools.Session, "trash") {
-		return "[" + fmt.Sprintf(trashLesson, what) + "]"
+	var notes []string
+	switch {
+	case len(trashed) == 0:
+	case c.engine.Store.Teach(c.tools.Session, "trash"):
+		notes = append(notes, "["+fmt.Sprintf(trashLesson, what(trashed))+"]")
+	default:
+		notes = append(notes, "[in the trash: "+what(trashed)+"; trash restore PATH]")
 	}
-	return "[in the trash: " + what + "; trash restore PATH]"
+	switch {
+	case len(deleted) == 0:
+	case c.engine.Store.Teach(c.tools.Session, "deleted"):
+		notes = append(notes, "["+fmt.Sprintf(deletedLesson, what(deleted))+"]")
+	default:
+		notes = append(notes, "[deleted: "+what(deleted)+"]")
+	}
+	return strings.Join(notes, "\n")
 }
 
 // quoteShell quotes a file name as coreutils' rm does in its messages: in single quotes, as "..." when it holds a ' and nothing double

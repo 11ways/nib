@@ -269,12 +269,15 @@ as a job.
 `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `sed -n`, `cut -c` and `wc` run as nib's own when their output
 reaches the model and nib supports their options; they print `[PATH#TAG]` blocks of anchored rows. Anything else,
 including those commands with an unsupported option, piped into a real program or redirected to a file, runs the system
-program. `type cat` names the system program.
+program. `type cat` names the system program. `sed -n` is nib's own for `p` commands addressed by line numbers or by
+patterns (`5p`, `5,9p`, `5,$p`, `5,+3p`, `/^## Setup/,/^## /p`, `/re/Ip`, with `-E` too), several joined by `;`; a
+pattern RE2 cannot run exactly as sed would, or any other command, runs the system sed.
 
 - **git.** Where its output reaches the model, `status`, `diff`, `show`, `log`, `ls-files` and the subcommands that
   change a repository run the real git and are reformatted: paths grouped by folder, `--stat` with exact counts, diffs
   as anchored rows, commit headers on one line (abbreviated hash, author email unless it is yours, local time to the
-  minute), and hints and progress lines hidden. The full output stays in the log. A rebase, merge or pull that joins
+  minute), and hints, progress lines and what ssh says of its own connection (a refused X11 forwarding, a host added to
+  `known_hosts`) hidden. The full output stays in the log. A rebase, merge or pull that joins
   incoming commits with the branch's own ends with a note naming the files both sides changed (or none), and one that
   cannot fast-forward with how the branches diverged.
 - **find and ls** print paths grouped by folder.
@@ -282,9 +285,12 @@ program. `type cat` names the system program.
   `==> NAME <==` header, or as `NAME: LINE` when it is one plain line, so `git-each status -sb` gives a clean
   repository's branch and how far it is ahead or behind on one line, and `git-each log --oneline --branches --not
   --remotes` the commits that are on no remote. `{base}` is the repository's `base` in `nib.json`, else the upstream of
-  its branch when that tracks a branch of another name, else `origin/HEAD`.
+  its branch when that tracks a branch of another name, else `origin/HEAD`. In a folder its repository does not track
+  (a workspace that ignores its lanes of worktrees) the repositories are found by walking the folder, worktrees
+  included; with none found it says so and fails.
 - **Deletes go to the trash.** `rm`, `unlink`, `git rm`, `git clean`, `find -delete` and `edit`'s `REM` move files to
-  the user's trash. `trash list` shows them, `trash restore [-f] PATH` puts one back.
+  the user's trash. `trash list` shows them, `trash restore [-f] PATH` puts one back. What a memory filesystem holds
+  (tmpfs, ramfs; Linux only) is deleted instead, since a trash there would keep the memory in use, and the call says so.
 - **A failed `cd`** (or `pushd`, `popd`) ends the call unless the command line handles it (`if`, `&&`, `||`), as under
   `set -e`.
 - **Jobs.** `background: true` or `cmd &` start a job, wherever the `&` stands; `jobs`, `wait`, `kill` and `disown` work on

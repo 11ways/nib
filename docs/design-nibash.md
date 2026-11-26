@@ -279,7 +279,9 @@ the mark the view leaves out), a streamed file (cut reads its raw bytes) and gre
 where agents otherwise write the same `for r in ...; do git -C $r ...; done` loop again and again. It is an own command
 (`renders`) like `git`, classified the same way, so where its output reaches the model each repository's git is nib's
 `gitPlan` with `-C` and git's output is shaped as git's own is. The repositories are `engine.Repositories`, the walk
-searches already make for nested repositories, here with the untracked ones too. Each header is a pending record of
+searches already make for nested repositories, here with the untracked ones too; a directory in a folder its repository
+does not track, where git lists nothing below, is walked as one outside git, so the worktrees of a workspace's ignored
+lane are found, and a walk that finds none says so and fails. Each header is a pending record of
 the output: it goes out before the first record or standard error of that repository's git, and not at all when git
 printed nothing. The output folds: its first record is held while it is plain text (no path git named, no reshaped or
 anchored row), and when no other follows, it goes out alone on the header's line as `NAME: TEXT`, so a one-line answer

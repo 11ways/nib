@@ -61,4 +61,21 @@ func TestRepositoriesFindsEveryRepositoryBelowAFolderButNoWorktree(t *testing.T)
 	if found, _, err = Repositories(context.Background(), filepath.Join(root, "zenit", "src")); err != nil || len(found) != 0 {
 		t.Fatalf("from zenit/src got %v %v", found, err)
 	}
+	// From an ignored folder of a repository: walked as outside git, so a worktree of a repository elsewhere two folders down is found.
+	lane := filepath.Join(root, "zenit", "vendored-lanes", "one")
+	if err := os.WriteFile(filepath.Join(root, "zenit", ".gitignore"), []byte("vendored/\nvendored-lanes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, filepath.Join(lane, "direct"))
+	for _, args := range [][]string{{"commit", "-q", "--allow-empty", "-m", "x"}, {"worktree", "add", "-q", filepath.Join(lane, "apps", "arcana")}} {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		cmd.Dir = filepath.Join(root, "apps", "arcana")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	want = []string{filepath.Join(lane, "apps", "arcana"), filepath.Join(lane, "direct")}
+	if found, _, err = Repositories(context.Background(), lane); err != nil || !slices.Equal(found, want) {
+		t.Fatalf("from an ignored lane got %v %v, want %v", found, err, want)
+	}
 }

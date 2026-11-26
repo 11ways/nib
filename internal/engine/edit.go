@@ -1941,7 +1941,7 @@ func commit(ctx *Context, store *snapshots.Store, can *trash.Can, wrote func(str
 				if err := h.parent.check(); err != nil {
 					return err
 				}
-				_, err := can.PutBy(h.target.canonical, h.parent.moveOut, h.target.canonical, ctx.Sandbox)
+				_, err := can.PutBy(h.target.canonical, h.parent.moveOut, h.parent.removeOut, h.target.canonical, ctx.Sandbox)
 				return err
 			}
 			if d := h.destination; d != nil {
@@ -2032,6 +2032,9 @@ func respond(ctx *Context, store *snapshots.Store, item *staged, shownByPreview 
 			}
 		}}
 	case stagedRemove:
+		if trash.Discards(canonical) {
+			return response{"Deleted " + display + ", which a memory filesystem held: nothing of it is in the trash", nothing}
+		}
 		return response{"Moved " + display + " to the trash; trash restore " + display + " in nibash puts it back", nothing}
 	case stagedCreate:
 		// The model wrote every line, so all of them count as seen; the row map shows where some of them are.

@@ -53,6 +53,10 @@ func (p *eachPlan) run(inv *invocation) int {
 	if capped {
 		inv.fail("looked for repositories in the first folders below %s only", inv.dir)
 	}
+	if len(repositories) == 0 {
+		inv.fail("no repository at or below %s", inv.dir)
+		return 1
+	}
 	stderr := inv.stderr
 	defer func() { inv.stderr = stderr }()
 	status := 0

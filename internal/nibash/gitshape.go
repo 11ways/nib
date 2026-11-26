@@ -227,8 +227,9 @@ func (s *gitShaper) tidied(text string) bool {
 }
 
 // gitTidier hides what a subcommand changing a repository prints for a person at a terminal: hints, most of which GIT_ADVICE=0 already keeps
-// git from printing, the progress a carriage return writes over, the author date a commit's summary repeats, and an unindented line printed
-// already, as ssh repeats a warning for each connection; a ref's update loses the padding that lines it up. Both of git's streams pass it.
+// git from printing, the progress a carriage return writes over, the author date a commit's summary repeats, what ssh says of its own
+// connection (sshChatter), and an unindented line printed already, as ssh repeats a warning for each connection; a ref's update loses the
+// padding that lines it up. Both of git's streams pass it.
 type gitTidier struct {
 	mu      sync.Mutex
 	seen    map[string]bool
@@ -242,6 +243,8 @@ var (
 	gitCommitSummary = regexp.MustCompile(`^\[\S+(?: \([^)]*\))? [0-9a-f]{4,64}\] `)
 	// gitRefUpdate is a ref's line in what push and fetch print: its flag, its summary, its source and, unless deleted, its destination.
 	gitRefUpdate = regexp.MustCompile(`^ ([ +\-*!=t]) (\[[^\]]+\]|[0-9a-f]+\.\.\.?[0-9a-f]+) +(\S+)(?: +-> (\S+))?(.*)$`)
+	// sshChatter are the lines ssh prints about its own connection, which say nothing of what git did over it.
+	sshChatter = regexp.MustCompile(`^(?:X11 forwarding request failed on channel \d+|Warning: Permanently added .* to the list of known hosts\.)$`)
 )
 
 // line is text as the model sees it; keep is false for a line it does not see.
@@ -254,7 +257,7 @@ func (t *gitTidier) line(text string) (shown string, keep bool) {
 	summary := t.summary
 	t.summary = gitCommitSummary.MatchString(text)
 	switch {
-	case strings.HasPrefix(text, "hint:"), summary && strings.HasPrefix(text, " Date: "):
+	case strings.HasPrefix(text, "hint:"), summary && strings.HasPrefix(text, " Date: "), sshChatter.MatchString(text):
 		return "", false
 	case strings.Contains(text, "Not possible to fast-forward") || strings.Contains(text, "reconcile divergent branches"):
 		t.diverged = true

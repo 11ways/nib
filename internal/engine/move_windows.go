@@ -15,3 +15,11 @@ func (p *parent) moveOut(target string) error {
 	}
 	return os.Rename(filepath.Join(p.directory, p.name), target)
 }
+
+// removeOut deletes the pinned entry, a file, by path once that still names the pinned directory.
+func (p *parent) removeOut() error {
+	if err := p.check(); err != nil {
+		return err
+	}
+	return os.Remove(filepath.Join(p.directory, p.name))
+}

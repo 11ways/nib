@@ -190,11 +190,14 @@ func TestGitCherryPickLeavesOutTheDateItsSummaryRepeats(t *testing.T) {
 func TestGitPrintsALineItsSSHRepeatsOnce(t *testing.T) {
 	f := gitFixture(t, map[string]string{"a.txt": "a\n"})
 	warn := filepath.Join(t.TempDir(), "ssh")
-	if err := os.WriteFile(warn, []byte("#!/bin/sh\necho 'warning: odd option' >&2\necho 'warning: odd option' >&2\nexit 1\n"), 0o755); err != nil {
+	script := "#!/bin/sh\necho 'warning: odd option' >&2\necho 'warning: odd option' >&2\necho 'X11 forwarding request failed on channel 0' >&2\n" +
+		"echo \"Warning: Permanently added 'example.invalid' (ED25519) to the list of known hosts.\" >&2\nexit 1\n"
+	if err := os.WriteFile(warn, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	out := f.run("git -c core.sshCommand=" + warn + " fetch ssh://example.invalid/repo")
-	if strings.Count(out, "warning: odd option") != 1 || !strings.Contains(out, "fatal: Could not read from remote repository.") {
+	if strings.Count(out, "warning: odd option") != 1 || !strings.Contains(out, "fatal: Could not read from remote repository.") ||
+		strings.Contains(out, "X11") || strings.Contains(out, "known hosts") {
 		t.Errorf("fetch:\n%s", out)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -482,22 +483,138 @@ func thousands(n int) string {
 
 // --- sed -n
 
+// sedAddress is one address of a sed command: a line number, a regular expression or, as a range's end only, the last line or a count
+// of lines more.
+type sedAddress struct {
+	line       int
+	last, more bool
+	re         *regexp.Regexp
+}
+
+// sedPrint is one p command: the lines at its address, or from one match of it through the next line its end address takes.
+type sedPrint struct {
+	from sedAddress
+	to   *sedAddress
+	// open is whether a range has begun and not ended, and until the line it ends at when its end is a line.
+	open  bool
+	until int
+}
+
 type sedPlan struct {
-	ranges   [][2]int // end 0 means to the last line, end -1 means one line
+	prints   []sedPrint
 	operands []string
 }
 
+// sedEscapes are the letters after a backslash that sed's patterns read as grep's do; another letter is an escape of sed's own.
+const sedEscapes = "wWsSbB"
+
+// sedAddressOf reads the address script begins with, an end address when end, and returns what follows it.
+func sedAddressOf(script string, d dialect, end bool) (sedAddress, string, error) {
+	digits := 0
+	for digits < len(script) && script[digits] >= '0' && script[digits] <= '9' {
+		digits++
+	}
+	switch {
+	case digits > 0:
+		line, ok := count(script[:digits])
+		if !ok || (line == 0 && !end) {
+			return sedAddress{}, "", errUnsupported
+		}
+		return sedAddress{line: line}, script[digits:], nil
+	case end && strings.HasPrefix(script, "$"):
+		return sedAddress{last: true}, script[1:], nil
+	case end && strings.HasPrefix(script, "+"):
+		address, rest, err := sedAddressOf(script[1:], d, true)
+		if err != nil || address.last || address.more || address.re != nil {
+			return sedAddress{}, "", errUnsupported
+		}
+		address.more = true
+		return address, rest, nil
+	case strings.HasPrefix(script, "/"):
+		var pattern strings.Builder
+		for i := 1; i < len(script); i++ {
+			switch c := script[i]; {
+			case c == '\n':
+				return sedAddress{}, "", errUnsupported
+			case c == '\\' && i+1 < len(script):
+				i++
+				next := script[i]
+				if (next >= 'a' && next <= 'z' || next >= 'A' && next <= 'Z') && !strings.ContainsRune(sedEscapes, rune(next)) {
+					return sedAddress{}, "", errUnsupported
+				}
+				if next != '/' {
+					pattern.WriteByte('\\')
+				}
+				pattern.WriteByte(next)
+			case c == '/':
+				// An empty pattern is the last one sed matched, which only sed knows.
+				if pattern.Len() == 0 {
+					return sedAddress{}, "", errUnsupported
+				}
+				expression, err := translate(pattern.String(), d)
+				if err != nil {
+					return sedAddress{}, "", errUnsupported
+				}
+				rest := script[i+1:]
+				if strings.HasPrefix(rest, "I") {
+					expression, rest = "(?i)"+expression, rest[1:]
+				}
+				re, err := regexp.Compile(expression)
+				if err != nil {
+					return sedAddress{}, "", errUnsupported
+				}
+				return sedAddress{re: re}, rest, nil
+			default:
+				pattern.WriteByte(c)
+			}
+		}
+	}
+	return sedAddress{}, "", errUnsupported
+}
+
+// sedPrints are the p commands of script, the only ones nib's sed runs; anything else in it is errUnsupported.
+func sedPrints(script string, d dialect) ([]sedPrint, error) {
+	var prints []sedPrint
+	for {
+		script = strings.TrimLeft(script, " \t\n;")
+		if script == "" {
+			return prints, nil
+		}
+		var p sedPrint
+		var err error
+		if p.from, script, err = sedAddressOf(script, d, false); err != nil {
+			return nil, err
+		}
+		if script = strings.TrimLeft(script, " \t"); strings.HasPrefix(script, ",") {
+			var to sedAddress
+			if to, script, err = sedAddressOf(strings.TrimLeft(script[1:], " \t"), d, true); err != nil {
+				return nil, err
+			}
+			p.to = &to
+		}
+		script = strings.TrimLeft(script, " \t")
+		if !strings.HasPrefix(script, "p") {
+			return nil, errUnsupported
+		}
+		if script = strings.TrimLeft(script[1:], " \t"); script != "" && script[0] != ';' && script[0] != '\n' {
+			return nil, errUnsupported
+		}
+		prints = append(prints, p)
+	}
+}
 func prepareSed(name string, args []string) (plan, error) {
 	options, operands, err := parseOptions(optionSpec{flags: "nEr", values: "e", long: map[string]string{"quiet": "n", "silent": "n", "expression=": "e", "regexp-extended": "E"}}, args)
 	if err != nil {
 		return nil, err
 	}
-	quiet := false
+	quiet, d := false, basic
 	var scripts []string
 	for _, o := range options {
 		switch o.name {
 		case "n":
 			quiet = true
+		case "E", "r":
+			d = extended
 		case "e":
 			scripts = append(scripts, o.value)
 		}
@@ -513,60 +630,67 @@ func prepareSed(name string, args []string) (plan, error) {
 	}
 	p := &sedPlan{operands: operands}
 	for _, script := range scripts {
-		for _, command := range strings.FieldsFunc(script, func(r rune) bool { return r == ';' || r == '\n' }) {
-			command = strings.TrimSpace(command)
-			if !strings.HasSuffix(command, "p") {
-				return nil, errUnsupported
-			}
-			address := strings.TrimSpace(strings.TrimSuffix(command, "p"))
-			from, to, hasRange := strings.Cut(address, ",")
-			start, ok := count(strings.TrimSpace(from))
-			if !ok || start == 0 {
-				return nil, errUnsupported
-			}
-			end := -1
-			if hasRange {
-				to = strings.TrimSpace(to)
-				if to == "$" {
-					end = 0
-				} else if end, ok = count(to); !ok {
-					return nil, errUnsupported
-				}
-			}
-			p.ranges = append(p.ranges, [2]int{start, end})
+		prints, err := sedPrints(script, d)
+		if err != nil {
+			return nil, err
 		}
+		p.prints = append(p.prints, prints...)
 	}
-	if len(p.ranges) == 0 {
+	if len(p.prints) == 0 {
 		return nil, errUnsupported
 	}
 	return p, nil
 }
 
-func (p *sedPlan) selected(line int) bool {
-	for _, r := range p.ranges {
-		switch {
-		case r[1] == -1 && line == r[0]:
-			return true
-		case r[1] == 0 && line >= r[0]:
-			return true
-		case r[1] > 0 && line >= r[0] && (line <= r[1] || (r[1] < r[0] && line == r[0])):
-			return true
-		}
+func (a sedAddress) matches(line int, text string) bool {
+	if a.re != nil {
+		return a.re.MatchString(text)
 	}
-	return false
+	return line == a.line
 }
 
-// last is the highest line any range can select, so sed stops reading after it; 0 when a range runs to the end.
+// prints says whether the command prints this line, the next of its input, and moves its range on.
+func (p *sedPrint) prints(line int, text string) bool {
+	if p.open {
+		switch {
+		case p.to.re != nil:
+			p.open = !p.to.re.MatchString(text)
+		case !p.to.last:
+			p.open = line < p.until
+		}
+		return true
+	}
+	if !p.from.matches(line, text) {
+		return false
+	}
+	switch {
+	case p.to == nil:
+	case p.to.re != nil || p.to.last:
+		p.open = true
+	case p.to.more:
+		p.until = line + p.to.line
+		p.open = p.until > line
+	default:
+		// An end line at or before the range's first prints that one line, as sed does.
+		p.until = p.to.line
+		p.open = p.until > line
+	}
+	return true
+}
+
+// last is the highest line any command can print, so sed stops reading after it; 0 when one may print up to the end.
 func (p *sedPlan) last() int {
 	top := 0
-	for _, r := range p.ranges {
-		switch r[1] {
-		case 0:
+	for _, print := range p.prints {
+		switch {
+		case print.from.re != nil || (print.to != nil && (print.to.re != nil || print.to.last)):
 			return 0
-		case -1:
-			top = max(top, r[0])
+		case print.to != nil && print.to.more:
+			top = max(top, print.from.line+print.to.line)
+		case print.to != nil:
+			top = max(top, print.from.line, print.to.line)
 		default:
-			top = max(top, r[0], r[1])
+			top = max(top, print.from.line)
 		}
 	}
 	return top
@@ -579,10 +703,12 @@ func (p *sedPlan) run(inv *invocation) int {
 	}
 	// Like GNU sed without -s, the files are one stream and their lines are numbered on.
 	line, status, last := 0, 0, p.last()
+	prints := slices.Clone(p.prints)
 	each := func(r record) bool {
 		line++
-		if p.selected(line) {
-			if !inv.out.emit(r) {
+		// A line prints once for each command that takes it.
+		for i := range prints {
+			if prints[i].prints(line, r.text) && !inv.out.emit(r) {
 				return false
 			}
 		}

@@ -9,3 +9,8 @@ import "golang.org/x/sys/unix"
 func (p *parent) moveOut(target string) error {
 	return unix.Renameat(int(p.self.Fd()), p.name, unix.AT_FDCWD, target)
 }
+
+// removeOut deletes the pinned entry, a file, from the pinned directory itself.
+func (p *parent) removeOut() error {
+	return unix.Unlinkat(int(p.self.Fd()), p.name, 0)
+}

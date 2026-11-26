@@ -321,8 +321,8 @@ type call struct {
 	written map[string]bool
 	// system are the notes on nib commands that ran as the system program with output to the model, in the order they first ran.
 	system []string
-	// trashed are the absolute paths the call's deleting commands moved to the trash, in order.
-	trashed []string
+	// trashed are the absolute paths the call's deleting commands moved to the trash, in order, and deleted those they deleted instead.
+	trashed, deleted []string
 	// rows carries the rows nib's own writers send in band through a pipe a nib command reads as bytes.
 	rows *rowBand
 	// piped are the row commands whose output went through a real program to the model, which an agent is told of once.

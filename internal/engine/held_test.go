@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/11ways/nib/internal/trash"
 )
 
 func TestAMarkerSaysWhenItsLinesWereSeenBeforeTheLastEdit(t *testing.T) {
@@ -101,5 +105,21 @@ func TestAMovedRunPrintsAsMapRows(t *testing.T) {
 	out := readText(t, e, ctx, path)
 	if strings.Contains(out, "your earlier") || !strings.Contains(out, "\n3~"+word(2)+" = 1\n4~"+word(3)+" = 1\n") {
 		t.Fatalf("moved run:\n%s", out)
+	}
+}
+
+func TestARemOfAFileAMemoryFilesystemHoldsDeletesItAndSaysSo(t *testing.T) {
+	e, ctx, path := showFixture(t, "one\n")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	before := trash.Memory
+	trash.Memory = func(dir string) bool { return dir == filepath.Dir(path) }
+	t.Cleanup(func() { trash.Memory = before })
+	tag := regexp.MustCompile(`#([0-9A-F]{4})\]`).FindStringSubmatch(readText(t, e, ctx, path))[1]
+	removed, err := e.Patch(ctx, "[a.py#"+tag+"]\nREM")
+	if err != nil || !strings.Contains(removed.Text, "Deleted a.py, which a memory filesystem held: nothing of it is in the trash") {
+		t.Fatalf("the edit: %v\n%s", err, removed.Text)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) || len(e.Trash.Entries()) != 0 {
+		t.Fatalf("still there, or trashed: %v %v", err, e.Trash.Entries())
 	}
 }
